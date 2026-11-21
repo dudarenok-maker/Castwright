@@ -30,6 +30,7 @@ import { TRACKED_ENGINES } from '../gpu/tracked-engines.js';
 import { withCapacityRetry, createHardTimeoutAbortReason } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { setProbeSidecarHealthProvider } from '../gpu/sidecar-health-gate.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 export const sidecarHealthRouter = Router();
 
@@ -637,7 +638,7 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
          already used by voice-sample.ts's /synthesize NoCapacityError catch. */
       return res.status(503).json({
         status: 'error',
-        error: e.message,
+        error: requestFailureMessageFs(e, e.message),
       });
     }
     const err = e as { name?: string; message?: string; cause?: unknown };
@@ -646,7 +647,7 @@ sidecarHealthRouter.post('/load', async (req: Request, res: Response) => {
       status: 'error',
       error: isTimeout
         ? `Sidecar /load did not complete within ${LOAD_TIMEOUT_MS}ms — model load is unusually slow or the process is stuck.`
-        : friendlyUnreachableError(err),
+        : requestFailureMessageFs(e, friendlyUnreachableError(err)),
     });
   }
 });
@@ -697,7 +698,7 @@ sidecarHealthRouter.post('/unload', async (req: Request, res: Response) => {
       status: 'error',
       error: isTimeout
         ? `Sidecar /unload did not respond within ${UNLOAD_TIMEOUT_MS}ms.`
-        : friendlyUnreachableError(err),
+        : requestFailureMessageFs(e, friendlyUnreachableError(err)),
     });
   }
 });

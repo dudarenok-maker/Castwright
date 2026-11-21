@@ -739,35 +739,36 @@ Design rationale:
   (the apply failure's LAN reason, #4322), `setup-readiness` (`POST /setup/smoke`),
   `script-review`'s `chapter-failed`
   frames, `export`'s job `errorReason` (the raw error and the ffmpeg stderr go to
-  `runExportJob`'s log) and `voice-sample`'s 502 body; the batch routes' per-item
+  `runExportJob`'s log) and `voice-sample`'s 502 body, and, since #3702, `sidecar-health`, `ollama-health`, `analyzer-models` (with `analyzer/endpoint-detect`), `clip`, `worktrees`, `pairing` and `devices`; the batch routes' per-item
   reasons compose it inside `itemFailureReason` — `cast-series-patch`,
   `voice-override-linked`, `voice-style`, `cast-design`)
   whose fallback is the
   error's own message use (#3711) —
-  `git grep requestFailureMessage` matches both and enumerates all
-  one hundred and thirty-three call sites (`voice-library` ×16, `book-state` ×13, `queue` ×11, `cover` ×7,
+  `git grep -cE 'requestFailureMessage(Fs)?\(' -- server/src ':!*.test.ts'` (summed, minus the 2 definitions in
+  `workspace/file-lock.ts`) matches both and enumerates all
+  one hundred and fifty-five call sites (`voice-library` ×17, `book-state` ×13, `queue` ×11, `cover` ×9,
   `chapters-restructure` ×6, `cast-design` ×7
   (both arms of its defensive outer plus the job's two terminal `error` events
   and its per-item failure reason, plus the persona fallback's per-item reason and the
   shared-GPU pre-pass's per-item reason, #4236; its sidecar-down terminal message is
   curated too, and the sidecar-down scan reads that curated text, so neither an fs error nor a lock timeout can be taken for a sidecar restart),
   `voices` ×4, `library` ×4, `revision-ops` ×3, `export` ×5 (the start / cancel
-  handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×3,
+  handlers, plus the job's failure reason and its backstop, #4236), `qwen-voice` ×6,
   `voice-style` ×4 (its per-item reason, #4236), `single-design` ×3, `cast-series-patch` ×2,
-  `voice-override-linked` ×2, `voice-sample` ×2, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
+  `voice-override-linked` ×2, `voice-sample` ×4, `sidecar-health` ×3, `clip` ×3, `worktrees`, `pairing` ×2, `ollama-health`, `analyzer-models`, `analyzer/endpoint-detect`, `devices`, `config` ×3 (the `/prompts/:id` endpoints; the `.env` sites answer fixed relative-name sentences directly, not through this seam, #4236), `script-review` ×5 (its three
   start-failure sites, plus, since #4236, two `chapter-failed` frames: the per-chapter
   failure and the save-findings failure, which composes with `itemFailureReason`),
   `analysis` ×2,
   `revisions` ×2 (the single-book and bulk polls), `qa-report` ×2 (the GET
   and `resume-scoring`), `import` ×2, `exports-portable`, `samples`, `upgrade` ×2 (the stage route's catch, #4236; the apply IIFE's catch, #4322), `upgrade/apply.ts` (the apply-failure `errorLan` twin, #4322), `series-cast`, `series-roster`,
   `series-memory`, `library-sync-manifest`, `manuscripts`, `models-inventory` (the
-  weight-dir removal's 500; an `ollama:` id keeps its own message, a spawn error is
-  not a disk fault), `annotate-emotion` and `instruct-annotation` (their
+  weight-dir removal's 500; an `ollama:` id's `execFile` message carries `ollama rm`'s stderr, so it is
+  path-scrubbed line by line with `scrubChildOutput` (#3702); a spawn error is not a disk fault), `annotate-emotion` and `instruct-annotation` (their
   `chapter-failed` frames) (#4236),
   `chapter-splice` and `chapter-qa-repair` (the catch-alls of their SSE jobs: the
   `chapter_failed` frame keeps its `Splice failed: ` / `Audio-QA repair failed: `
   prefix only for an ordinary error, #4233),
-  `cast-decline-voice-link`, `cast-merge-suggestions` ×2 (dismiss and accept),
+  `cast-decline-voice-link` ×2, `cast-merge-suggestions` ×2 (dismiss and accept),
   `cast-merge`, `voice-match`, `setup-readiness` (`POST /setup/smoke`'s synth-stage
   catch, whose mkdir / writeFile / encode readFile errors embed a path, #4233),
   `failure-taxonomy` ×4 (the persist-failure
@@ -791,7 +792,7 @@ Design rationale:
   wrong if it returns `(e as Error).message` (#2292 round 5, widened in the
   final round) — except downstream of `withStateJsonLock` or `withBookOp`
   alone, each of which already curates its own message (`withBookOp` keeps the
-  timeout `code` too). See each site's own comment.
+  timeout `code` too). See each site's own comment. Since #3702, `server/src/workspace/raw-error-body.guard.test.ts` fails the build on a raw caught-error message in an HTTP 5xx body anywhere under `server/src` (not only downstream of a lock), and its header lists what it cannot see. Child-process output that reaches a body (`lan-cert`'s script stderr, `worktrees`' git stderr, `models-inventory`'s `ollama rm` stderr, which rides in an `execFile` rejection's `.message`; that rejection has a numeric `code`, so the seam never fires on it) is path-scrubbed instead (#3702, owner decision 2026-11-21): `scrubChildOutput` (`tts/ffmpeg-failure.ts`, line by line, for multi-line text) or `scrubPaths` (one line). The guard counts both as curation and cannot tell a NEW route forwarding child output did either, so any route that does must scrub it; several of the #3702 wraps are inert by construction (their only real producer is an undici rejection, a spawn failure or a class whose messages are path-free), and the PR's tests pin the pass-through there rather than claiming curation.
   **Letting it through is not the
   same as throwing where it was caught** — at a handler that sits mid-way
   through a multi-file write (the two analysis persist blocks, `cast-merge.ts`),
@@ -991,7 +992,8 @@ The app drives on phone + tablet over LAN HTTPS (plan 81 archive: `docs/features
 **Automated regression net:**
 
 - `npm run test:e2e` (cloud `verify.yml` gate, ~90s): `playwright test --project=chromium`. Runs every spec + the chromium project of the responsive specs (`e2e/responsive/*.spec.ts`).
-- `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports.
+- `npm run test:e2e:mobile` (opt-in, ~10-15min): `playwright test --project=mobile-chrome --project=tablet-chrome`. Runs only `e2e/responsive/*.spec.ts` at phone (Pixel 7) + tablet (iPad Pro 11) viewports. It SKIPS the mobile/tablet visual baselines (`--grep-invert="visual baselines"`).
+- `npm run test:e2e:mobile:visual` (opt-in locally): `playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1`. Reads the committed Linux mobile/tablet baselines ON CI; run locally on Windows it reads the win32 set (that is the manual compare: run `npm run test:e2e:mobile:visual` on a Windows box). Runs in `cross-os.yml` (`mobile-e2e` job) and `release.yml` (blocks `publish`), NOT in `verify.yml`. The win32 mobile/tablet baselines are read by no workflow (manual compare on a Windows box only).
 - `npm run test:e2e:all` (opt-in, ~17min): everything across all 3 projects.
 
 Adding a new view? Append a case to `e2e/responsive/coverage.spec.ts` — it auto-runs at every project.
@@ -1166,7 +1168,7 @@ for the Flutter companion — no local hook runs `flutter analyze`/`test`),
 `release.yml` on a `vX.Y.Z` tag, and `cross-os.yml` on its **twice-weekly**
 (Wednesday + Sunday) cron. **Every release tag now runs COMPLETE
 cross-platform verification before it publishes** (plan 215): `release.yml`
-gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile` (Ubuntu)
+gates publish on full `npm run verify` (Ubuntu) + `test:e2e:mobile` (Ubuntu) + `test:e2e:mobile:visual` (Ubuntu)
 + `verify:quick`+build on macOS **and** Windows — a red leg on any deployer
 OS blocks the public-beta release, so you no longer fire cross-OS by hand
 before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on

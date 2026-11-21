@@ -200,10 +200,12 @@ test.describe('Voice-match scoring progress (srv-36 hardening)', () => {
         acoustic: { linesChecked: 40, linesRerecorded: 0, chaptersFlagged: 0 },
         asr: { linesVerified: 40, linesFlaggedDrift: 0 },
         voiceDrift: {
+          speakerCheckEnabled: true,
           attribution: 'full',
-          chaptersEligible: 2,
+          chaptersEligible: 3,
           chaptersScored: 1,
           chaptersEmbedFailed: 0,
+          chaptersWithVerdicts: 2,
           charactersOnRoster: 2,
           charactersChecked: 1,
           charactersPending: ['ren'],
@@ -219,7 +221,7 @@ test.describe('Voice-match scoring progress (srv-36 hardening)', () => {
 
     const resumeBtn = page.getByRole('button', { name: 'Resume scoring', exact: true });
     await expect(resumeBtn).toBeVisible({ timeout: 10_000 });
-    await expect(page.getByText('1 of 2 characters checked so far')).toBeVisible();
+    await expect(page.getByText('1 of 3 eligible chapters fully checked, more pending')).toBeVisible();
 
     await resumeBtn.click();
 

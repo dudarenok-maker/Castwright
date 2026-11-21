@@ -29,3 +29,30 @@ describe('mock queue — review', () => {
     expect(snap.entries[0].review).toEqual(review);
   });
 });
+
+describe('mock queue — complete requeued (#3436)', () => {
+  const statuses = async (outcome: string) => {
+    mockQueueRequest('/api/queue/enqueue', {
+      method: 'POST',
+      body: JSON.stringify({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }, { id: 'e2', bookId: 'book-A', chapterId: 2, scope: 'this' }] }),
+    });
+    mockQueueRequest('/api/queue/e1/start', { method: 'POST' });
+    const res = mockQueueRequest('/api/queue/e1/complete', { method: 'POST', body: JSON.stringify({ outcome }) });
+    const snap = (await res.json()) as { entries: Array<{ id: string; status: string }> };
+    return snap.entries.map((e) => [e.id, e.status]);
+  };
+
+  it('puts an in_progress entry back to queued, like the server (never done-pruned, never failed)', async () => {
+    expect(await statuses('requeued')).toEqual([['e1', 'queued'], ['e2', 'queued']]);
+  });
+
+  it('is a no-op for an entry that is not in_progress', async () => {
+    mockQueueRequest('/api/queue/enqueue', {
+      method: 'POST',
+      body: JSON.stringify({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] }),
+    });
+    const res = mockQueueRequest('/api/queue/e1/complete', { method: 'POST', body: JSON.stringify({ outcome: 'requeued' }) });
+    const snap = (await res.json()) as { entries: Array<{ id: string; status: string }> };
+    expect(snap.entries.map((e) => [e.id, e.status])).toEqual([['e1', 'queued']]);
+  });
+});

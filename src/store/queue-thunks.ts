@@ -255,10 +255,11 @@ export function startQueueEntry(entryId: string) {
     from cancelQueueEntry (user cancel, 409s an in_progress entry): completion
     is status-agnostic because the entry IS in_progress when its chapter
     finishes. Default `done` done-prunes it; `{ outcome: 'failed', errorReason }`
-    marks it `failed` so it LINGERS in the queue for retry. */
+    marks it `failed` so it LINGERS in the queue for retry; `{ outcome: 'requeued' }` (#3436) puts an
+    in_progress entry straight back to `queued` (a render refused 409 `book_busy`). */
 export function completeQueueEntry(
   entryId: string,
-  opts?: { outcome?: 'done' | 'failed'; errorReason?: string },
+  opts?: { outcome?: 'done' | 'failed' | 'requeued'; errorReason?: string },
 ) {
   return async (dispatch: AppDispatch): Promise<QueueSnapshotResponse> => {
     const res = await queueRequest(`/api/queue/${encodeURIComponent(entryId)}/complete`, {

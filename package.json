@@ -9,7 +9,7 @@
   "castwright": {
     "ffmpeg": {
       "minimum": "6.0",
-      "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
+      "rationale": "ops-35 (#1877). A SUPPORT floor, not a capability floor: the oldest ffmpeg we test against. Anchored to Ubuntu 24.04 LTS (ships 6.1.1) and tested by verify.yml's ffmpeg-floor job: ubuntu-24.04, apt ffmpeg 6.1.x, the full server suite, a required leg (#4461). The audio path parses ffmpeg's loudnorm JSON output, which is a version-sensitive contract. Read by scripts/preflight-ffmpeg.cjs, server/src/diagnostics/ffmpeg.ts and pinokio-scripts/lib/ffmpeg-pin.test.js — never hardcode it elsewhere. Set to null to disable the preflight check (the documented rollback)."
     }
   },
   "scripts": {
@@ -61,6 +61,7 @@
     "doctor": "node scripts/reap-stale-batteries.mjs",
     "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
     "test:e2e:mobile": "playwright test --project=mobile-chrome --project=tablet-chrome --workers=2 --grep-invert=\"visual baselines\"",
+    "test:e2e:mobile:visual": "playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1",
     "test:e2e:all": "playwright test",
     "test:e2e:visual": "playwright test --project=chromium --workers=1 e2e/responsive/visual.spec.ts",
     "test:e2e:quarantine": "playwright test --project=chromium --grep=@quarantine --pass-with-no-tests",

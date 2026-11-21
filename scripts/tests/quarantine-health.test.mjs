@@ -19,9 +19,11 @@ import {
   minUsableRuns,
   aggregate,
   formatReport,
+  resolveOsLabel,
   buildVitestArgs,
   classifyRunResult,
   runVitestJson,
+  boundedVitestSpawn,
   unparseableRunNotice,
   buildParseFailureMessage,
   worstCaseRunMs,
@@ -29,10 +31,18 @@ import {
   VITEST_RUN_TIMEOUT_MS,
   RUN_LOOP_WALL_CLOCK_BUDGET_MS,
   JOB_CAP_MS,
+  LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS,
+  LOAD_PASS_ESTIMATE_MS,
+  LOAD_READY_FALLBACK_MS,
+  LATE_COVERAGE_FRACTION,
+  pacedStartOffsetMs,
+  loadCoverage,
+  installInterruptCleanup,
 } from '../quarantine-health.mjs';
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
+import yaml from 'js-yaml';
 
 // --- resolveRuns (finding 12: QUARANTINE_HEALTH_RUNS=0/negative guard) -----
 
@@ -193,39 +203,38 @@ test('parseRegister excludes a row with fewer than 6 cells (no Quarantined cell)
 // docs/testing/flaky-register.md. The old parser extracted test names only
 // from backtick-quoted spans in the Test cell, but the real register's Test
 // column is prose (only the File column is backtick-quoted), so every row
-// was silently dropped and parseRegister returned []. This test fails against
-// the unfixed parser and passes after the prose-format fallback was added.
-// Also asserts that the real register parses cleanly with zero unparsed rows
-// (finding 6: the >= 2 assertion alone cannot catch a regression where a new
-// row starts failing while the old ones keep passing).
-//
-// #2496: the real register's #1981 row is NOT quarantined — its Quarantined
-// cell reads "Not quarantined — still gates" — so it must be excluded from
-// parseRegister's entries entirely, unlike #2235 which IS quarantined. Only
-// #2235 is asserted present below; #1981 is asserted absent.
-test('parseRegister returns one entry per quarantined data row of the real flaky-register.md (regression)', () => {
+// was silently dropped and parseRegister returned []. This test pins
+// register-wide invariants without naming any row: the register is live data
+// (rows graduate; the goal is an empty register), so it must not assert that
+// a particular row or a minimum entry count exists. The "Not quarantined"
+// exclusion (#2496) is covered by the fixture test above.
+test('parseRegister parses the real flaky-register.md cleanly (regression)', () => {
   const testDir = dirname(fileURLToPath(import.meta.url));
   const registerPath = resolve(testDir, '..', '..', 'docs', 'testing', 'flaky-register.md');
   const markdown = readFileSync(registerPath, 'utf8');
   const entries = parseRegister(markdown);
-  // The real register currently has 2 data rows (#1981, not quarantined, and
-  // #2235, quarantined) but only the quarantined one(s) become entries.
-  // Assert at least 1 to avoid brittleness when new quarantined entries are added.
-  assert.ok(entries.length >= 1, `expected at least 1 quarantined entry from the real register, got ${entries.length}`);
-  const files = entries.map((e) => e.file);
+  // Every parsed entry must carry a test file and a tracking issue number
+  // (vacuously true for an empty register).
   assert.ok(
-    !files.includes('server/src/routes/book-state-preserve-voices.test.ts'),
-    '#1981 is not quarantined and must be excluded',
+    entries.every((e) => e.file && e.issueNumbers.length > 0),
+    'every quarantined entry in the real register needs a file and a tracking issue number',
   );
-  assert.ok(files.includes('server/src/routes/export.test.ts'), 'missing #2235 row');
-  // Issue numbers must be extracted from the Issue cell, not the Test cell.
-  const by2235 = entries.find((e) => e.issueNumbers.includes(2235));
-  assert.ok(by2235, '#2235 row must carry tracking issue #2235');
   // The real register must parse cleanly with zero unparsed rows (finding 6).
-  // Excluding a non-quarantined row is not a parse failure, so this must
-  // still be 0 even though #1981 is no longer in `entries`.
+  // Excluding a non-quarantined row is not a parse failure.
   const unparsed = countUnparsedDataRows(markdown);
   assert.equal(unparsed, 0, 'the real register must parse cleanly with zero unparsed/malformed rows');
+});
+
+// Issue numbers must come from the Issue cell, not the Test cell. The Test
+// cell here cites #1981 while the tracking issue is #2226.
+test('parseRegister takes issue numbers from the Issue cell, not the Test cell', () => {
+  const markdown = `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| #1981 — a stale cast PUT does not erase a concurrently planted voice | \`server/src/routes/foo.test.ts\` | intermittent | Fails intermittently | #2226 | Quarantined |
+`;
+  const entries = parseRegister(markdown);
+  assert.equal(entries.length, 1);
+  assert.deepEqual(entries[0].issueNumbers, [2226]);
 });
 
 test('countRegisterDataRows counts well-formed (≥5 cell) data rows, ignoring headers, separators, prose, and comments', () => {
@@ -1180,7 +1189,7 @@ test('classifyRunResult: vitest 5 stdout alone (no report file) is unparseable a
   assert.equal(result.unparseable, true);
 });
 
-test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', () => {
+test('runVitestJson passes a temp --outputFile.json, reads the report vitest wrote there, and cleans the file up', async () => {
   let outPath;
   const fakeSpawn = (command) => {
     const m = /--outputFile\.json=([^"]+)"/.exec(command);
@@ -1189,29 +1198,55 @@ test('runVitestJson passes a temp --outputFile.json, reads the report vitest wro
     writeFileSync(outPath, JSON.stringify({ testResults: [{ name: 'f.ts', assertionResults: [] }] }));
     return { error: undefined, signal: null, status: 0, stdout: `JSON report written to ${outPath}`, stderr: '' };
   };
-  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  const result = await runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
   assert.equal(result.runOutcome, 'ok');
   assert.equal(result.testResults.length, 1);
   assert.ok(!outPath.startsWith(resolve(dirname(fileURLToPath(import.meta.url)), '..', '..')), 'report must live outside the repo');
   assert.ok(!existsSync(outPath), 'temp report must be removed afterwards');
 });
 
-test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', () => {
+test('runVitestJson: vitest exits without writing any report -> unparseable, surfaced (not an empty ok)', async () => {
   const fakeSpawn = () => ({ error: undefined, signal: null, status: 1, stdout: '', stderr: 'boom' });
-  const result = runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
+  const result = await runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn);
   assert.equal(result.runOutcome, 'crashed');
   assert.equal(result.unparseable, true);
 });
 
-test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', () => {
+test('runVitestJson: a spawn that THROWS still removes the temp report dir (and rethrows)', async () => {
   let outPath;
   const fakeSpawn = (command) => {
     outPath = /--outputFile\.json=([^"]+)"/.exec(command)[1];
     throw new Error('spawn exploded');
   };
-  assert.throws(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
+  await assert.rejects(() => runVitestJson(process.cwd(), undefined, ['f.test.ts'], fakeSpawn), /spawn exploded/);
   assert.ok(outPath, 'fake spawn must have been reached');
   assert.ok(!existsSync(dirname(outPath)), 'temp dir must be removed even when spawn throws');
+});
+
+test('boundedVitestSpawn: a timed-out run kills its whole process tree, not just the shell (#4244)', async () => {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const tmp = mkdtempSync(join(tmpdir(), 'qh-treekill-'));
+  const pidFile = join(tmp, 'child.pid');
+  const script = join(tmp, 'long-lived.cjs');
+  // The grandchild: with shell:true the direct child is cmd.exe / sh, and THIS is
+  // the node process under it. It records its own pid, then outlives the timeout.
+  wf(script, `require('fs').writeFileSync(${JSON.stringify(pidFile)}, String(process.pid)); setTimeout(() => {}, 60000);`);
+  const alive = (pid) => { try { process.kill(pid, 0); return true; } catch { return false; } };
+  let pid;
+  try {
+    const r = await boundedVitestSpawn(`node "${script}" qh-treekill-marker-${process.pid}`, { cwd: process.cwd(), env: process.env, timeout: 3000 });
+    assert.equal(r.error?.code, 'ETIMEDOUT', 'a run past its bound must classify as timed-out');
+    pid = Number(rf(pidFile, 'utf8'));
+    assert.ok(pid > 0, 'the long-lived child must have started before the timeout');
+    const deadline = Date.now() + 3000;
+    while (alive(pid) && Date.now() < deadline) await new Promise((res) => setTimeout(res, 50));
+    assert.ok(!alive(pid), `grandchild pid ${pid} survived the timeout`);
+  } finally {
+    if (pid && alive(pid)) { try { process.kill(pid, 'SIGKILL'); } catch {} }
+    try { rmSync(tmp, { recursive: true, force: true }); } catch {}
+  }
 });
 
 test('unparseableRunNotice is silent at zero and loud (names the count) otherwise', () => {
@@ -1461,7 +1496,7 @@ test('main() end-to-end: parse-failure dispatch reaches $GITHUB_STEP_SUMMARY (Fi
     process.exitCode = 0;
 
     // Call main() with the temp register file
-    main(registerPath);
+    await main(registerPath);
 
     // Verify exit code was set to 1
     assert.equal(process.exitCode, 1, 'main() should set exit code to 1 on parse-failure');
@@ -1537,7 +1572,7 @@ for (const [label, stdout] of [
       console.log = (...a) => logged.push(a.join(' '));
       console.error = () => {};
 
-      main(registerPath, fakeSpawn);
+      await main(registerPath, fakeSpawn);
 
       assert.equal(process.exitCode, 1, 'unparseable vitest output must exit non-zero');
       const written = readFileSync(summaryPath, 'utf8');
@@ -1564,15 +1599,50 @@ for (const [label, stdout] of [
   });
 }
 
+test('main() end-to-end: a NON-empty register report also names RUNNER_OS in its heading (#4244)', async () => {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-os-rows-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  wf(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+`, 'utf8');
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalRunnerOs = process.env.RUNNER_OS;
+  const originalExitCode = process.exitCode;
+  const originalLog = console.log;
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.env.RUNNER_OS = 'Windows';
+    process.exitCode = 0;
+    console.log = () => {};
+    const fakeSpawn = () => ({ status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' });
+    await main(registerPath, fakeSpawn);
+    assert.equal(rf(summaryPath, 'utf8').split('\n')[0], '# Quarantine lane health report (Windows)');
+  } finally {
+    console.log = originalLog;
+    if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    if (originalRunnerOs === undefined) delete process.env.RUNNER_OS;
+    else process.env.RUNNER_OS = originalRunnerOs;
+    process.exitCode = originalExitCode;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+});
+
 test('the run-loop wall-clock budget fits inside the workflow job cap with margin (finding 3 arithmetic)', () => {
   // The budget check (`budgetExceeded`, called BEFORE starting each run)
   // guarantees the run loop's own total worst-case elapsed time never
   // exceeds RUN_LOOP_WALL_CLOCK_BUDGET_MS: a run only starts if elapsed +
   // its own worst case still fits inside the budget, so after that run
   // finishes (worst case), elapsed <= budget by construction. That bound
-  // must leave real margin inside JOB_CAP_MS (mirrors `timeout-minutes: 30`
-  // in .github/workflows/quarantine-health.yml) for checkout/npm-install/
-  // apt-get-ffmpeg and the post-loop `gh issue view` calls, which all run
+  // must leave real margin inside JOB_CAP_MS (mirrors the tightest per-OS
+  // `matrix.timeout`, 30 min on Ubuntu, in .github/workflows/quarantine-health.yml)
+  // for checkout/npm-install/the per-OS ffmpeg install and the post-loop `gh issue view` calls, which all run
   // OUTSIDE this budget.
   assert.ok(
     RUN_LOOP_WALL_CLOCK_BUDGET_MS <= JOB_CAP_MS,
@@ -1595,4 +1665,797 @@ test('the run-loop wall-clock budget fits inside the workflow job cap with margi
   }
   assert.ok(started < 5, `expected the budget to stop the loop before all 5 runs, but all 5 started`);
   assert.ok(elapsed <= RUN_LOOP_WALL_CLOCK_BUDGET_MS, `worst-case elapsed (${elapsed}ms) exceeded the budget`);
+});
+
+test('quarantine-health.yml runs a per-OS matrix whose tightest leg mirrors JOB_CAP_MS (#4244)', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const doc = yaml.load(readFileSync(wfPath, 'utf8'));
+  const job = doc.jobs['quarantine-health'];
+  assert.ok(job, 'no quarantine-health job found -- did it get renamed?');
+  assert.equal(job['runs-on'], '${{ matrix.os }}');
+  assert.equal(job['timeout-minutes'], '${{ matrix.timeout }}');
+  assert.equal(job.strategy['fail-fast'], false);
+  assert.equal(job['continue-on-error'], true);
+  const include = job.strategy.matrix.include;
+  assert.deepEqual(include.map((e) => e.os).sort(), ['ubuntu-latest', 'windows-latest']);
+  const capMin = JOB_CAP_MS / 60000;
+  for (const e of include) {
+    assert.equal(typeof e.timeout, 'number', `${e.os} leg has no numeric timeout`);
+    assert.ok(e.timeout >= capMin, `${e.os} timeout ${e.timeout} is below JOB_CAP_MS (${capMin} min)`);
+  }
+  assert.equal(Math.min(...include.map((e) => e.timeout)), capMin, 'JOB_CAP_MS must equal the tightest leg timeout');
+});
+
+test('quarantine-health.yml gates each ffmpeg install step to exactly its own OS leg (#4244)', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const steps = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'].steps;
+  const byName = (n) => steps.find((st) => st.name === n);
+  assert.equal(byName('Install ffmpeg')?.if, "matrix.os == 'ubuntu-latest'");
+  assert.equal(byName('Install ffmpeg (Windows)')?.if, "matrix.os == 'windows-latest'");
+});
+
+// --- OS-named report (#4244) -------------------------------------------------
+
+test('formatReport with os names it in the first line (empty entries)', () => {
+  const lines = formatReport({ entries: [], runs: 0, issueStates: new Map(), os: 'Windows' }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report (Windows)');
+});
+
+test('formatReport with os names it in the first line (non-empty entries)', () => {
+  const entries = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+  const lines = formatReport({ entries, runs: 5, issueStates: new Map(), os: 'Windows' }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report (Windows)');
+});
+
+test('formatReport without os keeps the unchanged first line', () => {
+  const lines = formatReport({ entries: [], runs: 0, issueStates: new Map() }).split('\n');
+  assert.equal(lines[0], '# Quarantine lane health report');
+});
+
+test('always-passes legend is scoped to this OS and requires every OS leg', () => {
+  const entries = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+  const report = formatReport({ entries, runs: 5, issueStates: new Map() });
+  const legend = report.split('\n').find((l) => l.startsWith('- **always-passes**'));
+  assert.ok(legend, 'legend line present');
+  assert.ok(legend.includes('on this OS'), 'legend says on this OS');
+  assert.ok(legend.includes('every OS leg'), 'legend says every OS leg');
+});
+
+test('resolveOsLabel prefers RUNNER_OS, else falls back to platform', () => {
+  assert.equal(resolveOsLabel({ RUNNER_OS: 'Windows' }, 'linux'), 'Windows');
+  assert.equal(resolveOsLabel({}, 'win32'), 'win32');
+  assert.equal(resolveOsLabel({ RUNNER_OS: '   ' }, 'linux'), 'linux');
+});
+
+test('main() end-to-end: empty register report names RUNNER_OS in its heading (#4244)', async () => {
+  const { mkdtempSync, writeFileSync, readFileSync, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-os-test-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  writeFileSync(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+
+_Empty — no tests are currently quarantined._
+`, 'utf8');
+
+  const originalSummaryPath = process.env.GITHUB_STEP_SUMMARY;
+  const originalRunnerOs = process.env.RUNNER_OS;
+  const originalExitCode = process.exitCode;
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    process.env.RUNNER_OS = 'Windows';
+    process.exitCode = 0;
+    await main(registerPath);
+    const first = readFileSync(summaryPath, 'utf8').split('\n')[0];
+    assert.equal(first, '# Quarantine lane health report (Windows)');
+  } finally {
+    if (originalSummaryPath === undefined) delete process.env.GITHUB_STEP_SUMMARY;
+    else process.env.GITHUB_STEP_SUMMARY = originalSummaryPath;
+    if (originalRunnerOs === undefined) delete process.env.RUNNER_OS;
+    else process.env.RUNNER_OS = originalRunnerOs;
+    process.exitCode = originalExitCode;
+    try {
+      rmSync(summaryPath, { force: true });
+      rmSync(registerPath, { force: true });
+      rmSync(tempDir, { recursive: true, force: true });
+    } catch {}
+  }
+});
+
+// --- load mode (#4244 owner decision (c)) -------------------------------------
+// A verdict from the quarantined file run ALONE cannot see a load-dependent
+// stall, so the Windows leg runs a full `npm run test:server` concurrently and
+// every report says which mode produced its verdict.
+
+test('resolveLoadMode: only the exact value server-suite turns the load on', async () => {
+  const { resolveLoadMode } = await import('../quarantine-health.mjs');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: 'server-suite' }), 'server-suite');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: ' server-suite ' }), 'server-suite');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: '' }), 'none');
+  assert.equal(resolveLoadMode({ QUARANTINE_HEALTH_LOAD: 'bogus' }), 'none');
+  assert.equal(resolveLoadMode({}), 'none');
+});
+
+const LOAD_ENTRIES = [{ testName: 'a', file: 'server/src/a.test.ts', issueNumbers: [1], bucket: 'always-passes', passed: 5, failed: 0, notFound: 0, runs: 5 }];
+
+test('formatReport states a LOADED verdict when every run was under load', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: { firstStartMs: 5_000, lastEndMs: 590_000, passMs: 728_000, firstPct: 1, lastPct: 81 } } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line, 'a Load line is present');
+  assert.ok(line.includes('5/5'), line);
+  assert.ok(line.includes('LOADED verdict'), line);
+});
+
+test('formatReport refuses to call a partly-loaded run a loaded verdict', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 3 } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('3/5'), line);
+  assert.ok(line.includes('NOT a loaded verdict'), line);
+});
+
+test('formatReport labels an unloaded run ISOLATED', () => {
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'none', loadedRuns: 0 } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('none'), line);
+  assert.ok(line.includes('ISOLATED'), line);
+});
+
+// A scripted clock + load for main(): `sleep` advances the clock, each vitest
+// invocation costs `runCostMs`, and the fake load is launched at clock 0, becomes
+// ready at READY_AT_MS and finishes its suite at `fakePassMs` (after which, like
+// the real load, it is a new instance). `shape(seen)` can override what status()
+// reports (to kill or relaunch the load); `makeSpawn(seen, clock)` can replace the
+// vitest spawner.
+const READY_AT_MS = 5_000;
+const RUN_COST_MS = 7_000;
+const FAKE_PASS_MS = 728_000; // the green median
+
+// Drives main() with a fake spawn and a fake loader; returns what was observed.
+async function driveMainWithLoad(loadEnv, { shape = () => ({}), passMs, proc, fakePassMs = FAKE_PASS_MS, runCostMs = RUN_COST_MS, makeSpawn, exitCode = 0 } = {}) {
+  const { mkdtempSync, writeFileSync: wf, readFileSync: rf, rmSync } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { main } = await import('../quarantine-health.mjs');
+  const tempDir = mkdtempSync(join(tmpdir(), 'quarantine-health-load-'));
+  const registerPath = join(tempDir, 'test-register.md');
+  const summaryPath = join(tempDir, 'summary.md');
+  wf(registerPath, `| Test | File | Class | Symptom | Tracking issue | Quarantined |
+|------|------|-------|---------|----------------|-------------|
+| \`fe case\` | \`src/lib/foo.test.ts\` | timing | flaky | — | Quarantined |
+`, 'utf8');
+  const saved = { s: process.env.GITHUB_STEP_SUMMARY, l: process.env.QUARANTINE_HEALTH_LOAD, x: process.exitCode, log: console.log, err: console.error };
+  const clock = { t: 0 };
+  const seen = { started: 0, stopped: 0, liveAtSpawn: [], spawnAt: [], sleeps: 0, clock, errors: [] };
+  try {
+    process.env.GITHUB_STEP_SUMMARY = summaryPath;
+    if (loadEnv === undefined) delete process.env.QUARANTINE_HEALTH_LOAD;
+    else process.env.QUARANTINE_HEALTH_LOAD = loadEnv;
+    console.log = () => {};
+    console.error = (...a) => { seen.errors.push(a.join(' ')); };
+    const startLoad = () => {
+      seen.started++;
+      return {
+        mode: 'server-suite',
+        status: () => ({
+          instance: clock.t >= fakePassMs ? 2 : 1,
+          alive: seen.stopped === 0,
+          ready: clock.t >= READY_AT_MS,
+          sinceLaunchMs: clock.t,
+          ...shape(seen, clock),
+        }),
+        passDurationMs: (inst) => (inst === 1 && clock.t >= fakePassMs ? fakePassMs : null),
+        passExitCode: (inst) => (inst === 1 && clock.t >= fakePassMs ? exitCode : null),
+        stop: () => { seen.stopped++; },
+      };
+    };
+    const defaultSpawn = () => {
+      seen.liveAtSpawn.push(seen.started - seen.stopped);
+      seen.spawnAt.push(clock.t);
+      clock.t += runCostMs;
+      return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+    };
+    const sleep = async (ms) => { seen.sleeps++; clock.t += ms; };
+    await main(registerPath, makeSpawn ? makeSpawn(seen, clock) : defaultSpawn, startLoad, { sleep, now: () => clock.t, loadPassMs: passMs, proc });
+    seen.report = rf(summaryPath, 'utf8');
+  } finally {
+    console.log = saved.log;
+    console.error = saved.err;
+    if (saved.s === undefined) delete process.env.GITHUB_STEP_SUMMARY; else process.env.GITHUB_STEP_SUMMARY = saved.s;
+    if (saved.l === undefined) delete process.env.QUARANTINE_HEALTH_LOAD; else process.env.QUARANTINE_HEALTH_LOAD = saved.l;
+    process.exitCode = saved.x;
+    rmSync(tempDir, { recursive: true, force: true });
+  }
+  return seen;
+}
+
+const loadLine = (seen) => seen.report.split('\n').find((l) => l.startsWith('**Load:'));
+
+test('main() with QUARANTINE_HEALTH_LOAD=server-suite runs every vitest invocation under the load, then stops it', async () => {
+  const seen = await driveMainWithLoad('server-suite');
+  assert.equal(seen.started, 1, 'the load is started exactly once');
+  assert.equal(seen.stopped, 1, 'and stopped exactly once, after the loop');
+  assert.ok(seen.liveAtSpawn.length > 0 && seen.liveAtSpawn.every((n) => n === 1), `every vitest invocation ran while the load was live: ${seen.liveAtSpawn}`);
+  const line = loadLine(seen);
+  assert.ok(line && line.includes('5/5') && line.includes('LOADED verdict') && !line.includes('NOT'), `report says loaded: ${line}`);
+});
+
+test('main() spaces the loaded runs from the load\'s launch across one full test:server pass instead of firing them back to back (owner decision (c))', async () => {
+  const seen = await driveMainWithLoad('server-suite');
+  assert.equal(seen.spawnAt.length, 5);
+  seen.spawnAt.forEach((launchOffset, i) => {
+    // Each run starts at its paced offset from the load's LAUNCH (and run 1 only once
+    // the load is ready), to within one poll.
+    const target = Math.max(pacedStartOffsetMs(i, 5, LOAD_PASS_ESTIMATE_MS), READY_AT_MS);
+    assert.ok(launchOffset >= target && launchOffset <= target + 1000, `run ${i + 1} started at +${launchOffset}ms, wanted +${target}ms`);
+  });
+  assert.equal(seen.spawnAt[0], READY_AT_MS, 'the first run starts as soon as the load is past startup, not before');
+  assert.ok(seen.spawnAt[4] >= 0.75 * LOAD_PASS_ESTIMATE_MS, `the last run starts in the late window: +${seen.spawnAt[4]}ms`);
+  const line = loadLine(seen);
+  assert.match(line, /spanning \+5s to \+5\d\ds from the load\u0027s launch \(1%-8\d% of that load\u0027s measured 728s pass, exit 0\)/, line);
+});
+
+test('main() lets the load finish its pass after the last run and scores the runs against the MEASURED pass: a pass longer than the estimate is NOT loaded', async () => {
+  const seen = await driveMainWithLoad('server-suite', { fakePassMs: 1_000_000 });
+  assert.ok(seen.clock.t >= 1_000_000, 'the loop waited for the load to finish its pass');
+  const line = loadLine(seen);
+  assert.match(line, /5\/5 run\(s\) fully loaded/, line);
+  assert.match(line, /of that load\u0027s measured 1000s pass/, line);
+  assert.match(line, /NOT a loaded verdict.*late window/, line);
+  assert.ok(!line.includes('This is a LOADED verdict'), line);
+});
+
+test('main() reports NOT loaded, and says why, when the load never finishes its pass inside the budget', async () => {
+  const seen = await driveMainWithLoad('server-suite', { fakePassMs: 1e12 });
+  assert.ok(seen.clock.t > LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS && seen.clock.t <= LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS + 2_000, `the wait for the pass ends with the budget: ${seen.clock.t}ms`);
+  const line = loadLine(seen);
+  assert.match(line, /5\/5 run\(s\) fully loaded/, line);
+  assert.match(line, /did not finish inside the wall-clock budget/, line);
+  assert.match(line, /NOT a loaded verdict/, line);
+  assert.ok(!line.includes('This is a LOADED verdict'), line);
+});
+
+test('main() runs under the LOADED budget only while a load is on (the budget reads the injected clock)', async () => {
+  // One fake vitest invocation costs 6 min and its worst case is 5 min: run 4 would
+  // start 18 min in, so only the 30-minute loaded budget fits all five runs; the
+  // plain 20-minute one stops after three.
+  const cost = 6 * 60_000;
+  const loaded = await driveMainWithLoad('server-suite', { passMs: 5_000, fakePassMs: 1e12, runCostMs: cost });
+  assert.match(loaded.report, /Ran the quarantine lane 5 time\(s\)/);
+  assert.ok(!loaded.report.includes('Stopped after'), 'the loaded loop ran to completion');
+  const plain = await driveMainWithLoad(undefined, { runCostMs: cost });
+  assert.match(plain.report, /Ran the quarantine lane 3 time\(s\)/);
+  assert.match(plain.report, /Stopped after 3\/5 planned run\(s\).*20-minute wall-clock budget/);
+});
+
+test('pacedStartOffsetMs: evenly spaced fractions of the pass, the last run at (runs-1)/runs of it', () => {
+  assert.deepEqual([0, 1, 2, 3, 4].map((i) => pacedStartOffsetMs(i, 5, 500_000)), [0, 100_000, 200_000, 300_000, 400_000]);
+  assert.equal(pacedStartOffsetMs(0, 1, 500_000), 0);
+});
+
+test('main() counts a run as loaded only while the load stays alive: a load that dies after run 1 reads 1/5 and NOT a loaded verdict', async () => {
+  const seen = await driveMainWithLoad('server-suite', { shape: (s) => ({ alive: s.spawnAt.length < 2 }) });
+  const line = loadLine(seen);
+  assert.ok(line.includes('1/5'), line);
+  assert.ok(line.includes('NOT a loaded verdict'), line);
+});
+
+test('main() does not count a run straddling a load relaunch (a different instance at its start and end)', async () => {
+  // The instance flips during run 3: spawns 1-2 see instance 1 at both ends.
+  // Like the real load, the new instance's offset restarts from its own launch.
+  const seen = await driveMainWithLoad('server-suite', {
+    shape: (s, c) => (s.spawnAt.length < 3 ? { instance: 1 } : { instance: 2, sinceLaunchMs: c.t - s.spawnAt[2] }),
+  });
+  const line = loadLine(seen);
+  assert.ok(seen.spawnAt[4] - seen.spawnAt[2] < 60_000, `runs on a relaunched load are not held for pacing against the new instance: ${seen.spawnAt}`);
+  // Run 3's status() before is instance 1, after is 2; runs 4-5 are entirely instance 2,
+  // but a verdict is about the ONE pass the load was launched as, so they do not count.
+  assert.ok(line.includes('2/5'), line);
+  assert.ok(line.includes('NOT a loaded verdict'), line);
+});
+
+test('main() does not call a load that was not past startup a loaded one, and does not start a run before it is ready', async () => {
+  const seen = await driveMainWithLoad('server-suite');
+  assert.ok(seen.spawnAt[0] >= READY_AT_MS, `first run started at ${seen.spawnAt[0]}ms, before the load was ready at ${READY_AT_MS}ms`);
+});
+
+test('main() without the load env var runs isolated, unpaced, and says so', async () => {
+  const seen = await driveMainWithLoad(undefined);
+  assert.equal(seen.started, 0, 'no load is started');
+  assert.equal(seen.sleeps, 0, 'no pacing wait without a load');
+  const line = loadLine(seen);
+  assert.ok(line && line.includes('ISOLATED'), `report says isolated: ${line}`);
+});
+
+test('main() registers interrupt handlers while a load is live and removes them afterwards', async () => {
+  const { EventEmitter } = await import('node:events');
+  const fake = new EventEmitter();
+  fake.exit = () => {};
+  const during = [];
+  const seen = await driveMainWithLoad('server-suite', { proc: fake, shape: () => { during.push(fake.listenerCount('SIGTERM')); return {}; } });
+  // The first status() read is main's own, taken before the handlers go in; every later one is inside the loop.
+  assert.ok(during.length > 2 && during.slice(1).every((n) => n === 1), `a SIGTERM handler is installed whenever the loop reads the load: ${during}`);
+  for (const ev of ['SIGINT', 'SIGTERM', 'exit']) assert.equal(fake.listenerCount(ev), 0, `${ev} handler removed after the run`);
+  assert.equal(seen.stopped, 1);
+});
+
+test('main(): an interrupt kills the in-flight vitest tree as well as the load (killLiveSpawns in the cleanup)', async () => {
+  const { EventEmitter } = await import('node:events');
+  const { boundedSpawn } = await import('../lib/bounded-spawn.mjs');
+  const fake = new EventEmitter();
+  fake.exit = () => {};
+  const done = { vitest: null, ms: null };
+  let first = true;
+  const quiet = { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+  // The first vitest invocation is a REAL boundedSpawn child that would sleep 60 s;
+  // 600 ms in, the host is "interrupted" (its exit handler runs).
+  const makeSpawn = () => async () => {
+    if (!first) return quiet;
+    first = false;
+    setTimeout(() => fake.emit('exit'), 600);
+    const t0 = Date.now();
+    try {
+      await boundedSpawn('in-flight vitest', process.execPath, ['-e', 'setTimeout(() => {}, 60000)'], { timeoutMs: 8_000 });
+      done.vitest = 'killed';
+    } catch {
+      done.vitest = 'left running until its own timeout';
+    }
+    done.ms = Date.now() - t0;
+    return quiet;
+  };
+  const seen = await driveMainWithLoad('server-suite', { proc: fake, makeSpawn });
+  assert.ok(seen.stopped >= 1, 'the load was stopped by the interrupt');
+  assert.equal(done.vitest, 'killed', `the in-flight vitest tree: ${done.vitest} after ${done.ms}ms`);
+  assert.ok(done.ms < 6_000, `reaped promptly, not at its 8 s timeout: ${done.ms}ms`);
+});
+
+test('formatReport: loaded runs that never reached the late window are NOT a loaded verdict, and the line says why', () => {
+  const early = { firstStartMs: 5_000, lastEndMs: 100_000, passMs: 728_000, firstPct: 1, lastPct: 14 };
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: early } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('5/5'), line);
+  assert.ok(line.includes('1%-14%'), line);
+  assert.ok(line.includes('NOT a loaded verdict') && line.includes('late window'), line);
+});
+
+test('formatReport: 5/5 loaded runs reaching the late window state the span from launch, the measured pass and a LOADED verdict', () => {
+  const full = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: 728_000, firstPct: 1, lastPct: 81 };
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: full } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('+5s to +590s from the load\'s launch') && line.includes('1%-81%') && line.includes('measured 728s pass'), line);
+  assert.ok(line.includes('LOADED verdict') && !line.includes('NOT'), line);
+});
+
+test('formatReport: the late-window gate is exactly 75% of the measured pass (70% is NOT loaded, 75% and 76% are)', () => {
+  assert.equal(LATE_COVERAGE_FRACTION, 0.75);
+  const verdictAt = (lastEndMs) => {
+    const coverage = { firstStartMs: 5_000, lastEndMs, passMs: 1_000_000, firstPct: 1, lastPct: Math.round(lastEndMs / 10_000) };
+    const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage } });
+    return report.split('\n').find((l) => l.startsWith('**Load:'));
+  };
+  assert.ok(verdictAt(700_000).includes('NOT a loaded verdict'), verdictAt(700_000));
+  assert.ok(verdictAt(749_999).includes('NOT a loaded verdict'), verdictAt(749_999));
+  assert.ok(verdictAt(750_000).includes('This is a LOADED verdict'), verdictAt(750_000));
+  assert.ok(verdictAt(760_000).includes('This is a LOADED verdict'), verdictAt(760_000));
+});
+
+test('formatReport: runs whose load never finished its pass are NOT a loaded verdict, and the line says the length is unknown', () => {
+  const unmeasured = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: null, firstPct: null, lastPct: null };
+  const report = formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: unmeasured } });
+  const line = report.split('\n').find((l) => l.startsWith('**Load:'));
+  assert.ok(line.includes('+5s to +590s from the load\'s launch'), line);
+  assert.ok(line.includes('did not finish inside the wall-clock budget'), line);
+  assert.ok(line.includes('NOT a loaded verdict') && !line.includes('This is a LOADED verdict'), line);
+});
+
+test('loadCoverage: spans the loaded runs against the measured pass; null when none were loaded; unknown percentages when the pass never finished', () => {
+  assert.equal(loadCoverage([], 500_000), null);
+  const spans = [{ startMs: 100_000, endMs: 120_000 }, { startMs: 0, endMs: 20_000 }, { startMs: 400_000, endMs: 425_000 }];
+  assert.deepEqual(loadCoverage(spans, 500_000), { firstStartMs: 0, lastEndMs: 425_000, passMs: 500_000, firstPct: 0, lastPct: 85 });
+  assert.deepEqual(loadCoverage(spans, null), { firstStartMs: 0, lastEndMs: 425_000, passMs: null, firstPct: null, lastPct: null });
+});
+
+// --- the load's exit code, and WHY a pass went unmeasured (#4489 pass 4) ------
+
+test('startServerSuiteLoad records each ended pass\'s exit code beside its measured length (null while running)', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const children = [];
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: () => { const c = fakeLoadChild(children.length + 1); children.push(c); return c; }, kill: () => {}, now: () => now });
+  assert.equal(load.passExitCode(1), null, 'a running suite has no exit code yet');
+  now = 60_000;
+  children[0].handlers.exit(0);
+  assert.equal(load.passExitCode(1), 0);
+  now = 120_000;
+  children[1].handlers.exit(3);
+  assert.equal(load.passExitCode(2), 3, 'a failing suite that ran to its end is measured AND its code kept');
+  assert.equal(load.passDurationMs(2), 60_000);
+});
+
+test('startServerSuiteLoad: an `error` event on the load makes it not alive, sticky', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  let child;
+  const load = startServerSuiteLoad({ spawnImpl: () => (child = fakeLoadChild()), kill: () => {}, now: () => 0 });
+  assert.equal(load.status().alive, true);
+  child.handlers.error(new Error('spawn failed'));
+  assert.equal(load.status().alive, false);
+});
+
+const MEASURED_COVERAGE = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: 728_000, firstPct: 1, lastPct: 81 };
+
+test('formatReport: the Load line records the load\'s exit code with its measured pass; a non-zero code adds a note and leaves the verdict alone', () => {
+  const lineFor = (passExitCode) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: MEASURED_COVERAGE, passExitCode } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  const ok = lineFor(0);
+  assert.ok(ok.includes('measured 728s pass, exit 0'), ok);
+  assert.ok(ok.includes('This is a LOADED verdict') && !ok.includes('suite itself failed'), ok);
+  const bad = lineFor(1);
+  assert.ok(bad.includes('measured 728s pass, exit 1'), bad);
+  assert.ok(bad.includes('the load suite itself failed'), bad);
+  assert.ok(bad.includes('This is a LOADED verdict'), `the verdict computation is unchanged: ${bad}`);
+});
+
+test('main() prints the anchor load\'s exit code on the Load line: 0 plain, non-zero with the load-suite-failed note', async () => {
+  const ok = loadLine(await driveMainWithLoad('server-suite', { exitCode: 0 }));
+  assert.match(ok, /measured 728s pass, exit 0/, ok);
+  assert.ok(!ok.includes('suite itself failed'), ok);
+  const bad = loadLine(await driveMainWithLoad('server-suite', { exitCode: 1 }));
+  assert.match(bad, /measured 728s pass, exit 1/, bad);
+  assert.match(bad, /the load suite itself failed/, bad);
+  assert.match(bad, /This is a LOADED verdict/, bad);
+});
+
+test('formatReport names the actual reason a pass went unmeasured: budget, load died, run aborted', () => {
+  const unmeasured = { firstStartMs: 5_000, lastEndMs: 590_000, passMs: null, firstPct: null, lastPct: null };
+  const lineFor = (unmeasuredWhy) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns: 5, coverage: unmeasured, unmeasuredWhy } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  const budget = lineFor('budget');
+  assert.match(budget, /did not finish inside the wall-clock budget/, budget);
+  const died = lineFor('died');
+  assert.match(died, /load died before its pass finished/, died);
+  assert.ok(!died.includes('wall-clock budget'), died);
+  const aborted = lineFor('aborted');
+  assert.match(aborted, /run was aborted before the load\u0027s pass finished/, aborted);
+  assert.ok(!aborted.includes('wall-clock budget'), aborted);
+  for (const l of [budget, died, aborted]) assert.ok(l.includes('NOT a loaded verdict') && !l.includes('This is a LOADED verdict'), l);
+});
+
+test('formatReport names the reason when not every run was loaded: none loaded vs some', () => {
+  const lineFor = (loadedRuns) => formatReport({ entries: LOAD_ENTRIES, runs: 5, issueStates: new Map(), load: { mode: 'server-suite', loadedRuns, coverage: null } })
+    .split('\n').find((l) => l.startsWith('**Load:'));
+  assert.match(lineFor(0), /none of the 5 runs was loaded/, lineFor(0));
+  assert.match(lineFor(3), /3\/5 run\(s\) fully loaded.*NOT a loaded verdict.*died or was relaunched/, lineFor(3));
+  assert.ok(!lineFor(3).includes('none of the'), lineFor(3));
+});
+
+test('main() reports "load died" (not the budget) when the load dies after the last run, and the wait ends promptly', async () => {
+  // Alive through run 5's end, dead right after: the completion wait must notice at
+  // once via status().alive rather than idling to the 30-minute budget.
+  const seen = await driveMainWithLoad('server-suite', {
+    fakePassMs: 1e12,
+    shape: (s, c) => (s.spawnAt.length >= 5 && c.t > s.spawnAt[4] + RUN_COST_MS ? { alive: false } : {}),
+  });
+  const line = loadLine(seen);
+  assert.match(line, /5\/5 run\(s\) fully loaded/, line);
+  assert.match(line, /load died before its pass finished/, line);
+  assert.ok(!line.includes('wall-clock budget'), line);
+  assert.ok(seen.clock.t < seen.spawnAt[4] + RUN_COST_MS + 10_000, `the wait ended promptly, not at the budget: ${seen.clock.t}ms`);
+});
+
+test('main() reports "aborted" (not the budget) when a run throws after loaded runs', async () => {
+  const makeSpawn = () => {
+    let n = 0;
+    return () => {
+      n++;
+      if (n === 3) throw new Error('spawn exploded');
+      return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+    };
+  };
+  const seen = await driveMainWithLoad('server-suite', { fakePassMs: 1e12, makeSpawn });
+  const line = loadLine(seen);
+  assert.match(line, /2\/2 run\(s\) fully loaded/, line);
+  assert.match(line, /run was aborted before the load\u0027s pass finished/, line);
+  assert.ok(!line.includes('wall-clock budget'), line);
+  assert.match(seen.report, /Aborted early after 2\/5/);
+});
+
+test('main() reports "none of the runs was loaded" when the load is dead from the start', async () => {
+  const seen = await driveMainWithLoad('server-suite', { shape: () => ({ alive: false }) });
+  assert.match(loadLine(seen), /none of the 5 runs was loaded/, loadLine(seen));
+});
+
+// A fake spawned child whose stdout/stderr are observable.
+function fakeLoadChild(pid = 1) {
+  const handlers = {};
+  const stdout = { handlers: {}, on(ev, fn) { this.handlers[ev] = fn; return this; } };
+  const stderr = { handlers: {}, on(ev, fn) { this.handlers[ev] = fn; return this; } };
+  const child = { pid, stdout, stderr, handlers, on: (ev, fn) => { handlers[ev] = fn; return child; } };
+  return child;
+}
+
+test('startServerSuiteLoad spawns the full test:server suite with output piped for readiness, restarts it, and stops it', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const spawned = [];
+  const killed = [];
+  const fakeSpawn = (cmd, opts) => {
+    const child = fakeLoadChild(100 + spawned.length);
+    spawned.push({ cmd, opts, child });
+    return child;
+  };
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: fakeSpawn, kill: (pid) => killed.push(pid), now: () => now });
+  assert.equal(spawned[0].cmd, 'npm run test:server');
+  assert.deepEqual(spawned[0].opts.stdio, ['ignore', 'pipe', 'pipe'], 'stdout is the readiness signal; both pipes are drained');
+  assert.equal(typeof spawned[0].child.stdout.handlers.data, 'function', 'stdout is drained');
+  assert.equal(typeof spawned[0].child.stderr.handlers.data, 'function', 'stderr is drained');
+  assert.equal(spawned[0].opts.shell, true);
+  assert.equal(spawned[0].opts.windowsHide, true);
+  assert.equal(spawned[0].opts.env.RUN_QUARANTINE, undefined, 'the load must not un-skip quarantined tests');
+  assert.equal(load.status().alive, true);
+  assert.equal(load.status().instance, 1);
+  assert.equal(load.passDurationMs(1), null, 'a running suite has no measured length yet');
+  now = 60_000; // a healthy suite pass ended: relaunch so the load never lapses
+  spawned[0].child.handlers.exit(0);
+  assert.equal(load.passDurationMs(1), 60_000, 'the ended pass is measured, from launch to exit');
+  assert.equal(load.passDurationMs(2), null);
+  assert.equal(spawned.length, 2, 'restarted after a long run');
+  assert.equal(load.status().alive, true);
+  assert.equal(load.status().instance, 2, 'a relaunch is a new instance');
+  load.stop();
+  assert.deepEqual(killed, [101], 'stop kills the live tree');
+  assert.equal(load.status().alive, false);
+});
+
+test('startServerSuiteLoad readiness: not ready until the first test-file result appears on stdout (split chunks, ANSI colour and all)', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  let child;
+  let now = 1_000;
+  const load = startServerSuiteLoad({ spawnImpl: () => (child = fakeLoadChild()), kill: () => {}, now: () => now });
+  assert.equal(load.status().ready, false);
+  child.stdout.handlers.data(' RUN  v5.1.0 C:/repo/server\n\n');
+  child.stderr.handlers.data('some npm warning\n');
+  now = 3_000;
+  assert.equal(load.status().ready, false, 'bootstrap chatter is not a test result');
+  child.stdout.handlers.data('\u001b[32m ✓\u001b[39m src/uti');
+  assert.equal(load.status().ready, false, 'half a line is not a result yet');
+  now = 6_000;
+  child.stdout.handlers.data('ls/thing.test.ts (3 tests) 12ms\n');
+  now = 9_000;
+  const s = load.status();
+  assert.equal(s.ready, true);
+  assert.equal(s.sinceLaunchMs, 8_000, 'offsets are measured from the launch, not from the moment the result was seen');
+});
+
+test('startServerSuiteLoad readiness fallback: a silent suite is ready after LOAD_READY_FALLBACK_MS of uptime', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: () => fakeLoadChild(), kill: () => {}, now: () => now });
+  now = LOAD_READY_FALLBACK_MS - 1;
+  assert.equal(load.status().ready, false);
+  now = LOAD_READY_FALLBACK_MS + 4_000;
+  const s = load.status();
+  assert.equal(s.ready, true);
+  assert.equal(s.sinceLaunchMs, LOAD_READY_FALLBACK_MS + 4_000);
+});
+
+test('startServerSuiteLoad: a test-file line arriving after the fallback fired does not move the offsets or un-ready the load', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  let child;
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: () => (child = fakeLoadChild()), kill: () => {}, now: () => now });
+  now = LOAD_READY_FALLBACK_MS + 9_000;
+  const before = load.status();
+  assert.equal(before.ready, true, 'ready by the fallback');
+  child.stdout.handlers.data(' ✓ src/a.test.ts (1 test) 1ms\n');
+  now += 1_000;
+  const after = load.status();
+  assert.equal(after.ready, true);
+  assert.equal(after.sinceLaunchMs, before.sinceLaunchMs + 1_000, 'the offset keeps counting from the launch (it used to jump back to 0)');
+});
+
+test('startServerSuiteLoad: a relaunched instance starts NOT ready again, and a late line from the old instance does not ready it', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const children = [];
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: () => { const c = fakeLoadChild(children.length + 1); children.push(c); return c; }, kill: () => {}, now: () => now });
+  children[0].stdout.handlers.data(' ✓ src/a.test.ts (1 test) 1ms\n');
+  assert.equal(load.status().ready, true);
+  now = 30_000;
+  children[0].handlers.exit(0);
+  assert.equal(load.status().ready, false, 'the new instance is still bootstrapping');
+  children[0].stdout.handlers.data(' ✓ src/b.test.ts (1 test) 1ms\n'); // stale output of the dead instance
+  assert.equal(load.status().ready, false);
+});
+
+test('startServerSuiteLoad reports NOT alive once the suite dies instantly (a broken load must not read as a loaded verdict)', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  const spawned = [];
+  const fakeSpawn = () => {
+    const child = fakeLoadChild();
+    spawned.push(child);
+    return child;
+  };
+  let now = 0;
+  const load = startServerSuiteLoad({ spawnImpl: fakeSpawn, kill: () => {}, now: () => now });
+  now = 500;
+  spawned[0].handlers.exit(1);
+  assert.equal(load.status().alive, false);
+  assert.equal(spawned.length, 1, 'no restart loop on an instant failure');
+});
+
+test('startServerSuiteLoad.stop() never signals a Windows root that already died (its pid may be reused); POSIX still tries the group', async () => {
+  const { startServerSuiteLoad } = await import('../quarantine-health.mjs');
+  for (const [platform, expected] of [['win32', []], ['linux', [7]]]) {
+    const killed = [];
+    const handlers = {};
+    const child = { pid: 7, on: (ev, fn) => { handlers[ev] = fn; return child; } };
+    const load = startServerSuiteLoad({ spawnImpl: () => child, kill: (pid) => killed.push(pid), now: () => 0, platform });
+    handlers.exit(1); // died instantly: failed, never relaunched
+    load.stop();
+    assert.deepEqual(killed, expected, platform);
+  }
+  // A live root is killed on every platform.
+  const killed = [];
+  const child = { pid: 8, on: () => child };
+  startServerSuiteLoad({ spawnImpl: () => child, kill: (pid) => killed.push(pid), now: () => 0, platform: 'win32' }).stop();
+  assert.deepEqual(killed, [8]);
+});
+
+test('quarantine-health.yml turns the load on for the Windows leg only, and feeds it to the script', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const job = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'];
+  const byOs = Object.fromEntries(job.strategy.matrix.include.map((e) => [e.os, e]));
+  assert.equal(byOs['windows-latest'].load, 'server-suite');
+  assert.equal(byOs['ubuntu-latest'].load, 'none');
+  const step = job.steps.find((s) => s.name === 'Quarantine lane health report');
+  assert.equal(step.env.QUARANTINE_HEALTH_LOAD, '${{ matrix.load }}');
+});
+
+// --- bounded captured output + no dead spawn options (#4244 task 2) ----------
+
+test('boundedVitestSpawn: output past the cap is killed and classified crashed (the old spawnSync maxBuffer contract), not timed-out', async () => {
+  const r = await boundedVitestSpawn('node -e "process.stdout.write(\'x\'.repeat(200000)); setTimeout(()=>{}, 30000)"', {
+    cwd: process.cwd(),
+    env: process.env,
+    timeout: 20000,
+    maxOutputBytes: 1000,
+  });
+  assert.equal(r.error.code, 'ENOBUFS');
+  assert.equal(classifyRunResult(r).runOutcome, 'crashed');
+});
+
+test('runVitestJson hands its spawner only the options boundedSpawn honours (no dead maxBuffer/encoding/shell; windowsHide only as the spawn-windows-hide literal)', async () => {
+  let opts;
+  await runVitestJson(process.cwd(), undefined, ['src/lib/foo.test.ts'], async (_cmd, o) => {
+    opts = o;
+    return { status: 0, stdout: JSON.stringify({ testResults: [] }), stderr: '' };
+  });
+  assert.deepEqual(Object.keys(opts).sort(), ['cwd', 'env', 'timeout', 'windowsHide']);
+  assert.equal(opts.windowsHide, true, 'the literal that spawn-windows-hide.test.ts requires');
+});
+
+test('the loaded run-loop budget leaves real setup headroom inside the Windows leg cap, and fits the paced schedule, every measured green pass and a worst-case last run', () => {
+  const wfPath = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..', '.github', 'workflows', 'quarantine-health.yml');
+  const win = yaml.load(readFileSync(wfPath, 'utf8')).jobs['quarantine-health'].strategy.matrix.include.find((e) => e.os === 'windows-latest');
+  const capMs = win.timeout * 60000;
+  assert.ok(capMs - LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS >= 8 * 60000, 'the loaded loop must leave >= 8 min of the Windows cap for setup and the gh calls');
+  // The `Server tests` step of the last 40 green verify.yml runs on windows-latest
+  // (2026-11-19 to 2026-11-20): the real pass lengths the schedule has to live with.
+  const GREEN = { min: 573_000, median: 728_000, p90: 810_000, max: 836_000 };
+  assert.equal(LOAD_PASS_ESTIMATE_MS, GREEN.median, 'the runs are paced against the green median');
+  // Offsets are from the load's LAUNCH; run 1 waits for readiness (at most the fallback).
+  const lastStart = Math.max(pacedStartOffsetMs(4, 5, LOAD_PASS_ESTIMATE_MS), LOAD_READY_FALLBACK_MS);
+  const oneRunWorstCase = worstCaseRunMs(1, 2, VITEST_RUN_TIMEOUT_MS);
+  assert.ok(lastStart + oneRunWorstCase <= LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS, 'the last paced run fits the loaded budget even in the worst case');
+  assert.ok(LOADED_RUN_LOOP_WALL_CLOCK_BUDGET_MS - GREEN.max >= 10 * 60000, 'the slowest green pass finishes with >= 10 min of the budget to spare, so its length can be measured');
+});
+
+// --- an interrupted run must not leak the load tree (#4244 review pass 2) ----
+
+test('installInterruptCleanup: SIGINT/SIGTERM run the cleanup once and exit with the signal code; exit alone also cleans; uninstall removes every handler', async () => {
+  const { EventEmitter } = await import('node:events');
+  for (const [event, code] of [['SIGINT', 130], ['SIGTERM', 143]]) {
+    const proc = new EventEmitter();
+    const exits = [];
+    proc.exit = (c) => exits.push(c);
+    let cleaned = 0;
+    installInterruptCleanup(() => { cleaned++; }, proc);
+    proc.emit(event);
+    proc.emit('exit'); // node fires 'exit' after proc.exit; the cleanup must not run twice
+    assert.equal(cleaned, 1, event);
+    assert.deepEqual(exits, [code], event);
+  }
+  const proc = new EventEmitter();
+  let cleaned = 0;
+  installInterruptCleanup(() => { cleaned++; }, proc);
+  proc.emit('exit'); // a plain process.exit() / end of run with the load still live
+  assert.equal(cleaned, 1);
+  const proc2 = new EventEmitter();
+  const off = installInterruptCleanup(() => { throw new Error('must not run'); }, proc2);
+  off();
+  for (const ev of ['SIGINT', 'SIGTERM', 'exit']) assert.equal(proc2.listenerCount(ev), 0);
+});
+
+// A real process: its load is a real shell-spawned grandchild (`shell: true`, the
+// load's own spawn options), the shape that survives its parent. The child
+// writes its pid to a file, then the parent either exits with the load live
+// (the 'exit' handler must reap the tree) or, on POSIX, is sent SIGTERM.
+//
+// The host must not exit until the test has probed the load: on POSIX its exit
+// handler's stop() is a SYNCHRONOUS process.kill(-pid), so exiting in the same
+// tick as READY reaps the load before the test can observe it alive (the
+// precondition would be checked after the event that ends it). So the 'exit'
+// host waits for a line on stdin, which the test writes after its probe.
+// `syncKill` makes stop() synchronous on every OS (the load is spawned without a
+// shell and killed by process.kill, so Windows reaps it as fast as POSIX does),
+// which is how the Linux timing is exercised on a Windows box.
+async function runInterruptedHost(how, { syncKill = false } = {}) {
+  const { mkdtempSync, rmSync, readFileSync: rf, existsSync: ex, writeFileSync: wf } = await import('node:fs');
+  const { tmpdir } = await import('node:os');
+  const { join } = await import('node:path');
+  const { spawn } = await import('node:child_process');
+  const { pidIsAlive } = await import('../lib/pid-alive.mjs');
+  const dir = mkdtempSync(join(tmpdir(), 'qh-interrupt-'));
+  const pidFile = join(dir, 'load.pid');
+  const hostPath = join(dir, 'host.mjs');
+  const modUrl = new URL('../quarantine-health.mjs', import.meta.url).href;
+  const loadScript = "require('fs').writeFileSync(process.argv[1], String(process.pid)); setTimeout(()=>{},60000)";
+  wf(hostPath, `
+    import { startServerSuiteLoad, installInterruptCleanup } from ${JSON.stringify(modUrl)};
+    import { spawn } from 'node:child_process';
+    import { existsSync } from 'node:fs';
+    const pidFile = ${JSON.stringify(pidFile)};
+    const load = startServerSuiteLoad(${syncKill
+      ? `{
+      spawnImpl: (_cmd, o) => spawn(process.execPath, ['-e', ${JSON.stringify(loadScript)}, pidFile], { ...o, shell: false, windowsHide: true }),
+      kill: (pid) => process.kill(pid, 'SIGKILL'),
+    }`
+      : `{
+      spawnImpl: (_cmd, o) => spawn('node -e "require(\\'fs\\').writeFileSync(process.argv[1], String(process.pid)); setTimeout(()=>{},60000)" "' + pidFile + '"', { ...o, windowsHide: true }),
+    }`});
+    installInterruptCleanup(() => load.stop());
+    const t = setInterval(() => {
+      if (!existsSync(pidFile)) return;
+      clearInterval(t);
+      console.log('READY');
+      if (${JSON.stringify(how)} === 'exit') process.stdin.once('data', () => process.exit(0));
+    }, 50);
+  `, 'utf8');
+  const host = spawn(process.execPath, [hostPath], { stdio: ['pipe', 'pipe', 'inherit'], windowsHide: true });
+  host.stdin.on('error', () => { /* the host may already be gone */ });
+  let out = '';
+  host.stdout.on('data', (d) => { out += d; });
+  const waitFor = async (pred, ms) => { const end = Date.now() + ms; while (Date.now() < end) { if (pred()) return true; await new Promise((r) => setTimeout(r, 50)); } return pred(); };
+  let loadPid = null;
+  try {
+    assert.ok(await waitFor(() => out.includes('READY'), 30_000), `host never became ready: ${out}`);
+    loadPid = Number(rf(pidFile, 'utf8'));
+    assert.ok(pidIsAlive(loadPid), 'the load process is running');
+    if (how === 'sigterm') host.kill('SIGTERM');
+    else host.stdin.write('go\n'); // the load was seen alive: now the host may exit
+    const gone = await waitFor(() => !pidIsAlive(loadPid), 15_000);
+    return { gone, loadPid };
+  } finally {
+    if (loadPid && pidIsAlive(loadPid)) { try { process.kill(loadPid, 'SIGKILL'); } catch { /* already gone */ } }
+    host.kill('SIGKILL');
+    if (ex(dir)) rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('an interrupted host leaves no load tree behind: process.exit with the load live reaps the real shell-spawned grandchild', async () => {
+  const { gone, loadPid } = await runInterruptedHost('exit');
+  assert.ok(gone, `load grandchild ${loadPid} survived its host's exit`);
+});
+
+test('an interrupted host leaves no load tree behind: process.exit reaps the load even when stop() is synchronous (the POSIX timing, run on any OS)', async () => {
+  const { gone, loadPid } = await runInterruptedHost('exit', { syncKill: true });
+  assert.ok(gone, `load ${loadPid} survived its host's exit`);
+});
+
+test('an interrupted host leaves no load tree behind: SIGTERM reaps the real load process group (POSIX; Windows has no catchable SIGTERM, the exit-path test above covers its kill)', { skip: process.platform === 'win32' }, async () => {
+  const { gone, loadPid } = await runInterruptedHost('sigterm');
+  assert.ok(gone, `load grandchild ${loadPid} survived SIGTERM to its host`);
 });

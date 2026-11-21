@@ -16,3 +16,14 @@ process.env.USER_SETTINGS_FILE ??= join(
   mkdtempSync(join(tmpdir(), 'audiobook-settings-')),
   'user-settings.json',
 );
+
+/* #4576 — pin the LAN auth switches. importing the app pulls in load-env.ts,
+   which runs `process.loadEnvFile('.env')` against the CWD; on a box whose
+   server/.env carries LAN_HTTPS=1 + LAN_AUTH_TOKEN every LAN-address request
+   in the suites 401s, while CI (no .env) stays green. loadEnvFile never
+   overrides a variable that is already set, so a pinned value beats the file —
+   deleting would not (it would be re-populated). `0` is what an unset value
+   means outside production; an empty token is "no token" (getLanAuthToken).
+   A suite that wants LAN mode sets its own value. */
+process.env.LAN_HTTPS = '0';
+process.env.LAN_AUTH_TOKEN = '';

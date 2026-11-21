@@ -71,7 +71,13 @@ export type ResourceTelemetryRecord = components['schemas']['ResourceTelemetryRe
 export type DriftEvent = components['schemas']['DriftEvent'];
 export type TimelineEntry = components['schemas']['TimelineEntry'];
 export type MatchFactor = components['schemas']['MatchFactor'];
-export type GenerationTick = components['schemas']['GenerationTick'];
+/* #3436 -- `book-busy` is CLIENT-synthesised: api.ts turns the server's 409 `book_busy` render
+   refusal into a `chapter_failed` tick carrying it, so the queue dispatcher can tell "the book is
+   being analysed" from a real failure. The server never emits it, so it is not in the OpenAPI
+   `FailureCode` enum. */
+export type GenerationTick = Omit<components['schemas']['GenerationTick'], 'errorCode'> & {
+  errorCode?: components['schemas']['FailureCode'] | 'book-busy';
+};
 export type ChapterAudio = components['schemas']['ChapterAudio'];
 export type UploadResponse = components['schemas']['UploadResponse'];
 export type AnalyseResponse = components['schemas']['AnalyseResponse'];

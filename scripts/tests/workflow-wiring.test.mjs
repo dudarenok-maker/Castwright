@@ -15,7 +15,10 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import { resolve, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { readdirSync } from 'node:fs';
+import { readdirSync, readFileSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { computeScopes } from '../ci-scope.mjs';
 import { readNormalized } from '../lib/read-normalized.mjs';
 
@@ -272,6 +275,7 @@ const parseLegs = (src) =>
 const REQUIRED_LEGS = {
   test: 'shared|step_test|step_test_e2e',
   'test:server': 'shared|step_test_server|step_test_server_slow',
+  'test:server:ffmpeg-floor': 'shared|step_test_server|step_test_server_slow',
   'test:windows': 'shared|step_test',
   'test:server:windows': 'shared|step_test_server',
   'test:hooks:windows': 'shared|step_test_hooks',
@@ -1477,6 +1481,19 @@ test('lockfile-touched polarity: both frontend and server test steps force full 
   );
 });
 
+// #4461: true only for a step that lives in verify.yml's `ffmpeg-floor` job AND
+// is bounded: step-level timeout-minutes, every apt-get wrapped in
+// `timeout -k 10 <N>`, and a 3-attempt retry loop.
+function isBoundedFfmpegFloorAptStep(workflowSource, stepBody) {
+  const job = workflowSource.match(/^ {2}ffmpeg-floor:\n((?: {4}.*\n|\n)*)/m);
+  if (!job || !job[1].includes(stepBody)) return false;
+  if (!/^ {8}timeout-minutes:\s*\d+\s*$/m.test(stepBody)) return false;
+  const aptCmds = stepBody.match(/apt-get\s+(?:update|install)/g) ?? [];
+  const wrapped = stepBody.match(/timeout -k 10 \d+ sudo apt-get\s+(?:update|install)/g) ?? [];
+  if (aptCmds.length === 0 || wrapped.length !== aptCmds.length) return false;
+  return /for attempt in 1 2 3/.test(stepBody);
+}
+
 test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-ffmpeg action)', () => {
   // Issue #2449: unretried `sudo apt-get update && sudo apt-get install -y ffmpeg`
   // hangs on mirror timeouts and burns entire job timeouts. This regression test
@@ -1500,6 +1517,15 @@ test('ffmpeg install: no bare apt-get install ffmpeg in workflows (use install-f
     for (const [, , stepBody] of steps) {
       // Skip if this is the approved install-ffmpeg action
       if (/uses:\s*\.\/\.github\/actions\/install-ffmpeg/.test(stepBody)) {
+        continue;
+      }
+
+      // #4461 exemption: verify.yml's `ffmpeg-floor` job installs the apt
+      // ffmpeg (6.1.1 on ubuntu-24.04) on purpose, to test the declared floor.
+      // It holds ONLY while the step is bounded (the #2449 hang guard): a
+      // step-level timeout-minutes, every apt command wrapped in
+      // `timeout -k 10 <N>`, and a 3-attempt retry loop.
+      if (workflowFile === 'verify.yml' && isBoundedFfmpegFloorAptStep(workflowSource, stepBody)) {
         continue;
       }
 
@@ -1663,5 +1689,333 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
     runMatch,
     'Register citation check step must execute `npm run check:register-citations`, ' +
       'not a neutered or renamed command.',
+  );
+});
+
+// ---------------------------------------------------------------------------
+// ffmpeg-floor leg contract (#4461). package.json castwright.ffmpeg.minimum is
+// a SUPPORT floor ("the oldest ffmpeg we test against"); the `ffmpeg-floor` job
+// is what makes that true. Each test pins one property whose loss would turn
+// the leg into something that no longer tests the floor.
+// ---------------------------------------------------------------------------
+
+function ffmpegFloorJob() {
+  const blocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const job = blocks.find(([, name]) => name === 'ffmpeg-floor');
+  assert.ok(job, '`ffmpeg-floor` job not found in verify.yml; the ffmpeg support floor is no longer tested (#4461)');
+  const body = job[2];
+  const steps = body
+    .split(/^ {6}- name: /m)
+    .slice(1)
+    .map((s) => s.trimEnd());
+  return { body, steps };
+}
+
+const ffmpegFloorValue = () => JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8')).castwright.ffmpeg.minimum;
+
+test('ffmpeg floor leg (#4461): runs-on is exactly ubuntu-24.04', () => {
+  const { body } = ffmpegFloorJob();
+  const m = body.match(/^ {4}runs-on:\s*(.+?)\s*$/m);
+  assert.ok(m, 'ffmpeg-floor has no runs-on:');
+  assert.equal(
+    m[1],
+    'ubuntu-24.04',
+    `ffmpeg-floor runs-on is \`${m[1]}\`; only ubuntu-24.04 apt ships ffmpeg 6.1.1, the floor build (ubuntu-latest drifts upward)`,
+  );
+});
+
+test('ffmpeg floor leg (#4461): installs ffmpeg via apt, never the static install-ffmpeg action', () => {
+  const { body } = ffmpegFloorJob();
+  assert.doesNotMatch(
+    body,
+    /uses:\s*\.\/\.github\/actions\/install-ffmpeg(?=\s|$)/m,
+    'ffmpeg-floor uses ./.github/actions/install-ffmpeg, which installs static 8.1.3 and defeats testing the floor',
+  );
+  assert.doesNotMatch(body, /actions\/install-ffmpeg/, 'ffmpeg-floor references an install-ffmpeg* action; the floor leg must use distro apt ffmpeg');
+  assert.match(body, /apt-get install\b[^\n]*\bffmpeg\b/, 'ffmpeg-floor has no `apt-get install ... ffmpeg`; it would not run the distro 6.1.1 build');
+});
+
+test('ffmpeg floor leg (#4461): version assert reads the floor from package.json via preflight-ffmpeg, no literal', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  assert.ok(step, 'no ffmpeg-floor step uses readFfmpegFloor(); the floor would be restated instead of read from package.json (invariant 1, docs/features/269)');
+  assert.match(step, /scripts\/preflight-ffmpeg\.cjs/, 'version-assert step does not load scripts/preflight-ffmpeg.cjs');
+  assert.match(step, /parseFfmpegVersion/, 'version-assert step does not use parseFfmpegVersion');
+  assert.match(step, /isBelowFloor/, 'version-assert step does not use isBelowFloor');
+  const violation = floorLiteralViolation(step, ffmpegFloorValue());
+  assert.equal(violation, null, violation ?? undefined);
+});
+
+// A null floor is the documented rollback (docs/features/269, Reversibility): there is no
+// literal to hunt for, and `step.includes(null)` would coerce to "null" and match the
+// step's own "floor is null" text. Returns a failure message, or null when clean.
+function floorLiteralViolation(step, floor) {
+  if (typeof floor !== 'string' || !floor) return null;
+  const major = floor.split('.')[0];
+  if (step.includes(floor)) return `version-assert step hardcodes the floor "${floor}"; read it via readFfmpegFloor() so a package.json bump cannot drift`;
+  if (new RegExp(`(["'\`])${major}\\1`).test(step)) return `version-assert step hardcodes the floor major "${major}" as a quoted literal; derive it from readFfmpegFloor()`;
+  return null;
+}
+
+test('ffmpeg floor leg (#4461): the literal-floor check is skipped for a null floor (rollback)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  assert.ok(step.includes('null'), 'fixture assumption: the assert step mentions a null floor');
+  assert.equal(floorLiteralViolation(step, null), null, 'null floor must not trip the literal check via includes(null)');
+  assert.notEqual(floorLiteralViolation(`x = '6.1'`, '6.1'), null, 'a real literal must still be caught');
+});
+
+test('ffmpeg floor leg (#4461): a null floor warns and passes the assert step (documented rollback)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  const m = step.match(/node -e '\n([\s\S]*?)\n {10}'/);
+  assert.ok(m, 'cannot extract the node -e script from the version-assert step');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-null-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts', 'preflight-ffmpeg.cjs'), readFileSync(resolve(repoRoot, 'scripts', 'preflight-ffmpeg.cjs')));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ castwright: { ffmpeg: { minimum: null } } }));
+    const r = spawnSync(process.execPath, ['-e', m[1]], { cwd: dir, encoding: 'utf8', windowsHide: true });
+    assert.equal(r.status, 0, `assert step failed on a null floor (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.match(r.stdout, /^::warning::.*floor/m, `no ::warning:: on stdout: ${r.stdout}`);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+// The red half of the contract: when ffmpeg DID install, a wrong version must exit
+// non-zero. Runs the real `node -e` script with `ffmpeg` swapped for a node stub
+// (a PATH stub would need a .cmd shim on Windows, which execFileSync cannot spawn).
+function runFloorAssert(banner, floor) {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /readFfmpegFloor/.test(s));
+  const m = step.match(/node -e '\n([\s\S]*?)\n {10}'/);
+  assert.ok(m, 'cannot extract the node -e script from the version-assert step');
+  const call = 'execFileSync("ffmpeg", ["-version"]';
+  assert.ok(m[1].includes(call), 'version-assert script no longer calls execFileSync("ffmpeg", ["-version"]); update the stub swap');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-ver-'));
+  try {
+    mkdirSync(join(dir, 'scripts'));
+    writeFileSync(join(dir, 'scripts', 'preflight-ffmpeg.cjs'), readFileSync(resolve(repoRoot, 'scripts', 'preflight-ffmpeg.cjs')));
+    writeFileSync(join(dir, 'package.json'), JSON.stringify({ castwright: { ffmpeg: { minimum: floor } } }));
+    writeFileSync(join(dir, 'stub-ffmpeg.cjs'), `process.stdout.write(${JSON.stringify(banner)});\n`);
+    const script = m[1].replace(call, 'execFileSync(process.execPath, ["stub-ffmpeg.cjs"]');
+    return spawnSync(process.execPath, ['-e', script], { cwd: dir, encoding: 'utf8', windowsHide: true });
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+test('ffmpeg floor leg (#4461): the version assert stays red on a wrong ffmpeg, green on the floor build', () => {
+  const ok = runFloorAssert('ffmpeg version 6.1.1-3ubuntu5 Copyright (c) 2000-2023\n', '6.0');
+  assert.equal(ok.status, 0, `floor-build ffmpeg must pass (exit ${ok.status}): ${ok.stdout}${ok.stderr}`);
+  const cases = [
+    ['ffmpeg version 5.1.2 Copyright (c) 2000-2022\n', /ffmpeg below floor/, 'below the floor'],
+    ['ffmpeg version 7.1 Copyright (c) 2000-2024\n', /ffmpeg major differs from floor major/, 'a different major'],
+    ['not an ffmpeg banner\n', /unparseable ffmpeg version/, 'an unparseable banner'],
+  ];
+  for (const [banner, message, what] of cases) {
+    const r = runFloorAssert(banner, '6.0');
+    assert.equal(typeof r.status, 'number', `assert step did not run to an exit code: ${r.error}`);
+    assert.notEqual(r.status, 0, `assert step exited 0 on ffmpeg ${what}; a wrong ffmpeg would pass the floor leg green`);
+    assert.match(r.stderr, message, `assert step failed for the wrong reason on ${what}: ${r.stderr}`);
+  }
+});
+
+test('ffmpeg floor leg (#4461): the two suites are bare commands (no `|| true` that would swallow a red run)', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /npx vitest run/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no `npx vitest run` step');
+  assert.match(step, /^\s*npx vitest run\s*$/m, 'plain `npx vitest run` has trailing text (e.g. `|| true`); a failing suite would stay green');
+  assert.match(step, /^\s*npx vitest run --config vitest\.config\.slow\.ts\s*$/m, 'slow-suite `npx vitest run --config ...` has trailing text (e.g. `|| true`); a failing suite would stay green');
+});
+
+test('ffmpeg floor leg (#4461): test step runs the full fast and slow suites, never --changed', () => {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /npx vitest run/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no `npx vitest run` step');
+  assert.match(step, /npx vitest run(?!\S)(?! --config)/, 'test step lost the plain `npx vitest run` (fast suite)');
+  assert.match(step, /npx vitest run --config vitest\.config\.slow\.ts/, 'test step lost `npx vitest run --config vitest.config.slow.ts` (slow suite)');
+  assert.doesNotMatch(step, /--changed/, '`--changed` selects zero ffmpeg tests on most diffs, so the floor would go untested');
+});
+
+test('ffmpeg floor leg (#4461): ffmpeg-floor is in the verify aggregator needs:', () => {
+  const blocks = [...source.matchAll(/^ {2}([a-z][a-z0-9-]*):\n((?: {4}.*\n|\n)*)/gm)];
+  const aggregator = blocks.find(([, name]) => name === 'verify');
+  assert.ok(aggregator, 'aggregator job `verify` not found');
+  const needs = (aggregator[2].match(/needs:\s*\[([^\]]*)\]/) ?? [undefined, ''])[1]
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  assert.ok(needs.includes('ffmpeg-floor'), `ffmpeg-floor is not in the aggregator needs: (${needs.join(', ')}); a red floor leg would not block merge`);
+});
+
+test('ffmpeg floor leg (#4461): no job-level if: (gate at step level so docs-only PRs stay green)', () => {
+  const { body } = ffmpegFloorJob();
+  assert.doesNotMatch(body, /^ {4}if:/m, 'ffmpeg-floor has a job-level `if:`; a skipped job fails the aggregator on docs-only PRs. Gate its steps instead');
+});
+
+test('ffmpeg floor leg (#4461): install, then version assert, then tests', () => {
+  const { steps } = ffmpegFloorJob();
+  const install = steps.findIndex((s) => /apt-get install\b[^\n]*\bffmpeg\b/.test(s));
+  const assertStep = steps.findIndex((s) => /readFfmpegFloor/.test(s));
+  const tests = steps.findIndex((s) => /npx vitest run/.test(s));
+  assert.ok(install >= 0 && assertStep >= 0 && tests >= 0, `ffmpeg-floor is missing a step (install=${install}, assert=${assertStep}, tests=${tests})`);
+  assert.ok(install < assertStep, 'version-assert step runs before the ffmpeg install step; it would assert against the wrong binary');
+  assert.ok(assertStep < tests, 'version-assert step runs after the test step; a wrong ffmpeg would be discovered only after the tests ran on it');
+});
+
+// ---------------------------------------------------------------------------
+// ffmpeg-floor apt-stall contract (#4461, operator decision on PR #4490). The
+// leg stays REQUIRED, but an apt infrastructure stall (mirror down) must not
+// turn `npm run verify` red on a PR that changed nothing about ffmpeg: the
+// install step warns, records the gap, and gates the version assert and both
+// suites on a step OUTPUT. A version-assert or test failure when ffmpeg DID
+// install stays red. Never `continue-on-error`: that would also swallow those.
+// ---------------------------------------------------------------------------
+
+const FFMPEG_FLOOR_WARNING =
+  '::warning::ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run';
+
+function ffmpegFloorInstallStep() {
+  const { steps } = ffmpegFloorJob();
+  const step = steps.find((s) => /apt-get install\b[^\n]*\bffmpeg\b/.test(s));
+  assert.ok(step, 'ffmpeg-floor has no apt install step');
+  return step;
+}
+
+test('ffmpeg floor leg (#4461): apt failure warns and skips the suites instead of failing', () => {
+  const { body, steps } = ffmpegFloorJob();
+  const install = ffmpegFloorInstallStep();
+  const id = (install.match(/^ {8}id:\s*(\S+)\s*$/m) ?? [])[1];
+  assert.ok(id, 'install step has no `id:`; later steps cannot gate on its output');
+  assert.ok(install.includes(FFMPEG_FLOOR_WARNING), 'install step lost the exact ::warning:: line for an apt stall');
+  assert.match(install, /GITHUB_STEP_SUMMARY/, 'install step does not write the warning to $GITHUB_STEP_SUMMARY');
+  assert.match(install, /installed=true[^\n]*GITHUB_OUTPUT/, 'install step never sets installed=true');
+  assert.match(install, /installed=false[^\n]*GITHUB_OUTPUT/, 'install step never sets installed=false on failure');
+  assert.doesNotMatch(install, /::error::|^\s*exit 1\b/m, 'install step fails the job on an apt stall; it must warn and exit 0');
+  assert.doesNotMatch(body, /continue-on-error/, 'ffmpeg-floor uses continue-on-error; it would also swallow a real assert/test failure. Gate on the step output');
+  for (const s of steps.filter((x) => /readFfmpegFloor|npx vitest run/.test(x))) {
+    assert.match(
+      s,
+      new RegExp(String.raw`^ {8}if:[^\n]*steps\.${id}\.outputs\.installed == 'true'`, 'm'),
+      `step \`${s.split('\n')[0]}\` is not gated on steps.${id}.outputs.installed == 'true'`,
+    );
+  }
+});
+
+// The install step is an ubuntu-only `run:` block (`timeout`, `sudo`, `apt-get`). The two
+// behavioural cases below run it under bash with ALL THREE stubbed on PATH, so they depend on
+// neither GNU `timeout` (absent on macOS runners, #4569) nor a real apt. PATH is set inside the
+// script text, because Git for Windows' `bin\bash.exe` launcher reorders an inherited PATH and
+// would put the real `sleep`/`timeout` ahead of the stubs. Without bash (a bare Windows
+// PowerShell box) they SKIP with a message rather than passing silently.
+const HAS_BASH = spawnSync('bash', ['-c', 'true'], { windowsHide: true }).status === 0;
+const NO_BASH_SKIP = HAS_BASH ? false : 'no bash on PATH; the static ffmpeg-floor pins still run';
+let behaviouralCasesRun = 0;
+
+// Prepends the stub dir to PATH inside the script itself (cygpath converts it under Git Bash).
+function withStubPath(script) {
+  return 'PATH="$(cygpath -u "$STUB_BIN" 2>/dev/null || printf %s "$STUB_BIN"):$PATH"\n' + script;
+}
+
+// `timeout -k 10 120 CMD...` -> run CMD directly (drops the three leading args).
+function writeFfmpegFloorStubs(bin, sudoBody) {
+  writeFileSync(join(bin, 'sudo'), sudoBody, { mode: 0o755 });
+  writeFileSync(join(bin, 'sleep'), '#!/bin/sh\nexit 0\n', { mode: 0o755 });
+  writeFileSync(join(bin, 'timeout'), '#!/bin/sh\nshift 3\nexec "$@"\n', { mode: 0o755 });
+}
+
+test('ffmpeg floor leg (#4461): the install step really exits 0 with the warning when apt always fails', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
+  const install = ffmpegFloorInstallStep();
+  const run = install.split(/^ {8}run: \|\n/m)[1];
+  assert.ok(run, 'install step has no `run: |` block');
+  const script = run.replace(/^ {10}/gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\nexit 100\n');
+    const out = join(dir, 'output');
+    const summary = join(dir, 'summary');
+    writeFileSync(out, '');
+    writeFileSync(summary, '');
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(r.status, 0, `install step failed on an apt stall (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.ok(r.stdout.includes(FFMPEG_FLOOR_WARNING), `no ::warning:: on stdout: ${r.stdout}`);
+    assert.ok(readFileSync(summary, 'utf8').includes(FFMPEG_FLOOR_WARNING.replace('::warning::', '')), 'step summary lacks the warning line');
+    assert.match(readFileSync(out, 'utf8'), /^installed=false$/m, 'GITHUB_OUTPUT lacks installed=false');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ffmpeg floor leg (#4461): the install step succeeds (installed=true, no warning) when apt works', { skip: NO_BASH_SKIP }, () => {
+  behaviouralCasesRun++;
+  const install = ffmpegFloorInstallStep();
+  assert.doesNotMatch(install, /\\n/, 'install step contains a literal backslash-n; bash passes it to apt-get as a stray argument');
+  const run = install.split(/^ {8}run: \|\n/m)[1];
+  assert.ok(run, 'install step has no `run: |` block');
+  const script = run.replace(/^ {10}/gm, '');
+  const dir = mkdtempSync(join(tmpdir(), 'ffmpeg-floor-'));
+  try {
+    const bin = join(dir, 'bin');
+    mkdirSync(bin);
+    // Like real apt: `update` takes no arguments, so a stray one fails the command.
+    writeFfmpegFloorStubs(bin, '#!/bin/sh\n[ "$2" = update ] && [ "$#" -gt 2 ] && exit 100\nexit 0\n');
+    const out = join(dir, 'output');
+    const summary = join(dir, 'summary');
+    writeFileSync(out, '');
+    writeFileSync(summary, '');
+    const r = spawnSync('bash', ['-c', withStubPath(script)], {
+      encoding: 'utf8',
+      windowsHide: true,
+      env: { ...process.env, STUB_BIN: bin, GITHUB_OUTPUT: out, GITHUB_STEP_SUMMARY: summary },
+    });
+    assert.equal(r.status, 0, `install step failed (exit ${r.status}): ${r.stdout}${r.stderr}`);
+    assert.ok(!r.stdout.includes('::warning::'), `warned although apt works: ${r.stdout}${r.stderr}`);
+    assert.match(readFileSync(out, 'utf8'), /^installed=true$/m, 'GITHUB_OUTPUT lacks installed=true when apt works');
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('ffmpeg floor leg (#4461): both behavioural cases actually ran on a bash platform (#4569)', () => {
+  if (process.platform !== 'win32') {
+    assert.ok(HAS_BASH, 'bash is missing on a POSIX runner; the two ffmpeg-floor behavioural cases would silently skip');
+  }
+  if (HAS_BASH) {
+    assert.equal(behaviouralCasesRun, 2, 'an ffmpeg-floor behavioural case was skipped although bash is present');
+  }
+});
+
+test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeout (warning path reachable)', () => {
+  const install = ffmpegFloorInstallStep();
+  const timeoutMinutes = Number((install.match(/^ {8}timeout-minutes:\s*(\d+)\s*$/m) ?? [])[1]);
+  const bounds = [...install.matchAll(/timeout -k (\d+) (\d+) sudo apt-get/g)];
+  const sleeps = [...install.matchAll(/^\s*sleep (\d+)\s*$/gm)];
+  const attempts = (install.match(/for attempt in ([\d ]+); do/) ?? ['', ''])[1].trim().split(/\s+/).length;
+  assert.ok(timeoutMinutes > 0 && bounds.length === 2 && sleeps.length === 1, 'cannot parse the install retry budget');
+  // Both commands run every attempt, so size the worst case on the larger bound.
+  const bound = Math.max(...bounds.map((b) => Number(b[2])));
+  const kill = Math.max(...bounds.map((b) => Number(b[1])));
+  const sleep = Number(sleeps[0][1]);
+  assert.ok(bounds.every((b) => Number(b[1]) > 0 && Number(b[2]) > 0), 'a 0 bound disables GNU timeout');
+  assert.equal(attempts, 3, 'retry loop is no longer 3 attempts');
+  // attempts x (2 apt commands x bound + inter-attempt sleep) must fit the step
+  // timeout, else the runner kills the step before the warning can be emitted.
+  assert.ok(
+    attempts * (2 * bound + sleep) < timeoutMinutes * 60,
+    `3 x (2 x ${bound} + ${sleep}) = ${attempts * (2 * bound + sleep)}s does not fit timeout-minutes ${timeoutMinutes} (${timeoutMinutes * 60}s)`,
+  );
+  // Worst case also pays the -k kill grace after each command's bound.
+  assert.ok(
+    attempts * (2 * (bound + kill) + sleep) < timeoutMinutes * 60,
+    `with the -k ${kill}s kill grace the worst case exceeds timeout-minutes ${timeoutMinutes}`,
   );
 });

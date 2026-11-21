@@ -531,7 +531,7 @@ export function PhaseCard({
             {p.label}
           </p>
           {hasModelControls && (
-            <div className="flex items-center gap-2 flex-wrap shrink-0">
+            <div className="flex items-center gap-2 flex-wrap min-w-0 max-w-full">
               <PhaseModelChip
                 phaseId={p.id as 0 | 1}
                 state={chipState}

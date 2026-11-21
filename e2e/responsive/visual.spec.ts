@@ -35,13 +35,15 @@
  *
  * Visuals run ONLY via `npm run test:e2e:visual` (chromium, see
  * package.json), not in the parallel `test:e2e` battery, and are skipped by
- * `test:e2e:mobile` — see archive/37-e2e-playwright.md.
+ * `test:e2e:mobile` — see archive/37-e2e-playwright.md. The mobile and
+ * tablet projects are read by `npm run test:e2e:mobile:visual` (cross-os.yml
+ * and release.yml only, not verify.yml).
  *
  * To regenerate after an intentional visual change, use `=all`: a bare
  * `--update-snapshots` is the `changed` preset, which rewrites only baselines
  * that already fail, so a stale one inside the 5% gate is left behind.
  *   npm run test:e2e:visual -- --update-snapshots=all
- *   # mobile + tablet have no npm script; invoke playwright directly:
+ *   # mobile + tablet: compare has `test:e2e:mobile:visual`; the update has no script, invoke playwright directly:
  *   npx playwright test e2e/responsive/visual.spec.ts --project=mobile-chrome --project=tablet-chrome --workers=1 --update-snapshots=all
  *
  * Pairs with docs/features/archive/37-e2e-playwright.md "Visual baselines". */
@@ -122,6 +124,26 @@ const topbarMask = (page: Page) => [
 const expectStatusChip = (page: Page, label: string) =>
   expect(page.getByTestId('status-pill').first()).toHaveText(label);
 
+/* #4203 — a visual capture must be taken at the top of the page: the committed
+   baselines show the unscrolled view, and a scrolled capture is the #4199 failure
+   mode (a header-less baseline committed for months). Assert it instead of
+   scrolling the page back ourselves, so a view that scrolls itself on a phone
+   fails here rather than being hidden. `settleMs` waits past a late scroll first:
+   the old Generate scroll started ~0.9 s after navigation, so it passes 2000. */
+const expectAtTop = async (page: Page, settleMs = 0) => {
+  if (settleMs > 0) await page.waitForTimeout(settleMs);
+  /* The capture is the VISUAL viewport. The top bar is `sticky top-0`, so a plain
+     window scroll would leave it in place; a header that moves with the content
+     (as in cross-os run 44021881430) means the visual viewport is offset inside
+     the layout viewport, which `scrollY` alone does not see. Pin both. */
+  const pos = await page.evaluate(() => ({
+    scrollY: window.scrollY,
+    visualViewportOffsetTop: window.visualViewport?.offsetTop ?? 0,
+  }));
+  expect(pos).toEqual({ scrollY: 0, visualViewportOffsetTop: 0 });
+};
+const expectGenerateAtTop = (page: Page) => expectAtTop(page, 2000);
+
 test.describe('visual baselines', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
   test('library', async ({ page }) => {
@@ -151,6 +173,7 @@ test.describe('visual baselines', () => {
   test('analysing (pre-start)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing.png', VISUAL_DIFF_OPTS);
   });
 
@@ -159,6 +182,7 @@ test.describe('visual baselines', () => {
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
     await expectStatusChip(page, 'Status');
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('confirm.png', VISUAL_DIFF_OPTS);
   });
 
@@ -192,7 +216,7 @@ test.describe('visual baselines', () => {
     await page.goto('/#/books/sb/generate');
     /* "CH 01" only renders once the chapters slice has hydrated. */
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
-    await page.waitForTimeout(300);
+    await expectGenerateAtTop(page);
     await expect(page).toHaveScreenshot('generate.png', VISUAL_DIFF_OPTS);
   });
 
@@ -288,6 +312,7 @@ test.describe('visual baselines (stats)', () => {
     await expect(page.getByTestId('stats-lede')).toBeVisible({ timeout: 25_000 });
     await page.waitForTimeout(300);
     await expectStatusChip(page, 'Status');
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('stats.png', VISUAL_DIFF_OPTS);
   });
 });
@@ -338,6 +363,7 @@ test.describe('visual baselines (dark theme)', () => {
   test('analysing (pre-start, dark)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -346,6 +372,7 @@ test.describe('visual baselines (dark theme)', () => {
     await waitForConfirmViewReady(page);
     await page.waitForTimeout(300);
     await expectStatusChip(page, 'Status');
+    await expectAtTop(page);
     await expect(page).toHaveScreenshot('confirm-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -375,7 +402,7 @@ test.describe('visual baselines (dark theme)', () => {
        removes / weakens the override. */
     await page.goto('/#/books/sb/generate');
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
-    await page.waitForTimeout(300);
+    await expectGenerateAtTop(page);
     await expect(page).toHaveScreenshot('generate-dark.png', VISUAL_DIFF_OPTS);
   });
 

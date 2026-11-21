@@ -14,6 +14,7 @@ import { extractInlineEmotion } from '../handoff/emotion-from-tags.js';
 import type { LedgerEntry, MatchDecision, MatchPlan, RunAddedLedger } from './reanalysis-types.js';
 import { readJson, enqueuePathOp, writeJsonAtomic } from '../workspace/state-io.js';
 import { writeJsonAtomicOrdered } from '../workspace/ordered-write.js';
+import { currentRunEpochFence, staleRunWriteDropped } from './analysis-run-epoch.js';
 import { jitteredDelayMs } from '../workspace/atomic-rename.js';
 import { safeSegment, assertContained, sanitizeIdSegment } from '../util/safe-path.js';
 
@@ -281,10 +282,14 @@ function buildCachePayload(cache: AnalysisCache): AnalysisCache {
 /* `version` is written exactly as given: a save never stamps it, so a loaded
    legacy cache stays legacy (plan 291 Review Focus 1). */
 export async function saveAnalysisCache(manuscriptId: string, cache: AnalysisCache): Promise<void> {
+  /* #3437 — captured synchronously (ALS), checked inside the queued op via `skip`. */
+  const fence = currentRunEpochFence();
   const path = cachePath(manuscriptId);
   /* Built at call time; `writeJsonAtomicOrdered` then deep-snapshots it, so the
      bytes written are fixed at call time however long the chain delays them. */
-  await writeJsonAtomicOrdered(path, buildCachePayload(cache));
+  await writeJsonAtomicOrdered(path, buildCachePayload(cache), {
+    skip: () => staleRunWriteDropped(fence, 'analysis cache save'),
+  });
 }
 
 /** A patch applied atomically by `mutateAnalysisCache`. */
@@ -339,9 +344,11 @@ export async function mutateAnalysisCache(
   manuscriptId: string,
   patch: CachePatch,
 ): Promise<AnalysisCache | null> {
+  const fence = currentRunEpochFence(); // #3437: captured before any await
   const path = cachePath(manuscriptId);
   let result: AnalysisCache | null = null;
   await enqueuePathOp(path, async () => {
+    if (staleRunWriteDropped(fence, 'analysis cache patch')) return;
     const existing = await readJson<AnalysisCache>(path);
     if (!existing && !patch.createIfAbsent) return;
     let cache = coerceLoadedCache(existing, manuscriptId);
@@ -420,8 +427,12 @@ export async function mutateAnalysisCache(
 export async function clearAnalysisCache(manuscriptId: string): Promise<void> {
   /* Joins the same per-path chain as saves (#3427): lands after every save
      called before it, and a later save lands after it. */
+  const fence = currentRunEpochFence(); // #3437: captured before any await
   const path = cachePath(manuscriptId);
-  await enqueuePathOp(path, () => rm(path, { force: true }));
+  await enqueuePathOp(path, async () => {
+    if (staleRunWriteDropped(fence, 'analysis cache clear')) return;
+    await rm(path, { force: true });
+  });
 }
 
 /* PR #3966 pass 3 -- clearAnalysisCache for the two callers that clear AFTER a

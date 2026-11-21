@@ -29,6 +29,7 @@ vi.mock('./state-io.js', async () => {
 });
 
 const { writeJsonAtomicOrdered } = await import('./ordered-write.js');
+const { enqueuePathOp } = await import('./state-io.js');
 
 let dir: string | undefined;
 afterEach(async () => {
@@ -60,5 +61,38 @@ describe('writeJsonAtomicOrdered (#3427)', () => {
     rolled.push('late'); // in-place mutation after the call
     await Promise.all([first, second]);
     expect(landed).toEqual(['blocker', 'A']);
+  });
+
+  it('skip returning true skips the write; false writes (#3437)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ordered-write-'));
+    const p = join(dir, 'x.json');
+    await writeJsonAtomicOrdered(p, { sentences: ['skipped'] }, { skip: () => true });
+    expect(landed).toEqual([]);
+    await writeJsonAtomicOrdered(p, { sentences: ['kept'] }, { skip: () => false });
+    expect(landed).toEqual(['kept']);
+  });
+
+  it('skip is evaluated inside the queued op, after an earlier op finishes (#3437)', async () => {
+    dir = await mkdtemp(join(tmpdir(), 'ordered-write-'));
+    const p = join(dir, 'x.json');
+    let release!: () => void;
+    const gate = new Promise<void>((r) => {
+      release = r;
+    });
+    const blocker = enqueuePathOp(p, () => gate);
+    let stale = false;
+    const seen: boolean[] = [];
+    const w = writeJsonAtomicOrdered(p, { sentences: ['late'] }, {
+      skip: () => {
+        seen.push(stale);
+        return stale;
+      },
+    });
+    stale = true; // flips after the call, before the queued op runs
+    release();
+    await blocker;
+    await w;
+    expect(seen).toEqual([true]);
+    expect(landed).toEqual([]);
   });
 });

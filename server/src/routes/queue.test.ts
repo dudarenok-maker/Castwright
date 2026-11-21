@@ -471,6 +471,33 @@ describe('POST /api/queue/:entryId/complete', () => {
       errorReason: 'sidecar 500',
     });
   });
+
+  /* #3436 -- a render refused 409 `book_busy` (its book is analysing) goes in_progress -> queued in ONE
+     call. The old fail-then-/retry pair wrote `failed` to .queue.json in between; a tab closing there
+     stranded the chapter failed. */
+  it("outcome:requeued puts an in_progress entry straight back to queued, never failed, with no /retry", async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    const res = await request(app).post('/api/queue/e1/complete').send({ outcome: 'requeued' });
+    expect(res.status).toBe(200);
+    expect(res.body.entries[0]).toMatchObject({ id: 'e1', status: 'queued', errorReason: null });
+    const onDisk = await request(app).get('/api/queue');
+    expect(onDisk.body.entries.map((e: { status: string }) => e.status)).toEqual(['queued']);
+  });
+
+  it('outcome:requeued is a no-op for a missing or non-in_progress entry', async () => {
+    await request(app)
+      .post('/api/queue/enqueue')
+      .send({ entries: [{ id: 'e1', bookId: 'book-A', chapterId: 1, scope: 'this' }] });
+    await request(app).post('/api/queue/e1/start');
+    await request(app).post('/api/queue/e1/complete').send({ outcome: 'failed', errorReason: 'x' });
+    const failed = await request(app).post('/api/queue/e1/complete').send({ outcome: 'requeued' });
+    expect(failed.body.entries[0]).toMatchObject({ id: 'e1', status: 'failed' });
+    const missing = await request(app).post('/api/queue/nope/complete').send({ outcome: 'requeued' });
+    expect(missing.status).toBe(200);
+  });
 });
 
 describe('POST /api/queue/:entryId/retry', () => {

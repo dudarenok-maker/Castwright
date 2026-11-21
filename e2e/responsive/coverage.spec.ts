@@ -31,6 +31,7 @@
 
 import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
+import { goToAnalysing } from '../helpers';
 
 async function expectNoHorizontalScroll(page: Page) {
   const overflow = await page.evaluate(() => {
@@ -61,6 +62,31 @@ test.describe('responsive coverage (all views × all viewports)', () => {
     });
     await page.waitForTimeout(200);
     await expectNoHorizontalScroll(page);
+  });
+
+  test('analysing view (pre-start)', async ({ page }) => {
+    /* #4203 — the phase card's model row used to run past the card edge and,
+       on the Linux runner's wider font metrics, past the viewport. Reached via
+       the real new-book flow so the page arrives scrolled, as on a phone. */
+    await goToAnalysing(page);
+    await page.waitForTimeout(300);
+    await expectNoHorizontalScroll(page);
+    /* The page-level check alone is font-metric dependent (Windows fits by
+       ~7 px, the Linux runner does not), so also pin the cause: the model
+       dropdowns must stay inside their phase-card row. */
+    const spill = await page.evaluate(() =>
+      Array.from(document.querySelectorAll<HTMLElement>('[data-testid^="phase-model-swap-"]')).map(
+        (sel) => {
+          const row = sel.closest<HTMLElement>('div.px-6.py-4');
+          /* A row that is not found must fail the check, not read as "no spill". */
+          return row
+            ? sel.getBoundingClientRect().right - row.getBoundingClientRect().right
+            : Infinity;
+        },
+      ),
+    );
+    expect(spill.length, 'phase model dropdowns rendered').toBeGreaterThan(0);
+    for (const px of spill) expect(px, 'dropdown spills past its phase card').toBeLessThanOrEqual(1);
   });
 
   test('listen view — Solway Bay fixture', async ({ page }) => {

@@ -398,13 +398,15 @@ export const analysisStreamMiddleware: Middleware = (store) => {
         }
         /* #3435 decision A — the server refused this subscribe because another
            run owns the book (a subset beside a would-be main start, or the
-           reverse). Not a failure of any run: close, then restore the snapshot
+           reverse; #3436: the book is rendering audio, so no run of ours is live). Not a failure of any
+           run: close, then restore the snapshot
            from the server, with no halt and no toast. */
         if (
           e instanceof AnalysisError &&
           (e.code === 'main_analysis_running' ||
             e.code === 'subset_analysis_running' ||
-            e.code === 'chapters_restructuring')
+            e.code === 'chapters_restructuring' ||
+            e.code === 'book_busy')
         ) {
           closeHandle();
           void restoreFromServer(

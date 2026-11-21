@@ -11,6 +11,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { jobForClient } from '../lan-paths.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { VenvBootstrap } from '../tts/venv-bootstrap.js';
@@ -35,9 +36,9 @@ venvBootstrapRouter.get('/detect', (_req: Request, res: Response) => {
   return res.json(bootstrap.detect());
 });
 
-venvBootstrapRouter.post('/bootstrap', (_req: Request, res: Response) => {
+venvBootstrapRouter.post('/bootstrap', (req: Request, res: Response) => {
   const job = bootstrap.start();
-  return res.status(202).json(job);
+  return res.status(202).json(jobForClient(req, job));
 });
 
 venvBootstrapRouter.get('/bootstrap/:id', (req: Request, res: Response) => {
@@ -45,7 +46,7 @@ venvBootstrapRouter.get('/bootstrap/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No venv bootstrap job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 venvBootstrapRouter.post('/bootstrap/:id/recheck', (req: Request, res: Response) => {
@@ -53,5 +54,5 @@ venvBootstrapRouter.post('/bootstrap/:id/recheck', (req: Request, res: Response)
   if (!job) {
     return res.status(404).json({ error: `No venv bootstrap job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });

@@ -53,6 +53,8 @@ import {
 import { classifyPackageFault } from '../tts/models-status.js';
 import type { AnalysisEngine } from '../analyzer/model-id.js';
 import { requestFailureMessageFs } from '../workspace/file-lock.js';
+import { pathForClientOrNull } from '../lan-paths.js';
+import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 export const modelsInventoryRouter = Router();
 
@@ -542,7 +544,7 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
   }
   if (!item.present) {
     /* Idempotent: nothing to delete. */
-    return res.json({ id, removed: false, freedBytes: 0, item });
+    return res.json({ id, removed: false, freedBytes: 0, item: clientItem(req, item) });
   }
   const guard = evaluateRemoval(item);
   if (!guard.ok) {
@@ -561,11 +563,21 @@ modelsInventoryRouter.post('/:id/remove', async (req: Request, res: Response) =>
       });
     }
     console.error('[models-inventory] removal failed', err);
-    return res.status(500).json({ error: requestFailureMessageFs(err, err.message || 'Removal failed.') });
+    /* `ollama rm`'s execFile rejection carries the child's stderr in `.message` (with a
+       numeric `code`, so the fs seam never fires on it) -- scrub it line by line (#3702). */
+    return res
+      .status(500)
+      .json({ error: requestFailureMessageFs(err, scrubChildOutput(err.message || 'Removal failed.')) });
   }
 });
 
-modelsInventoryRouter.get('/inventory', async (_req: Request, res: Response) => {
+/** #4446 — collapse the home dir in `diskPath` for non-loopback clients. Applied
+    at the response sites only: `evaluateRemoval` / `performRemoval` need real paths. */
+function clientItem(req: Request, item: ModelInventoryItem): ModelInventoryItem {
+  return { ...item, diskPath: pathForClientOrNull(req, item.diskPath) };
+}
+
+modelsInventoryRouter.get('/inventory', async (req: Request, res: Response) => {
   const [sidecar, ollama] = await Promise.all([
     probeSidecarHealth().catch(
       (): SidecarHealthResult => ({ status: 'unreachable', url: '', proxy: 'sidecar' }),
@@ -581,5 +593,5 @@ modelsInventoryRouter.get('/inventory', async (_req: Request, res: Response) => 
     analysisEngine: getResolvedAnalysisEngine(),
     resolvedOllamaModel: getResolvedOllamaModel(),
   });
-  return res.json(inventory);
+  return res.json({ ...inventory, items: inventory.items.map((i) => clientItem(req, i)) });
 });

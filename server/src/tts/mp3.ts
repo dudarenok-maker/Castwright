@@ -25,7 +25,7 @@
 
 import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { mkdir, readFile, rename, unlink, writeFile } from 'node:fs/promises';
+import { mkdir, open, readFile, rename, unlink, writeFile } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { computePeaks } from '../audio/compute-peaks.js';
@@ -422,6 +422,7 @@ export async function encodePcmToAudio(
   if (mp3OutPath) {
     try {
       encoded = await readFile(mp3OutPath);
+      fixLameEncoderDelayInPlace(encoded);
     } finally {
       await unlink(mp3OutPath).catch(() => {});
     }
@@ -493,6 +494,188 @@ export async function encodePcmToAudio(
   return encoded;
 }
 
+/* LAME always has a 576-sample encoder delay, and a decoder drops that plus its
+   own 529-sample delay (1105 in all) when the Xing/Info tag is honest. ffmpeg
+   9.1's libmp3lame encoder stamps the tag with 47 (576 - 529) instead, but only
+   on MPEG-2 / MPEG-2.5 streams (<= 24 kHz; 44.1 / 48 kHz keep the right 576),
+   so every decoder, 8.x included, trims 529 samples too few and the whole
+   chapter reads ~22 ms late (#4573). Segment windows then catch the
+   neighbouring take's audio and a dead segment no longer scans as silent.
+
+   Two defences, both keyed on the tag's content and never on the ffmpeg
+   version, so a build that fixes the tag falls through to a no-op:
+   - `fixLameEncoderDelay` rewrites the delay (and the tag CRC) after every
+     encode and remux we do, so each file we write is right for every player;
+   - `mp3StartPadShortfall` reads a file that already carries the wrong delay
+     (rendered before the fix) so the decode helpers can drop the missing
+     lead-in. */
+const LAME_ENCODER_DELAY = 576;
+
+/* Sample rates by MPEG version bits (3 = MPEG-1, 2 = MPEG-2, 0 = MPEG-2.5). */
+const MPEG_SAMPLE_RATES: Record<number, number[]> = {
+  3: [44100, 48000, 32000],
+  2: [22050, 24000, 16000],
+  0: [11025, 12000, 8000],
+};
+
+/* Layer III bitrates in kbit/s by frame-header index: MPEG-1, then MPEG-2 / 2.5. */
+const MPEG1_L3_BITRATES = [0, 32, 40, 48, 56, 64, 80, 96, 112, 128, 160, 192, 224, 256, 320];
+const MPEG2_L3_BITRATES = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160];
+
+/* Bytes past an ID3v2 block that always hold the Xing/Info frame (<= ~200). */
+const MP3_TAG_FRAME_SLACK = 512;
+
+/* Offset just past a leading ID3v2 block (syncsafe size + header + footer), or 0. */
+function id3v2End(b: Buffer): number {
+  if (b.length < 10 || b.toString('latin1', 0, 3) !== 'ID3') return 0;
+  const size = ((b[6] & 0x7f) << 21) | ((b[7] & 0x7f) << 14) | ((b[8] & 0x7f) << 7) | (b[9] & 0x7f);
+  return 10 + size + (b[5] & 0x10 ? 10 : 0);
+}
+
+/* How many leading bytes hold the whole Xing/LAME tag frame, given the first 10. */
+function mp3HeadLength(first: Buffer): number {
+  return id3v2End(first) + MP3_TAG_FRAME_SLACK;
+}
+
+interface LameTag {
+  /* Offset of the tag frame's header. */
+  frameStart: number;
+  /* Length in bytes of the tag frame. */
+  frameLen: number;
+  /* Offset of the LAME/Lavc/Lavf encoder string. */
+  enc: number;
+  /* Encoder delay as stamped, in samples at `streamRate`. */
+  delay: number;
+  /* The MP3 stream's own sample rate (not the decode's output rate). */
+  streamRate: number;
+}
+
+/* The tag of a file whose encoder delay is short of LAME's 576; null for a
+   correct tag, a tag-less file or a non-MP3 input. */
+function parseWrongLameTag(head: Buffer): LameTag | null {
+  const frameStart = id3v2End(head);
+  if (frameStart + 4 > head.length) return null;
+  const b1 = head[frameStart + 1];
+  // frame sync, layer III
+  if (head[frameStart] !== 0xff || (b1 & 0xe0) !== 0xe0 || ((b1 >> 1) & 3) !== 1) return null;
+  const version = (b1 >> 3) & 3;
+  const rates = MPEG_SAMPLE_RATES[version];
+  const rateIdx = (head[frameStart + 2] >> 2) & 3;
+  if (!rates || rateIdx === 3) return null;
+  const bitrateIdx = head[frameStart + 2] >> 4;
+  if (bitrateIdx === 0 || bitrateIdx === 15) return null;
+  const mono = ((head[frameStart + 3] >> 6) & 3) === 3;
+  const sideInfo = version === 3 ? (mono ? 17 : 32) : mono ? 9 : 17;
+  // LAME and ffmpeg's demuxer both place the tag at 4 + side info, even on a CRC-protected frame.
+  const tag = frameStart + 4 + sideInfo;
+  if (tag + 8 > head.length) return null;
+  const kind = head.toString('latin1', tag, tag + 4);
+  if (kind !== 'Xing' && kind !== 'Info') return null;
+  const flags = head.readUInt32BE(tag + 4);
+  // frames, bytes, TOC (100), quality - each present only when its flag is set.
+  let enc = tag + 8;
+  if (flags & 1) enc += 4;
+  if (flags & 2) enc += 4;
+  if (flags & 4) enc += 100;
+  if (flags & 8) enc += 4;
+  if (enc + 0x18 > head.length) return null;
+  const id = head.toString('latin1', enc, enc + 4);
+  if (id !== 'LAME' && id !== 'Lavc' && id !== 'Lavf') return null;
+  const delay = (head[enc + 0x15] << 4) | (head[enc + 0x16] >> 4);
+  // delay 0 is a non-LAME ffmpeg encoder (libshine, mp3_mf); 576 is honest.
+  if (!(delay > 0 && delay < LAME_ENCODER_DELAY)) return null;
+  const streamRate = rates[rateIdx];
+  const kbps = (version === 3 ? MPEG1_L3_BITRATES : MPEG2_L3_BITRATES)[bitrateIdx];
+  const frameLen =
+    Math.floor(((version === 3 ? 144 : 72) * kbps * 1000) / streamRate) + ((head[frameStart + 2] >> 1) & 1);
+  return { frameStart, frameLen, enc, delay, streamRate };
+}
+
+/** How many leading samples, at the MP3's own rate, a decode leaves over because
+    the tag's delay is short; 0 when the tag is right or absent. */
+export function mp3StartPadShortfall(head: Buffer): number {
+  const tag = parseWrongLameTag(head);
+  return tag ? LAME_ENCODER_DELAY - tag.delay : 0;
+}
+
+/* The tag's CRC: CRC-16 (poly 0x8005 reflected, init 0) over the first 190
+   bytes of the tag frame, with the CRC field itself (34 bytes after the
+   encoder string) and anything past the end of a shorter frame read as zero.
+   This is ffmpeg's muxer convention, the right target since ffmpeg muxed every
+   file patched here. It is NOT LAME's own reference CRC (sync up to the CRC
+   field), which differs for every LSF tag - don't use this to validate a
+   LAME-CLI file. */
+const LAME_TAG_CRC_SPAN = 190;
+function lameTagCrc(b: Buffer, tag: LameTag): number {
+  const crcAt = tag.enc + 34;
+  const end = tag.frameStart + Math.min(LAME_TAG_CRC_SPAN, tag.frameLen);
+  let crc = 0;
+  for (let i = tag.frameStart; i < tag.frameStart + LAME_TAG_CRC_SPAN; i++) {
+    crc ^= i >= end || i === crcAt || i === crcAt + 1 ? 0 : b[i];
+    for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >> 1) ^ 0xa001 : crc >> 1;
+  }
+  return crc;
+}
+
+/** Return a copy of `head` (an MP3's ID3v2 block plus its Xing frame) with the
+    wrong LAME encoder delay set to 576 and the tag CRC recomputed, or null when
+    the tag needs no fix (#4573). */
+export function fixLameEncoderDelay(head: Buffer): Buffer | null {
+  const tag = parseWrongLameTag(head);
+  if (!tag) return null;
+  const crcAt = tag.enc + 34;
+  if (tag.frameStart + LAME_TAG_CRC_SPAN > head.length) return null;
+  const fixed = Buffer.from(head);
+  fixed[tag.enc + 0x15] = LAME_ENCODER_DELAY >> 4;
+  fixed[tag.enc + 0x16] = ((LAME_ENCODER_DELAY & 0xf) << 4) | (head[tag.enc + 0x16] & 0xf);
+  fixed.writeUInt16BE(lameTagCrc(fixed, tag), crcAt);
+  return fixed;
+}
+
+/* Fix a whole encoded MP3 in place (see `fixLameEncoderDelay`). */
+function fixLameEncoderDelayInPlace(mp3: Buffer): void {
+  const fixed = fixLameEncoderDelay(mp3.subarray(0, mp3HeadLength(mp3)));
+  if (fixed) fixed.copy(mp3, 0);
+}
+
+/* Read the ID3v2 block and the Xing frame behind it from the front of a file. */
+async function readMp3Head(path: string): Promise<Buffer> {
+  const fh = await open(path, 'r');
+  try {
+    const first = Buffer.alloc(10);
+    const { bytesRead } = await fh.read(first, 0, 10, 0);
+    const buf = Buffer.alloc(mp3HeadLength(first.subarray(0, bytesRead)));
+    const read = await fh.read(buf, 0, buf.length, 0);
+    return buf.subarray(0, read.bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Fix an MP3 file on disk in place (see `fixLameEncoderDelay`). Only the head
+    is read and rewritten, and a file that needs no fix is not touched. For
+    files another tool wrote, e.g. the `-c:a copy` remux in `id3-tags.ts`. */
+export async function fixLameEncoderDelayInFile(path: string): Promise<void> {
+  const fixed = fixLameEncoderDelay(await readMp3Head(path));
+  if (!fixed) return;
+  const fh = await open(path, 'r+');
+  try {
+    await fh.write(fixed, 0, fixed.length, 0);
+  } finally {
+    await fh.close();
+  }
+}
+
+/* Drop the leftover lead-in `mp3StartPadShortfall` reports from mono s16le PCM
+   that ffmpeg already resampled to `outRate`; the shortfall is in the MP3's own
+   samples, so it is scaled to the output rate first. */
+function trimStartPad(pcm: Buffer, head: Buffer, outRate: number): Buffer {
+  const tag = parseWrongLameTag(head);
+  if (!tag) return pcm;
+  const samples = Math.round(((LAME_ENCODER_DELAY - tag.delay) * outRate) / tag.streamRate);
+  return pcm.subarray(Math.min(pcm.length, samples * 2));
+}
+
 /** Decode an encoded audio buffer (mp3 / m4a / ogg) back to raw 16-bit signed
     LE mono PCM at `sampleRate`. The inverse of `encodePcmToAudio`, used by the
     fs-26 splice engine to recover a rendered chapter's samples for byte-range
@@ -542,8 +725,10 @@ export async function decodeAudioToPcm(input: Buffer, sampleRate: number): Promi
     });
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code === 0) resolve(Buffer.concat(stdoutChunks));
-      else reject(ffmpegFailure('ffmpeg (decode)', code, stderr));
+      if (code === 0) {
+        const head = input.subarray(0, mp3HeadLength(input));
+        resolve(trimStartPad(Buffer.concat(stdoutChunks), head, sampleRate));
+      } else reject(ffmpegFailure('ffmpeg (decode)', code, stderr));
     });
     child.stdin.on('error', (err) => {
       if ((err as NodeJS.ErrnoException).code !== 'EPIPE') reject(err);
@@ -597,8 +782,11 @@ export async function decodeAudioFileToPcm(
     });
     child.on('close', (code) => {
       const stderr = Buffer.concat(stderrChunks).toString('utf8');
-      if (code === 0) resolve(Buffer.concat(stdoutChunks));
-      else reject(ffmpegFailure('ffmpeg (decode file)', code, `${inputPath}\n${stderr}`));
+      if (code !== 0) return reject(ffmpegFailure('ffmpeg (decode file)', code, `${inputPath}\n${stderr}`));
+      readMp3Head(inputPath).then(
+        (head) => resolve(trimStartPad(Buffer.concat(stdoutChunks), head, sampleRate)),
+        reject,
+      );
     });
   });
 }

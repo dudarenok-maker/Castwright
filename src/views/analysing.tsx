@@ -801,14 +801,16 @@ export function AnalysingView({
         if ((e as Error)?.name === 'AbortError') return;
         /* #3435 (A7) — the server refused this start: a chapter retry is
            running (`subset_analysis_running`), or the previous run is still
-           stopping (`main_analysis_running`, winding down). No job started, so
+           stopping (`main_analysis_running`, winding down), or the book is rendering
+           audio (`book_busy`, #3436). No job started, so
            this is neither a halt nor a failure: restore the pre-POST snapshot,
            go idle, and show the server's message. */
         if (
           e instanceof AnalysisError &&
           (e.code === 'subset_analysis_running' ||
             e.code === 'main_analysis_running' ||
-            e.code === 'chapters_restructuring')
+            e.code === 'chapters_restructuring' ||
+            e.code === 'book_busy')
         ) {
           if (preStartSnapshot) dispatch(analysisActions.setActiveStream(preStartSnapshot));
           else dispatch(analysisActions.clearActiveStream());
@@ -1224,7 +1226,8 @@ export function AnalysingView({
           err instanceof AnalysisError &&
           (err.code === 'subset_in_progress' ||
             err.code === 'main_analysis_running' ||
-            err.code === 'chapters_restructuring')
+            err.code === 'chapters_restructuring' ||
+            err.code === 'book_busy')
         ) {
           subsetInProgressRef.current = true;
           /* The snapshot may be another book's by now: restore only

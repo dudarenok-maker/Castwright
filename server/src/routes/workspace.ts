@@ -24,14 +24,15 @@
 
 import { Router } from 'express';
 import { WORKSPACE_ROOT, BOOKS_ROOT } from '../workspace/paths.js';
+import { pathForClient } from '../lan-paths.js';
 import { listAllChangeLogs } from '../workspace/scan.js';
 
 export const workspaceRouter = Router();
 
-workspaceRouter.get('/', (_req, res) => {
+workspaceRouter.get('/', (req, res) => {
   res.json({
-    root: WORKSPACE_ROOT,
-    booksRoot: BOOKS_ROOT,
+    root: pathForClient(req, WORKSPACE_ROOT),
+    booksRoot: pathForClient(req, BOOKS_ROOT),
     source: process.env.WORKSPACE_DIR ? 'env' : 'default',
   });
 });
