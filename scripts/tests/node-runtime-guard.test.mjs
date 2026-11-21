@@ -136,7 +136,7 @@ test('a launcher with stdio ignored (the in-app upgrade) still leaves the refusa
         `import { enforceNodeRuntime } from ${JSON.stringify(guard)};` +
           `enforceNodeRuntime({ version: 'v24.15.0', platform: 'win32' });`,
       ],
-      { env: { ...process.env, APP_LOG_DIR: join(root, 'logs') }, stdio: 'ignore' },
+      { env: { ...process.env, APP_LOG_DIR: join(root, 'logs') }, stdio: 'ignore', windowsHide: true },
     );
     assert.equal(r.status, 1);
     assert.match(readFileSync(join(root, 'logs', 'node-refused.log'), 'utf8'), /Install Node v24\.16\.0 or newer/);
