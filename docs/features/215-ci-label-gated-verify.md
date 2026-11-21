@@ -68,7 +68,8 @@ asked**.
     moved off the release path — releases are public-beta, so the macOS 10×
     minutes are worth it per (infrequent) tag.
   - `mobile-e2e` — `npm run test:e2e:mobile` (Pixel 7 / iPad Pro 11), Ubuntu,
-    run unconditionally per tag.
+    run unconditionally per tag. Also runs `npm run test:e2e:mobile:visual`
+    (the mobile/tablet visual baselines).
   A red leg on any deployer OS blocks the release. `cross-os.yml` stays as the
   between-releases weekly pulse + ad-hoc dispatch.
 - **Still automatic, otherwise untouched:** `pr-title-lint.yml` (every PR — cheap

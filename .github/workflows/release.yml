@@ -140,7 +140,7 @@ jobs:
   mobile-e2e:
     name: npm run test:e2e:mobile
     runs-on: ubuntu-latest
-    timeout-minutes: 25
+    timeout-minutes: 35
     steps:
       - name: Checkout
         uses: actions/checkout@v7
@@ -167,12 +167,27 @@ jobs:
       - name: E2E Mobile
         run: npm run test:e2e:mobile
 
-      - name: Upload Playwright report on failure
+      # Mobile/tablet visual baselines run HERE (twice-weekly cron/release tag),
+      # never in verify.yml: they are off the PR path by owner decision (#4203).
+      # Serial (--workers=1) because visual.spec.ts uses mode: 'serial'.
+      - name: E2E Mobile visual baselines
+        run: npm run test:e2e:mobile:visual
+        env:
+          PW_JSON_REPORT: playwright-visual-report.json
+
+      # Outcome check: the gate must have RUN tests (and skipped none), not just
+      # exited 0 (an all-skip run is green).
+      - name: Assert the visual baselines actually ran
+        run: node scripts/assert-playwright-ran.mjs playwright-visual-report.json --projects mobile-chrome,tablet-chrome
+
+      - name: Upload Playwright report + test results on failure
         if: failure()
         uses: actions/upload-artifact@v7
         with:
           name: playwright-report-mobile-release
-          path: playwright-report/
+          path: |
+            playwright-report/
+            test-results/
           retention-days: 7
 
   # Build the companion artifacts ONCE (versioned in lockstep via

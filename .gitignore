@@ -108,6 +108,7 @@ precommit-lint-tmp-*/
 # Playwright artefacts (browsers cached in %LOCALAPPDATA%, not the repo).
 playwright-report/
 test-results/
+playwright-visual-report.json
 .playwright/
 
 # Husky internals (hook scripts are tracked; staging dir is not)
