@@ -50,9 +50,21 @@ test('resolves false on timeout when the pid never exits', async () => {
 const AFFECTED = 'v24.15.0';
 const FIXED = 'v24.22.3';
 
+// A complete release: its launch entry and a package.json. `ranges` is that
+// release's OWN crash-range list (omitted = a pre-guard release, which starts).
+function fakeRelease(root, name, ranges) {
+  const dir = join(root, 'releases', name);
+  mkdirSync(join(dir, 'scripts'), { recursive: true });
+  writeFileSync(join(dir, 'scripts', 'start-app-prod.mjs'), '');
+  const pkg = ranges ? { castwright: { node: { windowsLoopbackCrash: ranges } } } : {};
+  writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
+}
+
+const GUARD_RANGES = [{ from: '24.0.0', toExclusive: '24.16.0' }];
+
 function fakeInstall(pointer = '1.16.0', releases = ['v1.15.0', 'v1.16.0']) {
   const root = mkdtempSync(join(tmpdir(), 'castwright-restart-'));
-  for (const r of releases) mkdirSync(join(root, 'releases', r), { recursive: true });
+  for (const r of releases) fakeRelease(root, r);
   writeFileSync(join(root, '.current-version'), pointer);
   return root;
 }
@@ -157,6 +169,52 @@ test('the previous release is the highest OTHER release below the new one, numer
   try {
     await drive(root, { version: AFFECTED });
     assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a held-back release left on disk is never the rollback target of the next upgrade (P4-1)', async () => {
+  const root = fakeInstall('1.16.1', ['v1.15.0']);
+  fakeRelease(root, 'v1.16.0', GUARD_RANGES);
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  try {
+    const { result, launched } = await drive(root, { version: AFFECTED });
+    assert.equal(result.action, 'rolled-back');
+    assert.equal(result.to, '1.15.0', 'v1.16.0 carries the guard and would refuse this Node too');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
+    assert.equal(launched[0].pointer, '1.15.0');
+    assert.match(readState(root).error, /still running v1\.15\.0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a partial release dir from a failed apply is skipped as a rollback target (P4-1)', async () => {
+  const root = fakeInstall('1.16.1', ['v1.15.0']);
+  mkdirSync(join(root, 'releases', 'v1.16.0', 'scripts'), { recursive: true }); // no start-app-prod.mjs
+  writeFileSync(join(root, 'releases', 'v1.16.0', 'package.json'), '{}');
+  mkdirSync(join(root, 'releases', 'v1.16.0b'), { recursive: true });
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  try {
+    const { result } = await drive(root, { version: AFFECTED });
+    assert.equal(result.to, '1.15.0');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('no runnable release below: no-fallback, the pointer and the state file are left alone (P4-1)', async () => {
+  const root = fakeInstall('1.16.1', []);
+  fakeRelease(root, 'v1.16.0', GUARD_RANGES);
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  try {
+    const { result, launched } = await drive(root, { version: AFFECTED });
+    assert.equal(result.action, 'no-fallback');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.16.1');
+    assert.equal(existsSync(join(root, '.upgrade-staging', 'state.json')), false, 'never claims a release that will not run is running');
+    assert.equal(launched.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

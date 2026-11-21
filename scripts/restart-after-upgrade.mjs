@@ -23,12 +23,12 @@
    /api/upgrade/state. An upgrade never leaves nothing running. */
 
 import { spawn } from 'node:child_process';
-import { mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
-import { loadCrashRanges, loadNodeMinimum, nodeRuntimeRefusal, parseNodeVersion } from './lib/node-runtime-guard.mjs';
+import { findCrashRange, loadCrashRanges, loadNodeMinimum, nodeRuntimeRefusal, parseNodeVersion } from './lib/node-runtime-guard.mjs';
 
 /* Where the server keeps its upgrade state: server/src/upgrade/paths.ts
    (stagingDir + stateFile); a test pins the two together. */
@@ -56,10 +56,29 @@ export async function waitForExit({ pid, timeoutMs = 60000, intervalMs = 250, is
   return !isAlive(pid);
 }
 
-/** The highest release dir under <installRoot>/releases other than `current`,
- *  preferring one numerically below it (the one the user upgraded FROM).
- *  Returns the bare version ("1.15.0") or null. */
-export function findPreviousRelease(installRoot, current, list = (d) => readdirSync(d)) {
+/** Whether a release left on disk can be relaunched on this Node: it is
+ *  complete (its launch entry and a package.json) and its OWN crash-range list
+ *  does not refuse `version`. A missing list is a pre-guard release, which
+ *  starts. A held-back release or a partial dir from a failed apply stays on
+ *  disk, so choosing by directory name alone could pick one that cannot run. */
+export function releaseCanStart(installRoot, release, version, platform) {
+  const dir = join(installRoot, 'releases', `v${release}`);
+  try {
+    if (!existsSync(join(dir, 'scripts', 'start-app-prod.mjs'))) return false;
+    const list = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).castwright?.node?.windowsLoopbackCrash;
+    if (list === undefined) return true;
+    if (!Array.isArray(list)) return false;
+    const ranges = list.filter((r) => !!r && typeof r.from === 'string' && typeof r.toExclusive === 'string');
+    return !findCrashRange(version, platform, ranges);
+  } catch {
+    return false;
+  }
+}
+
+/** The highest release dir under <installRoot>/releases other than `current`
+ *  that `canStart` accepts, preferring one numerically below it (the one the
+ *  user upgraded FROM). Returns the bare version ("1.15.0") or null. */
+export function findPreviousRelease(installRoot, current, list = (d) => readdirSync(d), canStart = () => true) {
   let names;
   try {
     names = list(join(installRoot, 'releases'));
@@ -70,7 +89,7 @@ export function findPreviousRelease(installRoot, current, list = (d) => readdirS
   const found = [];
   for (const n of names) {
     const m = /^v(\d+\.\d+\.\d+)$/.exec(n);
-    if (!m || m[1] === current) continue;
+    if (!m || m[1] === current || !canStart(m[1])) continue;
     found.push({ version: m[1], parts: parseNodeVersion(m[1]) });
   }
   const cmp = (a, b) => a.parts[0] - b.parts[0] || a.parts[1] - b.parts[1] || a.parts[2] - b.parts[2];
@@ -127,7 +146,7 @@ export function guardNewRelease({
   } catch {
     return { action: 'no-fallback', reason: heldBack };
   }
-  const previous = findPreviousRelease(installRoot, candidate);
+  const previous = findPreviousRelease(installRoot, candidate, undefined, (r) => releaseCanStart(installRoot, r, version, platform));
   if (!previous) return { action: 'no-fallback', reason: heldBack };
   const reason = `Upgrade to v${candidate} was held back and you are still running v${previous}. ${heldBack}`;
   writePointer(installRoot, previous);
