@@ -39,7 +39,7 @@ module.exports = {
       params: {
         path: APP_ROOT,
         conda: CONDA,
-        message: 'conda install -y -c conda-forge "ffmpeg>=6" nodejs=24',
+        message: 'conda install -y -c conda-forge "ffmpeg>=6" "nodejs>=24.16.0,<25"',
       },
     },
     // Single resolve+checkout step (fetch + API + checkout + guard live inside

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="145" data-publish-id="e0d240be76c4"></div>
+  <div hidden data-published-as="147" data-publish-id="c42a4620d45f"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">91</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">92</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->17<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->18<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1504,7 +1504,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">17 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">18 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1513,7 +1513,7 @@
         <p>PR #821 <b>merged 2026-06-15</b> — shipped code with acceptance debt, not an unmerged feature. The issue body still says “draft PR #821” because it was filed 90 seconds before the merge and never updated.</p>
         <p>Real Windows testing has substantially happened since: four closed bugs (#1458, #1484, #1508, #1528) found and fixed real Pinokio-runtime issues, and #1513 fixed the <code>server/.env</code> load path.</p>
         <p><b>What genuinely remains:</b> <b>macOS has had zero on-box exercise on any axis</b>; plus two Windows items never explicitly re-confirmed — <b>native Stop actually reaping the sidecar</b>, and <b>confirming the pinned Node is the one actually used</b>.</p>
-        <div class="flag"><b>The Node pin, and the one-update lag you should EXPECT.</b> <code>install.js</code> now conda-installs <code>nodejs=24</code> and <code>update.js</code> re-asserts it. But Pinokio loads <code>update.js</code> from the release you currently have, so updating <em>from</em> a pre-pin release runs the OLD one — no pin step. <b>Reporting the bundled Node version after the first Update is the correct result, not a failure.</b> The second Update should report 24.x.</div>
+        <div class="flag"><b>The Node pin, and the one-update lag you should EXPECT.</b> <code>install.js</code> now conda-installs <code>nodejs&gt;=24.16.0,&lt;25</code> (was <code>nodejs=24</code> until plan 294; the refusal that floor backs is row E117) and <code>update.js</code> re-asserts it. But Pinokio loads <code>update.js</code> from the release you currently have, so updating <em>from</em> a pre-pin release runs the OLD one — no pin step. <b>Reporting the bundled Node version after the first Update is the correct result, not a failure.</b> The second Update should report 24.16.0 or newer, below 25.</div>
         <p>Observe: on a machine with Pinokio, run a fresh Install, then from a <code>shell.run</code> step run <code>node --version</code> and confirm <b>24.x</b> — conda envs prepend to PATH, so the pinned Node should shadow the bundled one, but that shadowing is unverified outside this repo's reasoning. Then confirm Install → Start still completes end to end.</p>
         <p class="src">A clean macOS machine with Pinokio, plus a short Windows follow-up · 20–40 min for the macOS install alone · <a href="https://github.com/dudarenok-maker/Castwright/issues/822">#822</a>, escalated by <a href="https://github.com/dudarenok-maker/Castwright/issues/1859">#1859</a> · criteria in <code>plan 218</code> open-verification item 2</p>
       </div>
@@ -1714,6 +1714,19 @@
         </ul>
         <p class="src">no GPU; a real workspace and a running server &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3713">#3713</a> &#183; plan <code>docs/features/288-book-op-lock.md</code></p>
         <div class="flag"><p><b>Partially run 2026-11-08 (v1.15.0 pre-cut pass), still owed.</b> Run on a scratch workspace, with a copy of a real rendered book as the twin, on <code>main</code> at 8fb8c684.</p><p><b>Passed:</b> which twin keeps the id (the one with the work, sorting later); the loser on disk (only its <code>state.json</code> and <code>dropped-quotes.json</code> changed, winner byte-identical; observed, log not kept); the analysis-cache copy (observed, log not kept); <code>duplicateBookIdRepairs</code> with relative folders (observed, log not kept; the only kept reading is <code>repairs=[]</code>); both books open (each state read answered 200; that each has its own audio and cast intact was observed, log not kept), except the loser&#39;s queue, backups and exports and the unlistable directory, which were not run; idempotent, except the banner (a browser item) and the two <code>state.json</code> mtimes, which were not checked (a later start logged no <code>[duplicate-bookid]</code> line and listed no repairs).</p><p><b>The gate over HTTP passed:</b> every listed content write was refused <code>409</code> with no path and no <code>cast.json</code> change; the three companion writes were not gated; a single design was refused before any job; the epoch held across five restarts over about 2.5 hours (observed, one reading kept; the days-later clause, the gate file&#39;s contents, &#8220;nothing a client does ends it early&#8221; and the pre-upgrade tab were not run); and a truncated gate file was rewritten (the server log&#39;s &#8220;kept 1 id(s) and rewrote it&#8221; is kept; that its readable entry stayed gated and that the rewrite had the same epoch and an empty list were observed, log not kept).</p><p><b>Evidence:</b> the before-hashes of both twins are <code>wt-onbox115-e116-orig-before.txt</code> (the winner&#39;s) and <code>-twin-before.txt</code> (the loser&#39;s); the single design&#39;s 409 is at <code>wt-onbox115-a120.log:212-236</code>; the HTTP checks are in <code>wt-onbox115-e116.log</code>. The scratch workspace is gone, so the items marked &#8220;log not kept&#8221; cannot be re-derived.</p><p><b>Not run:</b> Analyse on either twin, every browser item (stale tab, Library Delete, Compare, reload cap, the series change from a stale page, banner UI, queue), DELETE with the right epoch, the unreadable gate file, deleting a gated book, the loser&#39;s queue, backups and exports, and the unlistable directory.</p></div>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E117</span><span class="iname">Windows Node loopback-crash guard: the refusal, the Pinokio "run Update again" message, two-Update convergence and <code>logs/node-refused.log</code></span><span class="risk">a Windows box; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The automated tests pin the range list, the message text and the log write against injected versions and paths. They cannot start a real affected Node, see Pinokio's conda environment shadow PATH, or see the in-app upgrade's hidden restart. Plan 294 holds the affected-release table. The Pinokio pin itself is E1's job; this row is the refusal. (<a href="https://github.com/dudarenok-maker/Castwright/issues/4443">#4443</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/4535">#4535</a>)</p>
+        <ul>
+        <li><strong>The refusal on an affected Node.</strong> On Windows with an affected Node on PATH (24.15.0 is the plan's example; nodejs.org keeps the older installers), run <code>npm run start:prod</code> (the launcher refuses first, on the console) and <code>npm start</code> (the server's own guard refuses; its message lands in <code>logs/server.err.log</code>). Each exits non-zero and names the running Node and a Node v24.16.0 or newer to install from nodejs.org. Neither dies with the <code>0xC0000409</code> crash. Repeat on 24.16.0 or newer: it starts as before.</li>
+        <li><strong>The conda-environment message.</strong> On a Pinokio install whose conda env holds an affected Node, press Start. The message says the Node comes from Pinokio's environment and tells you to run Update in Pinokio again. It does not point at nodejs.org.</li>
+        <li><strong>Two-Update convergence.</strong> From a pre-pin release on an affected conda Node, run Update once and then Start: expect the refusal above (the first Update runs the old <code>update.js</code>; see E1). Run Update a second time: <code>node --version</code> in a Pinokio shell reports 24.16.0 or newer below 25, and Start now works. Record the Node version after each Update.</li>
+        <li><strong>A held-back in-app upgrade, and where a refusal is logged.</strong> From an install on an affected Node, use "Upgrade &amp; restart" in the app to move to a release carrying the guard. The new release's restarter checks your Node before it launches, so the app must come back on the PREVIOUS release rather than staying on the "app is restarting" page: <code>.current-version</code> names the previous release again, and the app's upgrade card shows "Upgrade to vX was held back and you are still running vY" with the Node to install. The reason is shown only in the browser tab that was left on the "app is restarting" screen, so keep the upgrading tab open and read it there; a tab you reload (or a new one) just shows the previous version, with no reason. No <code>node-refused.log</code> is expected on this path (the restarter intercepts first; a direct <code>npm run start:prod</code> on the new release still writes <code>logs/node-refused.log</code> in the install root's <code>logs</code> folder, or under <code>APP_LOG_DIR</code> when set). Then install Node v24.16.0 or newer and upgrade again: it switches and starts the new release. To walk the second attempt, with a further release available while the held-back one is still on disk, press Upgrade again on the same Node: it must roll back to the original release, never to the held-back one. Prove the file separately with a manual <code>npm run start:prod</code> on the affected Node, including once with <code>logs/</code> absent.</li>
+        </ul>
+        <p><em>Needs:</em> a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. Clears when each bullet is recorded.</p>
       </div>
     </details>
 

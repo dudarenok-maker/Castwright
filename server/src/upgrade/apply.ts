@@ -376,10 +376,26 @@ export function createApplySteps(
       const pointer = join(installRoot, '.current-version');
       const tmp = `${pointer}.tmp`;
       writeFileSync(tmp, version, 'utf8');
-      // rename is atomic on the same volume.
-      rmSync(pointer, { force: true });
-      const { renameSync } = await import('node:fs');
-      renameSync(tmp, pointer);
+      // rename is atomic on the same volume, and replaces an existing pointer.
+      // On Windows it fails with EPERM/EACCES/EBUSY while the pointer is
+      // read-only or held open by another process, so clear the read-only bit
+      // and retry for about a second. The pointer is never deleted first.
+      const { renameSync, chmodSync } = await import('node:fs');
+      for (let attempt = 0; ; attempt++) {
+        try {
+          renameSync(tmp, pointer);
+          return;
+        } catch (err) {
+          const code = (err as NodeJS.ErrnoException).code;
+          if (attempt >= 4 || (code !== 'EPERM' && code !== 'EACCES' && code !== 'EBUSY')) throw err;
+          try {
+            chmodSync(pointer, 0o666);
+          } catch {
+            /* retry regardless */
+          }
+          await new Promise((r) => setTimeout(r, 250));
+        }
+      }
     },
     spawnRestarter: refuseUnderVitest(({ installRoot, releaseDir, oldPid }) => {
       // The restarter ships inside the just-extracted release; it runs the

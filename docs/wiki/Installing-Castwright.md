@@ -22,7 +22,7 @@ After install you'll have a single command (`npm run start:prod`) that brings up
   <img alt="The Setup Wizard's Environment step, checking OS, GPU, and accelerator profile" src="images/installing-castwright/01-prerequisites.png">
 </picture>
 
-- **Node.js 22.22 or newer** (react-router 8 needs ≥22.22; Vite 8 needs ≥20.19 / ≥22.12; the repo targets Node 24) — <https://nodejs.org>
+- **Node.js 24.16 or newer** (older Node releases have a networking crash on Windows, so Node 22 is no longer supported; Vite 8 needs ≥20.19 / ≥22.12, and the repo targets Node 24) — <https://nodejs.org>
 - **Python 3.12** (exactly — the sidecar bootstrap probes for 3.12 and refuses other versions)
   - Windows: `winget install --id Python.Python.3.12` (or the <https://python.org> installer — tick "Add to PATH")
   - macOS: `brew install python@3.12`
