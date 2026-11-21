@@ -11,8 +11,8 @@
 
    A fs-26 splice and a QA repair are GPU work too but never enter
    `inFlightByBook`; `routes/chapter-job-coordination.ts` registers its
-   in-flight splice count (`setInFlightSpliceCounter`, #4066) and both
-   predicates below fold it in.
+   in-flight splice count (`setInFlightSpliceCounter`, #4066) and the
+   splice-aware predicates below fold it in.
 
    There is exactly one source of truth (the registered accessor) — nothing
    here copies or caches the state, so it can't drift from
@@ -62,6 +62,10 @@ export interface QuietPollState {
   sawRepair: boolean;
   idleSince: number | null;
   epoch: number | null;
+  /** #4533 — the models the lever kept for a live design (`m06`) or mint (`m17`) that the
+      base keep set would have freed. A re-ask frees only those, never again what the first
+      ask already freed (a live mint reloads its 0.6B in its own phases). */
+  heldBack?: { m06: boolean; m17: boolean };
 }
 
 let provider: (() => string[]) | null = null;
@@ -69,6 +73,8 @@ let spliceCounter: (() => number) | null = null;
 let spliceEpochReader: (() => number) | null = null;
 let jobEpochReader: (() => number) | null = null;
 let qualityRenderCounter: (() => number) | null = null;
+let designCounter: (() => number) | null = null;
+let mintCounter: (() => number) | null = null;
 
 /** Registered by routes/generation.ts at module init with its existing
     `activeGenerationBooks` accessor. */
@@ -114,6 +120,22 @@ export function setQualityRenderCounter(fn: () => number): void {
   qualityRenderCounter = fn;
 }
 
+/** #4445 — registered by tts/design-voice-core.ts at module init with its count of in-flight
+    voice designs (`postDesignAndCacheAudition`, purpose 'design', any book). A design is not a
+    render and never enters `inFlightByBook`, but its forwards need the sidecar's Qwen models:
+    `/unload {engine:'qwen'}` (the tier reconcile's 0.6B eviction) nulls the VoiceDesign model
+    with the base, so it would kill a live design mid-forward. Unregistered counts as zero. */
+export function setInFlightDesignCounter(fn: () => number): void {
+  designCounter = fn;
+}
+
+/** #4445 — as above for in-flight variant mints (purpose 'mint'): the 1.7B unload
+    (`unload_base17()` at its default `wait_seconds=0`) does NOT wait for the sidecar's own
+    in-flight count, and `mint_variant` raises if the model is gone. */
+export function setInFlightMintCounter(fn: () => number): void {
+  mintCounter = fn;
+}
+
 /** #4079 — true only when a running chapter render is KNOWN to use the
     Quality (1.7B) tier. Gates the render lease (gpu/render-lease.ts): a
     Kokoro-only or standard render takes no lease. */
@@ -139,6 +161,27 @@ function spliceActive(): boolean {
 export function isAnyGenerationActive(): boolean {
   if (!provider) return true;
   return provider().length > 0 || spliceActive();
+}
+
+/** #4445 — true when a voice design or a variant mint is in flight on any book. */
+export function isDesignOrMintActive(): boolean {
+  return (designCounter?.() ?? 0) > 0 || (mintCounter?.() ?? 0) > 0;
+}
+
+/** #4533 — the in-flight voice-design and variant-mint counts. `evictIdleQwenBase` subtracts
+    the CALLER's own (design-voice-core increments before it asks the lever) to learn what
+    ANOTHER op is using. Unregistered counts as zero, like the counters above. */
+export function inFlightDesignMintCounts(): { design: number; mint: number } {
+  return { design: designCounter?.() ?? 0, mint: mintCounter?.() ?? 0 };
+}
+
+/** #4445 — true when a render on a book OTHER than `bookId`, or any splice / QA repair or
+    voice design / variant mint (on any book), may be in flight. Unregistered resolves to `true` (fail closed, like
+    isAnyGenerationActive). For a caller whose own render is already protected by its
+    keep set (the generation-path tier reconciles). */
+export function isOtherGenerationActive(bookId: string): boolean {
+  if (!provider) return true;
+  return provider().some((b) => b !== bookId) || spliceActive() || isDesignOrMintActive();
 }
 
 /** #4075 — true only when a splice or QA repair is KNOWN to be in flight and

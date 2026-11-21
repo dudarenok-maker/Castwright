@@ -1070,3 +1070,19 @@ describe('a repeat decline with an unreadable chain member', () => {
     expect(readRows('Book Three')[0].voiceUuid).toBe('u_new');
   });
 });
+
+/* #3702 — a RetryableForkError is only ever built with a fixed, path-free sentence and no
+   `code`/`syscall`, so the fs seam wrapped around it never curates it: the wrap is inert by
+   construction. Pin that the real sentence reaches the client unchanged. */
+describe('a RetryableForkError reaches the client unchanged', () => {
+  it('answers 500 with its own fixed sentence', async () => {
+    const MOVED = "This book moved while \"Don't reuse\" was being saved; try again.";
+    const { RetryableForkError } = await import('../workspace/voice-uuid-fork.js');
+    beforeLocks.fn = () => {
+      throw new RetryableForkError(MOVED);
+    };
+    const res = await decline(twoId, 'wren', { fromBookId: oneId });
+    expect(res.status).toBe(500);
+    expect(res.body.error).toBe(MOVED);
+  });
+});

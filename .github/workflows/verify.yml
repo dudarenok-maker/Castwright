@@ -406,6 +406,94 @@ jobs:
         if: fromJSON(needs.detect.outputs.scopes).step_check_cycles || fromJSON(needs.detect.outputs.scopes).shared
         run: npm run check:cycles
 
+  # #4461: `package.json` declares `castwright.ffmpeg.minimum` (6.0) as "the
+  # oldest ffmpeg we test against", but since ubuntu-latest moved to 26.04 and
+  # #4455 pinned a static 8.1.3, no CI leg ran 6.x. This job installs ffmpeg
+  # from APT on ubuntu-24.04 (ships 6.1.1) and runs the whole server suite
+  # against it, so the declared floor is actually exercised (the loudnorm JSON
+  # contract is the version-sensitive risk).
+  #
+  # Why apt and not ./.github/actions/install-ffmpeg: that action installs the
+  # pinned static 8.1.3 build and is guarded to contain no apt/dpkg (#4453).
+  # The inline apt step is the one sanctioned exception in
+  # workflow-wiring.test.mjs, and only while it stays bounded.
+  #
+  # Why required: it is in the `verify` aggregator's `needs:`. Like every other
+  # leg it is gated at STEP level (never job level) so a docs-only PR gets a
+  # green job rather than a `skipped` one the aggregator would fail on.
+  ffmpeg-floor:
+    name: Server tests on the ffmpeg floor (ubuntu-24.04 apt)
+    needs: detect
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+
+      - name: Setup Node + deps
+        uses: ./.github/actions/setup
+
+      # An apt infrastructure stall (mirror down) must not redden a PR that did not
+      # touch ffmpeg, so a failed install WARNS and skips the assert and both
+      # suites via the `installed` output; it never fails the job. Budget: per
+      # command bound 120s (+10s -k grace); 3 x (2 x 130 + 10) = 810s fits the
+      # 15-minute step timeout, so this warning path is reached before the runner
+      # would kill the step. Gated on a step output, not a blanket error-swallow
+      # flag, which would also hide a real version-assert or test failure when
+      # ffmpeg DID install.
+      # supports: test:server:ffmpeg-floor
+      - name: Install ffmpeg (apt, floor build)
+        if: fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared
+        id: install_ffmpeg
+        timeout-minutes: 15
+        run: |
+          set -euo pipefail
+          for attempt in 1 2 3; do
+            if timeout -k 10 120 sudo apt-get update \
+              && timeout -k 10 120 sudo apt-get install -y --no-install-recommends ffmpeg; then
+              echo "installed=true" >> "$GITHUB_OUTPUT"
+              exit 0
+            fi
+            echo "apt ffmpeg install attempt $attempt failed"
+            sleep 10
+          done
+          echo "::warning::ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run"
+          echo "ffmpeg-floor: apt install of ffmpeg failed (mirror stall?); floor NOT tested on this run" >> "$GITHUB_STEP_SUMMARY"
+          echo "installed=false" >> "$GITHUB_OUTPUT"
+
+      # supports: test:server:ffmpeg-floor
+      - name: Assert ffmpeg is on the declared floor
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared) && steps.install_ffmpeg.outputs.installed == 'true'
+        run: |
+          ffmpeg -version
+          node -e '
+            const { execFileSync } = require("child_process");
+            const p = require("./scripts/preflight-ffmpeg.cjs");
+            const floor = p.readFfmpegFloor();
+            if (!floor) { console.log("::warning::ffmpeg-floor: castwright.ffmpeg.minimum is null (documented rollback); floor assert skipped"); process.exit(0); }
+            const out = execFileSync("ffmpeg", ["-version"], { encoding: "utf8" });
+            const v = p.parseFfmpegVersion(out);
+            if (!v) { console.error("unparseable ffmpeg version"); process.exit(1); }
+            if (p.isBelowFloor(v, floor)) { console.error("ffmpeg below floor", v, floor); process.exit(1); }
+            if (v.split(".")[0] !== floor.split(".")[0]) { console.error("ffmpeg major differs from floor major", v, floor); process.exit(1); }
+            console.log("ffmpeg", v, "is on floor", floor);
+          '
+
+      # Full suite, never `--changed`: about 30 server test files exercise real
+      # ffmpeg (e.g. tts/loudnorm.test.ts, tts/mp3.test.ts,
+      # export/build-m4b.test.ts, the routes/chapter-splice* and
+      # routes/chapter-qa-repair* families). No tag selects them and a
+      # hand-kept list would drift silently.
+      # leg: test:server:ffmpeg-floor
+      - name: Server tests on the ffmpeg floor
+        if: (fromJSON(needs.detect.outputs.scopes).step_test_server || fromJSON(needs.detect.outputs.scopes).step_test_server_slow || fromJSON(needs.detect.outputs.scopes).shared) && steps.install_ffmpeg.outputs.installed == 'true'
+        run: |
+          cd server
+          npx vitest run
+          npx vitest run --config vitest.config.slow.ts
+
   sidecar-tests:
     name: Sidecar tests (pytest)
     needs: detect
@@ -687,6 +775,7 @@ jobs:
         lint-and-checks,
         frontend-tests,
         server-tests,
+        ffmpeg-floor,
         sidecar-tests,
         e2e,
         e2e-visual,

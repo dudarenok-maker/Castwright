@@ -21,9 +21,22 @@ const MAX_TAIL = 160;
    of the line is dropped. */
 const PATH_ROOT = /file:(?=\/)|\\\\|(?<![A-Za-z0-9])[A-Za-z]:[\\/]|(?<![\w.])~\/|(?<![\w#./])\/(?=[\w.~-])/;
 
-function scrubPaths(s: string): string {
+/* Exported for #3702: child-process stderr (git, the LAN-cert script) that a route
+   forwards to the client body goes through this same scrubber -- multi-line text via
+   `scrubChildOutput` below, since this one cuts at the first path to END OF STRING. */
+export function scrubPaths(s: string): string {
   const m = PATH_ROOT.exec(s);
   return m ? `${s.slice(0, m.index)}<path>` : s;
+}
+
+/* Multi-line child output (git's / the LAN-cert script's / `ollama rm`'s stderr): scrub
+   each line on its own so a path only costs the rest of ITS line, not every line after
+   it. Line endings are kept. */
+export function scrubChildOutput(s: string): string {
+  return s
+    .split(/(\r?\n)/)
+    .map((part, i) => (i % 2 === 0 ? scrubPaths(part) : part))
+    .join('');
 }
 
 export function ffmpegFailure(label: string, code: number | null, stderr: string): FfmpegFailureError {

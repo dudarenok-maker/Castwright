@@ -117,3 +117,34 @@ describe('describeVramBlockers', () => {
     ]);
   });
 });
+
+describe('describeVramBlockers names a base a live design or mint holds (#4533)', () => {
+  it('a live design with the standard base resident: names it with a wait-for-the-design remedy', () => {
+    expect(describeVramBlockers({ designInFlight: true, qwenLoaded: true })).toEqual([
+      {
+        model: 'The standard Qwen voice model',
+        remedy: 'It is in use by the voice design in progress — wait for the design to finish, then try again.',
+      },
+    ]);
+  });
+
+  it('a live mint with the Quality base resident: names it with a wait-for-the-variant remedy', () => {
+    expect(describeVramBlockers({ mintInFlight: true, qwenBase17Loaded: true })).toEqual([
+      {
+        model: 'The Quality Qwen voice model',
+        remedy: 'It is in use by the voice variant being made — wait for the variant to finish, then try again.',
+      },
+    ]);
+  });
+
+  it('names nothing when the held base is not resident, or nothing is in flight', () => {
+    expect(describeVramBlockers({ designInFlight: true })).toEqual([]);
+    expect(describeVramBlockers({ mintInFlight: true, qwenLoaded: true })).toEqual([]);
+    expect(describeVramBlockers({ qwenLoaded: true, qwenBase17Loaded: true })).toEqual([]);
+  });
+
+  it('does not double-name a base the render rule already named', () => {
+    const out = describeVramBlockers({ generationActive: true, designInFlight: true, qwenLoaded: true });
+    expect(out.map((b) => b.model)).toEqual(['The standard Qwen voice model']);
+  });
+});

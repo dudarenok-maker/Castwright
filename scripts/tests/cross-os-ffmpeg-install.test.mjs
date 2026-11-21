@@ -78,6 +78,15 @@ const WINDOWS_FFMPEG_WORKFLOWS = [
   resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
 ];
 
+// Every workflow that calls the composite action. A superset of WORKFLOWS:
+// verify.yml's windows-tests leg (a required check) also installs ffmpeg through
+// it, but has no cross-os-verify job, so it cannot join WORKFLOWS (the #3696
+// timeout loop below iterates that one).
+const COMPOSITE_CALLERS = [
+  resolve(repoRoot, '.github', 'workflows', 'verify.yml'),
+  ...WORKFLOWS,
+];
+
 const ACTION_FILE = resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windows', 'action.yml');
 
 // Pulls the full step block (from `- name: Install ffmpeg (Windows)` up to
@@ -427,6 +436,21 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
     );
   });
 
+  // #4573: ffmpeg 9.1.0 breaks Audio-QA repair's silent-segment detection, so
+  // every install path is pinned to 9.0.2 until the code fix lands. Delete
+  // this test together with the pin.
+  test(`${rel}: every Windows ffmpeg install path is pinned to 9.0.2 (#4573)`, () => {
+    const block = windowsFfmpegStepBlock(readNormalized(path));
+    const installs = block.split('\n').filter((l) => /\b(choco|winget)\s+install\b/.test(l));
+    assert.ok(
+      installs.some((l) => /\bchoco\s+install\b/.test(l)) && installs.some((l) => /\bwinget\s+install\b/.test(l)),
+      'expected both a choco and a winget install line',
+    );
+    for (const line of installs) {
+      assert.match(line, /--version\s+9\.0\.2\b/, `install line is not pinned to 9.0.2: ${line.trim()}`);
+    }
+  });
+
   // This test asserts the PROPERTY ("a bounded repeat around the install,
   // with a delay between attempts"), not one exact loop spelling. Rewriting
   // `for ($attempt = 1; ...)` as `1..3 | ForEach-Object { ... }`, or
@@ -662,7 +686,9 @@ const STUB_BOTH_FAIL_ALL_ATTEMPTS = [
 // inline (reintroducing the #2480 duplication) must not go unnoticed. Each
 // workflow's "Install ffmpeg (Windows)" step must reference the composite
 // action rather than embed its own `run: |` block.
-for (const path of WINDOWS_FFMPEG_WORKFLOWS) {
+// COMPOSITE_CALLERS (verify.yml + WORKFLOWS) and WINDOWS_FFMPEG_WORKFLOWS (adds
+// quarantine-health.yml) overlap; iterate their union so no caller loses coverage.
+for (const path of new Set([...COMPOSITE_CALLERS, ...WINDOWS_FFMPEG_WORKFLOWS])) {
   const rel = path.slice(repoRoot.length + 1).replace(/\\/g, '/');
 
   test(`${rel}: Windows ffmpeg install step delegates to the composite action, not an inline script`, () => {
@@ -679,6 +705,12 @@ for (const path of WINDOWS_FFMPEG_WORKFLOWS) {
       block,
       /choco install ffmpeg/,
       'step embeds its own choco install call -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
+    );
+
+    assert.doesNotMatch(
+      block,
+      /winget install[^\n]*ffmpeg/i,
+      'step embeds its own winget ffmpeg install -- the Windows ffmpeg script should live only in .github/actions/install-ffmpeg-windows/action.yml',
     );
 
     // Guard against a second/different inline `choco install ffmpeg` elsewhere

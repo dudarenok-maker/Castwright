@@ -32,6 +32,7 @@ import { findBookByBookId } from '../workspace/scan.js';
 import { findChapterAudio } from '../workspace/chapter-take.js';
 import { audioDir } from '../workspace/paths.js';
 import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
+import { requestFailureMessageFs } from '../workspace/file-lock.js';
 
 const MAX_DURATION_SEC = 60;
 
@@ -105,8 +106,11 @@ clipRouter.get(
       child = spawn('ffmpeg', args, { stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true });
     } catch (err) {
       return res.status(500).json({
-        message: `Failed to spawn ffmpeg: ${(err as Error).message}. ` +
-          'Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).',
+        message: requestFailureMessageFs(
+          err,
+          `Failed to spawn ffmpeg: ${(err as Error).message}. ` +
+            'Install ffmpeg and ensure it is on PATH (winget install Gyan.FFmpeg).',
+        ),
       });
     }
 
@@ -118,7 +122,7 @@ clipRouter.get(
     child.on('error', (err) => {
       if (!headersSent && !res.headersSent) {
         res.status(500).json({
-          message: `ffmpeg spawn failed: ${err.message}`,
+          message: requestFailureMessageFs(err, `ffmpeg spawn failed: ${err.message}`),
         });
       } else {
         /* Headers already gone — abort the streaming response so the
@@ -145,7 +149,8 @@ clipRouter.get(
         const stderr = Buffer.concat(stderrChunks).toString('utf8').trim();
         if (!headersSent && !res.headersSent) {
           console.error('[clip] ffmpeg failed', code, stderr);
-          return res.status(500).json({ message: ffmpegFailure('ffmpeg', code, stderr).message });
+          const failure = ffmpegFailure('ffmpeg', code, stderr);
+          return res.status(500).json({ message: requestFailureMessageFs(failure, failure.message) });
         }
         /* Already streaming — end the response so the client sees a
            truncated download rather than a hung socket. */

@@ -10,6 +10,7 @@ import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import { selectTtsProvider } from '../tts/index.js';
 
 /* vi.hoisted so the inner factory below can close over the same vi.fn()
    instance we drive from the tests. selectTtsProvider() returns this stub
@@ -637,6 +638,22 @@ describe('voice-sample router', () => {
         .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
       expect(res.status).toBe(502);
       expect(res.body.code).toBe('tts_failed');
+    });
+
+    /* #3702 -- selectTtsProvider's only failure is this plain Error (no `code`/`syscall`), so
+       the fs seam wrapped around it never curates it (inert by construction): the message
+       reaches the client unchanged. */
+    it('500 provider_unavailable passes the real selectTtsProvider error through unchanged (#3702)', async () => {
+      const message = 'Gemini TTS selected but no API key is configured.';
+      vi.mocked(selectTtsProvider).mockImplementationOnce(() => {
+        throw new Error(message);
+      });
+      const res = await request(app)
+        .post('/api/voices/v_marlow/sample')
+        .send({ modelKey: 'coqui-xtts-v2', text: 'x' });
+      expect(res.status).toBe(500);
+      expect(res.body.code).toBe('provider_unavailable');
+      expect(res.body.message).toBe(message);
     });
 
     it('503 no_capacity with the named blockers when admission gives up (#1839)', async () => {

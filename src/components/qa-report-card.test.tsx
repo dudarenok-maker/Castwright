@@ -47,7 +47,7 @@ describe('QaReportCard', () => {
     // attempted every eligible chapter, all of them failed to embed) also
     // produces chaptersScored === 0, but now surfaces a nonzero
     // chaptersEmbedFailed. The row must lead with the honest "0 of N scored"
-    // fraction, not the "flip on render-integrity checking" invitation copy
+    // fraction, not the "not run for this book yet" copy
     // that implies the gate never ran.
     const report = {
       ...MOCK_QA_REPORT,
@@ -55,7 +55,7 @@ describe('QaReportCard', () => {
     };
     render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test Book" bookId="demo-book" />);
     expect(screen.getByText(/0 of 12 eligible chapters scored/i)).toBeInTheDocument();
-    expect(screen.queryByText(/flip on render-integrity checking/i)).not.toBeInTheDocument();
+    expect(screen.queryByText(/not run for this book yet/i)).not.toBeInTheDocument();
   });
 
   it('shows the inconclusive-chapter count on the voice-match row when nonzero', () => {
@@ -109,6 +109,124 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
     };
     render(<QaReportCard report={report} loading={false} error={false} bookTitle="Test" bookId="b1" />);
     expect(screen.getByRole('button', { name: /resume scoring/i })).toBeInTheDocument();
+  });
+
+  describe('speaker check off (#4454)', () => {
+    const OFF_COPY = 'Render-integrity QA (voice match) is off. Turn it on in Advanced settings → Per-sentence QA gates to check character voices.';
+    const renderWith = (voiceDrift: Partial<typeof MOCK_QA_REPORT.voiceDrift>) =>
+      render(
+        <QaReportCard
+          report={{ ...MOCK_QA_REPORT, voiceDrift: { ...MOCK_QA_REPORT.voiceDrift, chaptersEligible: 12, ...voiceDrift } }}
+          loading={false}
+          error={false}
+          bookTitle="Test"
+          bookId="b1"
+        />,
+      );
+
+    it('(a) pending + gate off: says so and offers no Resume', () => {
+      /* the shape buildAudioQaReport emits for a never-scored book (server qa-report.test.ts): the
+         whole roster counts as "checked" and every id is pending */
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['narrator', 'ren'],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+      expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+    });
+
+    it('(a3) the builder shape (pending character in every chapter, both chapter counts 0, a mismatch standing) + gate off: keeps the result, no gate-off row, no Resume', () => {
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 1,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['ren'],
+        mismatches: [{ characterId: 'narrator', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
+      });
+      expect(screen.getByText('partly checked before the check was turned off, 1 mismatches so far · Render-integrity QA is now off')).toBeInTheDocument();
+      /* the old chapter ratio read as full coverage: it must not come back in any form */
+      expect(screen.queryByText(/eligible chapters/)).toBeNull();
+      expect(screen.queryByText(/checked so far/)).toBeNull();
+      expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+    });
+
+    it('(a2) pending + partial scoring + gate off: keeps the past result and mismatch count, no Resume', () => {
+      renderWith({
+        speakerCheckEnabled: false,
+        charactersPending: ['newcomer'],
+        chaptersScored: 11,
+        chaptersEmbedFailed: 0,
+        mismatches: [{ characterId: 'ren', fixable: true }, { characterId: 'mo', fixable: true }] as typeof MOCK_QA_REPORT.voiceDrift.mismatches,
+      });
+      expect(screen.getByText(/11 of 12 eligible chapters scored.*2 mismatches.*Render-integrity QA is now off/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+      expect(screen.queryByTestId('qa-speaker-check-off')).toBeNull();
+    });
+
+    it('(b) restructured and re-rendered with the check off (nothing pending, no verdict on a current chapter): gate-off copy, not a checked-so-far line', () => {
+      /* the shape buildAudioQaReport emits once a chapter restructure deleted the verdicts while the
+         book-level centroids file survived (server qa-report.test.ts) */
+      renderWith({
+        speakerCheckEnabled: false,
+        chaptersEligible: 1,
+        chaptersScored: 0,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 0,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: [],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
+      expect(screen.getByTestId('qa-speaker-check-off')).toHaveTextContent(OFF_COPY);
+      expect(screen.queryByText(/checked so far/)).toBeNull();
+      expect(screen.queryByText(/Not run for this book/)).toBeNull();
+    });
+
+    it('(c) scored shape + gate off: keeps the result and appends the note, no Resume', () => {
+      renderWith({ speakerCheckEnabled: false, chaptersScored: 12, charactersPending: [] });
+      expect(screen.getByText(/18 of 18 characters checked.*Render-integrity QA is now off/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: 'Resume scoring' })).toBeNull();
+    });
+
+    it('(e) gate on + a partly scored book (ren pending in two of three chapters): the pending row prints the FULLY scored count, not the with-verdicts one, and still offers Resume', () => {
+      /* charactersChecked is the roster minus too-short verdicts, so it reads 2 although ren was never
+         scored; chaptersScored (1) and chaptersWithVerdicts (2) differ so the wrong field cannot pass */
+      renderWith({
+        speakerCheckEnabled: true,
+        chaptersEligible: 3,
+        chaptersScored: 1,
+        chaptersEmbedFailed: 0,
+        chaptersWithVerdicts: 2,
+        charactersOnRoster: 2,
+        charactersChecked: 2,
+        charactersPending: ['ren'],
+        mismatches: [],
+        inconclusiveCount: 0,
+      });
+      expect(screen.getByText('1 of 3 eligible chapters fully checked, more pending')).toBeInTheDocument();
+      expect(screen.queryByText(/checked so far/)).toBeNull();
+      expect(screen.queryByText(/characters checked so far/)).toBeNull();
+      expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();
+    });
+
+    it('(d) control: gate on + pending still offers Resume', () => {
+      renderWith({ speakerCheckEnabled: true, charactersPending: ['ren'], chaptersScored: 6 });
+      expect(screen.getByRole('button', { name: 'Resume scoring' })).toBeInTheDocument();
+    });
   });
 
   it('disables Resume scoring with the reason visible while a job start is blocked (#3774)', async () => {
@@ -256,7 +374,10 @@ describe('VoiceMatchRow — srv-36 hardening states', () => {
 
     it('is absent when the gate never ran and nothing is pending (nothing was settled)', () => {
       bare(withRerender({ chaptersScored: 0, chaptersEmbedFailed: 0, charactersPending: [] }));
-      expect(screen.getByText(/flip on render-integrity checking/i)).toBeInTheDocument();
+      // notRun is reachable with the check ON (or the field absent), so the copy must not ask the
+      // user to turn on a setting that may already be on.
+      expect(screen.getByText('Not run for this book yet — no voice match has been scored.')).toBeInTheDocument();
+      expect(screen.queryByText(/flip on|turn on/i)).not.toBeInTheDocument();
       expect(screen.queryByTestId('qa-needs-rerender')).not.toBeInTheDocument();
     });
 
