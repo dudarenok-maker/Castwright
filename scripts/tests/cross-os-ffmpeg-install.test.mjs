@@ -85,12 +85,21 @@ const ACTION_FILE =resolve(repoRoot, '.github', 'actions', 'install-ffmpeg-windo
 // writing) so the encoder-delay / tag-CRC fix is exercised against it. A
 // version pin on either install path would silently drop that coverage.
 test('the Windows ffmpeg composite action stays unpinned (#4573)', () => {
-  const installs = readNormalized(ACTION_FILE)
+  // Comment lines are skipped (the header names `winget install` in prose), and
+  // a backtick-continued PowerShell command is joined into one statement so a
+  // pin on a later line is still seen.
+  const statements = readNormalized(ACTION_FILE)
     .split('\n')
-    .filter((l) => /\b(choco|winget)\s+install\b/.test(l));
-  assert.ok(installs.length >= 2, 'expected both a choco and a winget install line');
-  for (const line of installs) {
-    assert.doesNotMatch(line, /--version\b/, `install line is pinned: ${line.trim()}`);
+    .filter((l) => !l.trim().startsWith('#'))
+    .join('\n')
+    .replace(/`[ \t]*\n/g, ' ')
+    .split('\n');
+  const choco = statements.filter((l) => /\bchoco\s+install\b/.test(l));
+  const winget = statements.filter((l) => /\bwinget\s+install\b/.test(l));
+  assert.ok(choco.length > 0, 'expected a real choco install line');
+  assert.ok(winget.length > 0, 'expected a real winget install line');
+  for (const line of [...choco, ...winget]) {
+    assert.doesNotMatch(line, /(^|\s)(--?|\/)version\b|\s-v\s/, `install line is pinned: ${line.trim()}`);
   }
 });
 
