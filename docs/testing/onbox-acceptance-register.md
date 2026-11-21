@@ -756,7 +756,7 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and `logs/node-refused.log` after an in-app upgrade) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
+> **Last change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and the in-app upgrade's held-back card plus `logs/upgrade-restart.log`) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
 >
 > **Previous change: 2026-11-21 (#4533), 89 → 90.** Row **A133** (the capacity-denied eviction lever keeps the Qwen models another live voice design or variant mint is using: a Coqui preview denied capacity during a mint leaves the 1.7B, and during a design leaves the 0.6B and VoiceDesign) added. Group A 53 → 54. `next-id` bumped A133 → A134 in the same change. Row is owed; not run here.
 >
