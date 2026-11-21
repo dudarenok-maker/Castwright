@@ -363,12 +363,13 @@ export async function triggerScoring(ctx: {
          resolve the keep again right after `/health` (#4559). No own-score-pass fall-back here:
          this reconcile runs inside this book's own score pass, so it would always fire. */
       const needs = await ctx.recomputeKeep();
-      const fullCast = ctx.fullCastKeep ?? ctx.keep;
+      const runStartKeep = ctx.keep;
+      const fullCast = ctx.fullCastKeep ?? runStartKeep;
       /* After the book's last chapter the union is empty: fall back to the keep computed at this
          run's start (`ctx.keep`; owner decision on #1393), so a tier only the audition pulled is
          still evicted and the tiers the run used stay. */
       await reconcileResidentQwenTiers(() =>
-        keepAfterHealth(ctx.bookId, sameBookTierUnion(ctx.bookId, needs, fullCast, false), ctx.keep),
+        keepAfterHealth(ctx.bookId, sameBookTierUnion(ctx.bookId, needs, fullCast, false), runStartKeep),
       );
       return;
     }
