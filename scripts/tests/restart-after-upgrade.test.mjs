@@ -50,12 +50,16 @@ test('resolves false on timeout when the pid never exits', async () => {
 const AFFECTED = 'v24.15.0';
 const FIXED = 'v24.22.3';
 
-// A complete release: its launch entry and a package.json. `ranges` is that
+// A complete release: its launch entry, a package.json and both finished npm installs. `ranges` is that
 // release's OWN crash-range list (omitted = a pre-guard release, which starts).
 function fakeRelease(root, name, ranges) {
   const dir = join(root, 'releases', name);
   mkdirSync(join(dir, 'scripts'), { recursive: true });
   writeFileSync(join(dir, 'scripts', 'start-app-prod.mjs'), '');
+  for (const d of [dir, join(dir, 'server')]) {
+    mkdirSync(join(d, 'node_modules'), { recursive: true });
+    writeFileSync(join(d, 'node_modules', '.package-lock.json'), '{}');
+  }
   const pkg = ranges ? { castwright: { node: { windowsLoopbackCrash: ranges } } } : {};
   writeFileSync(join(dir, 'package.json'), JSON.stringify(pkg));
 }
@@ -318,6 +322,22 @@ test('a read-only .current-version is still switched back (P5-1)', async () => {
     assert.equal(result.action, 'rolled-back');
     assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
     assert.equal(launched[0].pointer, '1.15.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a release whose npm ci never finished is skipped as a rollback target (P5-2)', async () => {
+  const root = fakeInstall('1.16.1', ['v1.14.0']);
+  fakeRelease(root, 'v1.16.1', GUARD_RANGES);
+  fakeRelease(root, 'v1.15.0');
+  rmSync(join(root, 'releases', 'v1.15.0', 'server', 'node_modules'), { recursive: true }); // root installed, server/ not
+  fakeRelease(root, 'v1.15.5');
+  rmSync(join(root, 'releases', 'v1.15.5', 'node_modules'), { recursive: true }); // nothing installed
+  try {
+    const { result } = await drive(root, { version: AFFECTED });
+    assert.equal(result.to, '1.14.0');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.14.0');
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

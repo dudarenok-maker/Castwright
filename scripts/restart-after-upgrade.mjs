@@ -57,7 +57,9 @@ export async function waitForExit({ pid, timeoutMs = 60000, intervalMs = 250, is
 }
 
 /** Whether a release left on disk can be relaunched on this Node: it is
- *  complete (its launch entry and a package.json) and its OWN crash-range list
+ *  complete (its launch entry, a package.json and both npm installs, root and
+ *  server/, which apply runs AFTER extracting, so a failed `npm ci` can leave
+ *  a folder with the first two but no dependencies) and its OWN crash-range list
  *  does not refuse `version`. A missing list is a pre-guard release, which
  *  starts. A held-back release or a partial dir from a failed apply stays on
  *  disk, so choosing by directory name alone could pick one that cannot run. */
@@ -65,6 +67,10 @@ export function releaseCanStart(installRoot, release, version, platform) {
   const dir = join(installRoot, 'releases', `v${release}`);
   try {
     if (!existsSync(join(dir, 'scripts', 'start-app-prod.mjs'))) return false;
+    // npm writes its hidden lockfile only when an install completes.
+    for (const d of [dir, join(dir, 'server')]) {
+      if (!existsSync(join(d, 'node_modules', '.package-lock.json'))) return false;
+    }
     const list = JSON.parse(readFileSync(join(dir, 'package.json'), 'utf8')).castwright?.node?.windowsLoopbackCrash;
     if (list === undefined) return true;
     if (!Array.isArray(list)) return false;
