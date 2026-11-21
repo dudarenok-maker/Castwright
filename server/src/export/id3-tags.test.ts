@@ -10,8 +10,9 @@ import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
-import { encodePcmToAudio } from '../tts/mp3.js';
+import { decodeAudioFileToPcm, encodePcmToAudio, mp3StartPadShortfall } from '../tts/mp3.js';
 import { applyId3v24Tags } from './id3-tags.js';
 
 const ffmpegPresent = (() => {
@@ -158,6 +159,49 @@ describeIf('applyId3v24Tags', () => {
     expect(destBytes.length).toBeGreaterThan(srcBytes.length * 0.5);
     expect(destBytes.length).toBeLessThan(srcBytes.length * 2.0);
     void audioBytesOnly; /* helper retained for ad-hoc debugging */
+  });
+
+  /* #4573 - ffmpeg 9.1 stamps MPEG-2 / 2.5 MP3s with encoder delay 47 instead of
+     576, and the `-c:a copy` remux carries that over untouched. The committed
+     fixture is a raw 9.1 encode (delay 47, 1 s at 24 kHz), as a chapter rendered
+     before the encode-side fix would be. */
+  const ffmpeg91Chapter = fileURLToPath(
+    new URL('../__fixtures__/ffmpeg91-lead-in/tone-24k.mp3', import.meta.url),
+  );
+  const exportTags = {
+    title: 'Chapter 1',
+    album: 'Album',
+    artist: 'Narrator',
+    albumArtist: 'Author',
+    track: 1,
+    trackTotal: 1,
+  };
+
+  it('corrects the encoder delay of a chapter rendered on ffmpeg 9.1 when it is exported (#4573)', async () => {
+    expect(mp3StartPadShortfall(readFileSync(ffmpeg91Chapter))).toBe(529);
+    const destPath = join(tmpDir, 'export-fixed-delay.mp3');
+    await applyId3v24Tags(ffmpeg91Chapter, destPath, exportTags);
+    const dest = readFileSync(destPath);
+    expect(dest.includes('Xing') || dest.includes('Info')).toBe(true);
+    expect(mp3StartPadShortfall(dest)).toBe(0);
+    // a plain decode - no decode-side compensation - now lands on the source length
+    expect(Math.abs((await decodeAudioFileToPcm(destPath, 24_000)).length / 2 - 24_000)).toBeLessThanOrEqual(2);
+  });
+
+  it('corrects it when the ID3v2 block is larger than the head the parser first read (#4573)', async () => {
+    const destPath = join(tmpDir, 'export-big-id3-fixed-delay.mp3');
+    await applyId3v24Tags(ffmpeg91Chapter, destPath, { ...exportTags, comment: 'x'.repeat(4000) });
+    const dest = readFileSync(destPath);
+    expect(dest.indexOf('Xing') > 2048 || dest.indexOf('Info') > 2048).toBe(true);
+    expect(mp3StartPadShortfall(dest.subarray(0, 8000))).toBe(0);
+  });
+
+  it('keeps the delay of a chapter already encoded correctly (#4573)', async () => {
+    const destPath = join(tmpDir, 'export-fresh.mp3');
+    await applyId3v24Tags(srcPath, destPath, exportTags);
+    const dest = readFileSync(destPath);
+    expect(dest.includes('Xing') || dest.includes('Info')).toBe(true);
+    expect(mp3StartPadShortfall(dest)).toBe(0);
   });
 
   it('omits optional genre + date when not provided', async () => {
