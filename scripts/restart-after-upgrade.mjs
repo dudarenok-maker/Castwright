@@ -133,13 +133,19 @@ export function guardNewRelease({
   loadMinimum = loadNodeMinimum,
   log = () => {},
 }) {
+  // Off Windows neither this release nor its launcher can refuse, so a failed
+  // list read must not hold the upgrade back there.
+  if (platform !== 'win32') return { action: 'proceed' };
   let heldBack;
   try {
     const refusal = nodeRuntimeRefusal(version, platform, loadRanges(), loadMinimum(), env, execPath);
     if (!refusal) return { action: 'proceed' };
     heldBack = refusal;
   } catch (err) {
-    heldBack = `Castwright could not check that your Node can run it (${err instanceof Error ? err.message : String(err)}).`;
+    // A fixed sentence: an fs error names a host path, and the state file is
+    // served to LAN clients. The raw detail goes to the log only.
+    log(`[restart] the Node check failed: ${err instanceof Error ? err.message : String(err)}\n`);
+    heldBack = 'Castwright could not check that your Node can run the new release.';
   }
   let candidate;
   try {

@@ -146,7 +146,7 @@ test('the guard check itself failing fails safe to the previous release', async 
     assert.equal(result.action, 'rolled-back');
     assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.15.0');
     assert.equal(launched[0].pointer, '1.15.0');
-    assert.match(readState(root).error, /could not check that your Node can run it/);
+    assert.match(readState(root).error, /could not check that your Node can run the new release/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
@@ -263,6 +263,44 @@ test('neither pointer writer deletes .current-version before the rename (P4-2)',
     const src = readFileSync(resolve(here, ...rel), 'utf8');
     assert.ok(src.includes('renameSync(tmp, pointer)'), `${rel.at(-1)} still renames over the pointer`);
     assert.doesNotMatch(src, /rmSync\(pointer/, `${rel.at(-1)} must not delete the pointer first`);
+  }
+});
+
+test('off Windows a failing check is not a hold-back and never loads the lists (P4-3)', async () => {
+  const root = fakeInstall();
+  try {
+    const { result } = await drive(root, {
+      version: AFFECTED,
+      platform: 'linux',
+      loadRanges: () => {
+        throw new Error('must not be called');
+      },
+    });
+    assert.equal(result.action, 'proceed');
+    assert.equal(readFileSync(join(root, '.current-version'), 'utf8'), '1.16.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('a failed check stores a fixed path-free sentence, the raw message only goes to the log (P4-3)', async () => {
+  const root = fakeInstall();
+  const raw = "ENOENT: no such file or directory, open 'C:\\Users\\someone\\releases\\v1.16.0\\package.json'";
+  try {
+    const { out } = await drive(root, {
+      version: FIXED,
+      loadRanges: () => {
+        throw new Error(raw);
+      },
+    });
+    const state = readState(root);
+    for (const text of [state.error, state.errorLan]) {
+      assert.doesNotMatch(text, /someone|ENOENT|package\.json/);
+      assert.match(text, /Castwright could not check that your Node can run the new release\./);
+    }
+    assert.match(out.join(''), /someone/, 'the raw detail is still logged');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
   }
 });
 
