@@ -6,6 +6,7 @@
 
 import { spawnSync } from 'node:child_process';
 import {
+  copyFileSync,
   mkdtempSync,
   readFileSync,
   rmSync,
@@ -21,6 +22,8 @@ import {
   decodeAudioFileToPcm,
   decodeAudioToPcm,
   encodePcmToAudio,
+  fixLameEncoderDelay,
+  fixLameEncoderDelayInFile,
   mp3StartPadShortfall,
   writeChapterLufsFile,
   writeChapterPeaksFile,
@@ -251,6 +254,24 @@ const HEAD_9_1_REMUX = Buffer.from(
    45-byte ID3v2 block: ID3 + 4 header + 9 side info + 8 tag/flags + 112 fields. */
 const ENC_24K_MONO = 45 + 4 + 9 + 8 + 112;
 const delayAt = (b: Buffer, enc: number): number => (b[enc + 21] << 4) | (b[enc + 22] >> 4);
+const storedCrcAt = (b: Buffer, enc: number): number => b.readUInt16BE(enc + 34);
+/* The tag CRC both LAME and ffmpeg's muxer write: CRC-16 (poly 0x8005
+   reflected, init 0) over the first 190 bytes of the tag frame, its own two
+   bytes (34 past the encoder string) and anything past a shorter frame's end
+   read as zero. The frame length comes from the MPEG-2/2.5 header (72 * kbit/s
+   / rate) that every 24 kHz and lower file in this suite carries. */
+function tagCrc(b: Buffer, frameStart: number, enc: number): number {
+  const kbps = [0, 8, 16, 24, 32, 40, 48, 56, 64, 80, 96, 112, 128, 144, 160][b[frameStart + 2] >> 4];
+  const rate = { 0: 22050, 1: 24000, 2: 16000 }[(b[frameStart + 2] >> 2) & 3] ?? 8000;
+  const mpeg25 = ((b[frameStart + 1] >> 3) & 3) === 0;
+  const frameLen = Math.floor((72 * kbps * 1000) / (mpeg25 ? rate / 2 : rate)) + ((b[frameStart + 2] >> 1) & 1);
+  let crc = 0;
+  for (let i = frameStart; i < frameStart + 190; i++) {
+    crc ^= i >= frameStart + frameLen || i === enc + 34 || i === enc + 35 ? 0 : b[i];
+    for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >> 1) ^ 0xa001 : crc >> 1;
+  }
+  return crc;
+}
 /* An ID3v2.4 block of `bodyBytes` zero padding (e.g. a cover) in place of the
    45-byte one a real encode starts with. */
 function withBigId3(mp3: Buffer, bodyBytes: number): Buffer {
@@ -309,6 +330,52 @@ describe('mp3StartPadShortfall (#4573)', () => {
     const big = withBigId3(HEAD_9_1_XING, 11_000);
     expect(big.indexOf('Xing')).toBeGreaterThan(2048);
     expect(mp3StartPadShortfall(big)).toBe(529);
+  });
+});
+
+describe('fixLameEncoderDelay (#4573)', () => {
+  it('the CRC routine reproduces the one the real encoders wrote', () => {
+    for (const head of [HEAD_8_1_XING, HEAD_9_1_XING, HEAD_9_1_INFO, HEAD_9_1_REMUX]) {
+      expect(tagCrc(head, 45, ENC_24K_MONO)).toBe(storedCrcAt(head, ENC_24K_MONO));
+    }
+  });
+
+  it('the CRC routine reproduces the ones ffmpeg 9.1 wrote at 16 and 8 kHz (shorter frames)', () => {
+    for (const khz of [24, 16, 8]) {
+      const mp3 = readFileSync(toneFixture(khz));
+      expect(storedCrcAt(mp3, ENC_24K_MONO)).toBe(tagCrc(mp3, 45, ENC_24K_MONO));
+      // and the fix re-derives the very same function over the changed bytes
+      const fixed = fixLameEncoderDelay(mp3.subarray(0, 600))!;
+      expect(storedCrcAt(fixed, ENC_24K_MONO)).toBe(tagCrc(fixed, 45, ENC_24K_MONO));
+    }
+  });
+
+  it('rewrites 9.1 delay 47 to 576 and recomputes the tag CRC, touching nothing else', () => {
+    for (const head of [HEAD_9_1_XING, HEAD_9_1_INFO, HEAD_9_1_REMUX]) {
+      const fixed = fixLameEncoderDelay(head)!;
+      expect(fixed).not.toBeNull();
+      expect(delayAt(fixed, ENC_24K_MONO)).toBe(576);
+      expect(mp3StartPadShortfall(fixed)).toBe(0);
+      expect(storedCrcAt(fixed, ENC_24K_MONO)).toBe(tagCrc(fixed, 45, ENC_24K_MONO));
+      const changed = [...fixed.keys()].filter((i) => fixed[i] !== head[i]);
+      const enc = ENC_24K_MONO;
+      expect(changed.every((i) => [enc + 21, enc + 22, enc + 34, enc + 35].includes(i))).toBe(true);
+      // the 12-bit padding sharing a byte with the delay is preserved
+      expect(fixed[enc + 22] & 0x0f).toBe(head[enc + 22] & 0x0f);
+      expect(fixed[enc + 23]).toBe(head[enc + 23]);
+    }
+  });
+
+  it('fixes a tag behind a large ID3v2 block', () => {
+    const fixed = fixLameEncoderDelay(withBigId3(HEAD_9_1_XING, 11_000))!;
+    expect(fixed).not.toBeNull();
+    expect(mp3StartPadShortfall(fixed)).toBe(0);
+  });
+
+  it('returns null - nothing to fix - for a correct tag, libshine and non-MP3 input', () => {
+    expect(fixLameEncoderDelay(HEAD_8_1_XING)).toBeNull();
+    expect(fixLameEncoderDelay(HEAD_SHINE)).toBeNull();
+    expect(fixLameEncoderDelay(Buffer.from('RIFF....WAVEfmt ', 'latin1'))).toBeNull();
   });
 });
 
@@ -381,6 +448,73 @@ describeIfFfmpeg('decode helpers on a file carrying 9.1\'s wrong encoder delay (
     }
   });
 
+  it('decodes a file whose tag was fixed exactly like the trim does, on this ffmpeg too', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-fixfile-'));
+    try {
+      const file = join(dir, 'fixed.mp3');
+      copyFileSync(toneFixture(24), file);
+      await fixLameEncoderDelayInFile(file);
+      expect(mp3StartPadShortfall(readFileSync(file))).toBe(0);
+      const fixed = await decodeAudioFileToPcm(file, 24_000);
+      const trimmed = await decodeAudioFileToPcm(toneFixture(24), 24_000);
+      expect(fixed.length / 2).toBe(24_000);
+      expect(trimmed.length).toBe(fixed.length);
+      expect(onsetSample(fixed)).toBe(onsetSample(trimmed));
+      expect(Math.abs(onsetSample(fixed) - 6000)).toBeLessThanOrEqual(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('fixLameEncoderDelayInFile leaves a correctly tagged file byte-identical', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-noop-'));
+    try {
+      const file = join(dir, 'ok.mp3');
+      writeFileSync(file, await encodePcmToAudio(sinePcm(24_000, 0.5), 24_000, { quality: 2 }));
+      const before = readFileSync(file);
+      await fixLameEncoderDelayInFile(file);
+      expect(readFileSync(file).equals(before)).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describeIfFfmpeg('encodePcmToAudio writes the correct LAME encoder delay (#4573)', () => {
+  const sampleRate = 24_000;
+  /* 1 s of tone then 2 s of dead silence. */
+  const pcm = Buffer.concat([sinePcm(sampleRate, 1.0), Buffer.alloc(sampleRate * 2)]);
+
+  it('stamps delay 576 and a valid tag CRC, so a decode is exact', async () => {
+    const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
+    expect(delayAt(mp3, ENC_24K_MONO)).toBe(576);
+    expect(storedCrcAt(mp3, ENC_24K_MONO)).toBe(tagCrc(mp3, 45, ENC_24K_MONO));
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-enc-delay-'));
+    try {
+      const file = join(dir, 'a.mp3');
+      writeFileSync(file, mp3);
+      expect((await decodeAudioFileToPcm(file, sampleRate)).length).toBe(pcm.length);
+      if (ffprobePresent) {
+        const probe = spawnSync(
+          'ffprobe',
+          ['-v', 'error', '-select_streams', 'a:0', '-show_packets', '-read_intervals', '%+#1', '-show_entries', 'packet_side_data=skip_samples', '-of', 'csv=p=0', file],
+          { encoding: 'utf8', windowsHide: true },
+        );
+        // ffmpeg reports delay + its own 529 as the samples to skip: 576 + 529
+        expect(probe.stdout).toContain('1105');
+      }
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  it('decodes the pipe form sample-aligned to the source', async () => {
+    const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
+    const out = await decodeAudioToPcm(mp3, sampleRate);
+    let peak = 0;
+    for (let i = sampleRate; i < sampleRate * 2; i++) peak = Math.max(peak, Math.abs(out.readInt16LE(i * 2)));
+    expect(peak).toBeLessThan(200);
+  });
 });
 
 /* writeChapterPeaksFile coverage (plan 56). No ffmpeg dependency — this is

@@ -422,6 +422,7 @@ export async function encodePcmToAudio(
   if (mp3OutPath) {
     try {
       encoded = await readFile(mp3OutPath);
+      fixLameEncoderDelayInPlace(encoded);
     } finally {
       await unlink(mp3OutPath).catch(() => {});
     }
@@ -597,6 +598,43 @@ export function mp3StartPadShortfall(head: Buffer): number {
   return tag ? LAME_ENCODER_DELAY - tag.delay : 0;
 }
 
+/* The tag's CRC: CRC-16 (poly 0x8005 reflected, init 0) over the first 190
+   bytes of the tag frame, with the CRC field itself (34 bytes after the
+   encoder string) and anything past the end of a shorter frame read as zero.
+   Matches what both LAME and ffmpeg's muxer write. */
+const LAME_TAG_CRC_SPAN = 190;
+function lameTagCrc(b: Buffer, tag: LameTag): number {
+  const crcAt = tag.enc + 34;
+  const end = tag.frameStart + Math.min(LAME_TAG_CRC_SPAN, tag.frameLen);
+  let crc = 0;
+  for (let i = tag.frameStart; i < tag.frameStart + LAME_TAG_CRC_SPAN; i++) {
+    crc ^= i >= end || i === crcAt || i === crcAt + 1 ? 0 : b[i];
+    for (let k = 0; k < 8; k++) crc = crc & 1 ? (crc >> 1) ^ 0xa001 : crc >> 1;
+  }
+  return crc;
+}
+
+/** Return a copy of `head` (an MP3's ID3v2 block plus its Xing frame) with the
+    wrong LAME encoder delay set to 576 and the tag CRC recomputed, or null when
+    the tag needs no fix (#4573). */
+export function fixLameEncoderDelay(head: Buffer): Buffer | null {
+  const tag = parseWrongLameTag(head);
+  if (!tag) return null;
+  const crcAt = tag.enc + 34;
+  if (tag.frameStart + LAME_TAG_CRC_SPAN > head.length) return null;
+  const fixed = Buffer.from(head);
+  fixed[tag.enc + 0x15] = LAME_ENCODER_DELAY >> 4;
+  fixed[tag.enc + 0x16] = ((LAME_ENCODER_DELAY & 0xf) << 4) | (head[tag.enc + 0x16] & 0xf);
+  fixed.writeUInt16BE(lameTagCrc(fixed, tag), crcAt);
+  return fixed;
+}
+
+/* Fix a whole encoded MP3 in place (see `fixLameEncoderDelay`). */
+function fixLameEncoderDelayInPlace(mp3: Buffer): void {
+  const fixed = fixLameEncoderDelay(mp3.subarray(0, mp3HeadLength(mp3)));
+  if (fixed) fixed.copy(mp3, 0);
+}
+
 /* Read the ID3v2 block and the Xing frame behind it from the front of a file. */
 async function readMp3Head(path: string): Promise<Buffer> {
   const fh = await open(path, 'r');
@@ -606,6 +644,20 @@ async function readMp3Head(path: string): Promise<Buffer> {
     const buf = Buffer.alloc(mp3HeadLength(first.subarray(0, bytesRead)));
     const read = await fh.read(buf, 0, buf.length, 0);
     return buf.subarray(0, read.bytesRead);
+  } finally {
+    await fh.close();
+  }
+}
+
+/** Fix an MP3 file on disk in place (see `fixLameEncoderDelay`). Only the head
+    is read and rewritten, and a file that needs no fix is not touched. For
+    files another tool wrote, e.g. the `-c:a copy` remux in `id3-tags.ts`. */
+export async function fixLameEncoderDelayInFile(path: string): Promise<void> {
+  const fixed = fixLameEncoderDelay(await readMp3Head(path));
+  if (!fixed) return;
+  const fh = await open(path, 'r+');
+  try {
+    await fh.write(fixed, 0, fixed.length, 0);
   } finally {
     await fh.close();
   }
