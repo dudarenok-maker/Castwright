@@ -23,7 +23,7 @@
    /api/upgrade/state. An upgrade never leaves nothing running. */
 
 import { spawn } from 'node:child_process';
-import { chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
+import { appendFileSync, chmodSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
@@ -33,6 +33,9 @@ import { findCrashRange, loadCrashRanges, loadNodeMinimum, nodeRuntimeRefusal, p
 /* Where the server keeps its upgrade state: server/src/upgrade/paths.ts
    (stagingDir + stateFile); a test pins the two together. */
 export const UPGRADE_STATE_PATH = ['.upgrade-staging', 'state.json'];
+
+/** The restarter's failure log, in the install's shared logs/ dir. */
+export const UPGRADE_RESTART_LOG = 'upgrade-restart.log';
 
 // Re-exported for any existing caller importing pidIsAlive from this module
 // directly — the fail-safe implementation itself now lives in
@@ -223,21 +226,35 @@ export async function runRestart({
     : resolve(dirname(fileURLToPath(import.meta.url)), '..');
   const timeoutMs = Number(env.UPGRADE_TIMEOUT_MS ?? 60000);
   const launcher = join(installRoot, 'launch.mjs');
+  // apply spawns this process with stdio ignored, so stderr reaches nobody:
+  // every failure line is ALSO appended to <logDir>/upgrade-restart.log (the
+  // launcher's APP_LOG_DIR, else <install>/logs). A log that cannot be written
+  // never stops the relaunch.
+  const logFile = join(env.APP_LOG_DIR ? resolve(env.APP_LOG_DIR) : join(installRoot, 'logs'), UPGRADE_RESTART_LOG);
+  const record = (text) => {
+    stderr(text);
+    try {
+      mkdirSync(dirname(logFile), { recursive: true });
+      appendFileSync(logFile, `${new Date().toISOString()} ${text}`);
+    } catch {
+      /* best effort */
+    }
+  };
 
   if (Number.isFinite(oldPid)) {
     stdout(`[restart] waiting for old server pid=${oldPid} to exit (<=${timeoutMs}ms)\n`);
     const exited = await wait({ pid: oldPid, timeoutMs });
     if (!exited) {
-      stderr(`[restart] old server pid=${oldPid} still alive after ${timeoutMs}ms — launching anyway (start-app-prod will skip if the port is held)\n`);
+      record(`[restart] old server pid=${oldPid} still alive after ${timeoutMs}ms — launching anyway (start-app-prod will skip if the port is held)\n`);
     }
   }
 
   // The launcher ALWAYS spawns: an upgrade must never leave nothing running.
   let result;
   try {
-    result = guard({ installRoot, version, platform, env, execPath, loadRanges, loadMinimum, log: stderr });
+    result = guard({ installRoot, version, platform, env, execPath, loadRanges, loadMinimum, log: record });
   } catch (err) {
-    stderr(`[restart] the Node check failed, launching anyway: ${err instanceof Error ? err.message : String(err)}\n`);
+    record(`[restart] the Node check failed, launching anyway: ${err instanceof Error ? err.message : String(err)}\n`);
     result = { action: 'proceed' };
   }
 

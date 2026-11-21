@@ -7,7 +7,7 @@ import { chmodSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, wr
 import { tmpdir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { UPGRADE_STATE_PATH, runRestart, waitForExit } from '../restart-after-upgrade.mjs';
+import { UPGRADE_RESTART_LOG, UPGRADE_STATE_PATH, runRestart, waitForExit } from '../restart-after-upgrade.mjs';
 
 const noSleep = async () => {};
 
@@ -371,6 +371,54 @@ test('a release whose crash-range list is not an array is skipped (P5-3)', async
   try {
     const { result } = await drive(root, { version: AFFECTED });
     assert.equal(result.to, '1.14.0');
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('failure lines are appended to upgrade-restart.log in APP_LOG_DIR as well as stderr (P5-4)', async () => {
+  const root = fakeInstall();
+  const logDir = mkdtempSync(join(tmpdir(), 'castwright-restart-logs-'));
+  try {
+    const { launched, out } = await drive(root, {
+      version: AFFECTED,
+      env: { APP_LOG_DIR: logDir },
+      guard: () => {
+        throw new Error('boom');
+      },
+    });
+    const logged = readFileSync(join(logDir, UPGRADE_RESTART_LOG), 'utf8');
+    assert.match(logged, /the Node check failed, launching anyway: boom/);
+    assert.match(out.join(''), /boom/, 'stderr still gets it');
+    assert.equal(launched.length, 1);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+    rmSync(logDir, { recursive: true, force: true });
+  }
+});
+
+test('the guard log lines (failed pointer write) reach the file too, default <install>/logs (P5-4)', async () => {
+  const root = fakeInstall();
+  mkdirSync(join(root, '.current-version.tmp'), { recursive: true });
+  try {
+    await drive(root, { version: AFFECTED });
+    assert.match(readFileSync(join(root, 'logs', UPGRADE_RESTART_LOG), 'utf8'), /could not switch back to v1\.15\.0/);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test('an unwritable log never stops the relaunch (P5-4)', async () => {
+  const root = fakeInstall();
+  writeFileSync(join(root, 'logs'), 'a file where the log dir should be'); // mkdir / append throw
+  try {
+    const { launched } = await drive(root, {
+      version: AFFECTED,
+      guard: () => {
+        throw new Error('boom');
+      },
+    });
+    assert.equal(launched.length, 1);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
