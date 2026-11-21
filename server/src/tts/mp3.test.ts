@@ -5,9 +5,17 @@
    hint from scripts/start-app.ps1 preflight). */
 
 import { spawnSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, rmSync, existsSync, readdirSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  existsSync,
+  readdirSync,
+  writeFileSync,
+} from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { describe, it, expect, vi } from 'vitest';
 import {
   decodeAudioFileToPcm,
@@ -191,68 +199,188 @@ if (!ffmpegPresent) {
   );
 }
 
-/* #4573 - the Xing/Info + LAME tag head of a real 2 s / 24 kHz mono encode, as
-   written by ffmpeg 8.1.1 (Lavc62.28) and 9.1 (Lavc63.24). Identical but for
-   the 12-bit encoder-delay field: 576 vs 47 (0x2403c0 vs 0x02f3c0). */
-const TAG_HEAD_PREFIX =
-  '49443304000000000023545353450000000f0000034c61766636' + '322e31322e3130310000000000000000000000';
-const XING_FRAME_TAIL =
-  '58696e670000000f0000005600001260001f292f3135383c3c3e42464a4d505054575b5e616565686c6f727679797d8183878a8e8e9094989b9fa3a3a5a9adb0b4c3c9c9cacbcdcecfd0d0d2d3d4d6d7d8d8dadbdcdedfe0e0e1e3e4e5e7e8e8e9ebecedeff0f0f1f2f4f5f6f8f8f9fafcfdfeff00000000';
-function tagHead(encoder: string, delayPad: string): Buffer {
-  return Buffer.from(
-    `${TAG_HEAD_PREFIX}fff384c0000000000000000000${XING_FRAME_TAIL}${encoder}000000000000000000000000${delayPad}0000000000001260`,
-    'hex',
-  );
+/* #4573 - the first 240 bytes (ID3v2 block + Xing/Info frame) of real encodes,
+   captured from each tool. */
+/* ffmpeg 8.1.1 libmp3lame, 24 kHz mono VBR (Xing): encoder delay 576, the honest value. */
+const HEAD_8_1_XING = Buffer.from(
+  '49443304000000000023545353450000000f0000034c61766636322e31322e3130310000000000000000000000fff384c000' +
+  '000000000000000058696e670000000f00000017000009f000393939394d4d4d4d56565656565e5e5e5e636363636a6a6a6a' +
+  '6a71717171787878788080808080878787878e8e8e8e95959595959a9a9a9aa1a1a1a1a9a9a9a9a9b0b0b0b0b7b7b7b7bebe' +
+  'bebebec6c6c6c6cdcdcdcdd4d4d4d4d4f1f1f1f1ffffffff000000004c61766336322e323800000000000000000000000024' +
+  '02a000000000000009f08d7b07e70000000000000000000000000000000000000000000000fff3c4',
+  'hex',
+);
+/* ffmpeg 9.1 libmp3lame, same input: encoder delay 47 (576 - 529). */
+const HEAD_9_1_XING = Buffer.from(
+  '49443304000000000023545353450000000f0000034c61766636332e31362e3130300000000000000000000000fff384c400' +
+  '000000000000000058696e670000000f00000017000009f000393939394d4d4d4d56565656565e5e5e5e636363636a6a6a6a' +
+  '6a71717171787878788080808080878787878e8e8e8e95959595959a9a9a9aa1a1a1a1a9a9a9a9a9b0b0b0b0b7b7b7b7bebe' +
+  'bebebec6c6c6c6cdcdcdcdd4d4d4d4d4f1f1f1f1ffffffff000000004c61766336332e323400000000000000000000000002' +
+  'f2a000000000000009f0ccbebb5c0000000000000000000000000000000000000000000000fff3c4',
+  'hex',
+);
+/* ffmpeg 9.1 libmp3lame, 24 kHz mono CBR 64k (Info tag): encoder delay 47. */
+const HEAD_9_1_INFO = Buffer.from(
+  '49443304000000000023545353450000000f0000034c61766636332e31362e3130300000000000000000000000fff384c400' +
+  '0000000000000000496e666f0000000f00000017000012000015151515202020202a2a2a2a2a35353535404040404a4a4a4a' +
+  '4a55555555606060606a6a6a6a6a75757575808080808a8a8a8a8a95959595a0a0a0a0aaaaaaaaaab5b5b5b5c0c0c0c0caca' +
+  'cacacad5d5d5d5e0e0e0e0eaeaeaeaeaf5f5f5f5ffffffff000000004c61766336332e323400000000000000000000000002' +
+  'f2a00000000000001200256bafd20000000000000000000000000000000000000000000000fff384',
+  'hex',
+);
+/* ffmpeg libshine, 24 kHz mono: a Lavc tag with encoder delay 0 (not LAME). */
+const HEAD_SHINE = Buffer.from(
+  '49443304000000000023545353450000000f0000034c61766636322e31322e3130310000000000000000000000fffb58c000' +
+  '00000000000000000000000000000000496e666f0000000f0000000e000010e0002222222222222233333333333333444444' +
+  '44444444555555555555556666666666666677777777777777888888888888889999999999999999aaaaaaaaaaaaaabbbbbb' +
+  'bbbbbbbbccccccccccccccddddddddddddddeeeeeeeeeeeeeeffffffffffffff000000004c61766336322e32380000000000' +
+  '0000000000000000000000000000000010e0a355fc1c000000000000000000000000000000000000',
+  'hex',
+);
+/* ffmpeg 9.1 `-c copy` remux of HEAD_9_1_XING: a Lavf string, delay still 47. */
+const HEAD_9_1_REMUX = Buffer.from(
+  '49443304000000000023545353450000000f0000034c61766636332e31362e3130300000000000000000000000fff384c400' +
+  '000000000000000058696e670000000f00000017000009f000393939394d4d4d4d56565656565e5e5e5e636363636a6a6a6a' +
+  '6a71717171787878788080808080878787878e8e8e8e95959595959a9a9a9aa1a1a1a1a9a9a9a9a9b0b0b0b0b7b7b7b7bebe' +
+  'bebebec6c6c6c6cdcdcdcdd4d4d4d4d4f1f1f1f1ffffffff000000004c617666000000000000000000000000000000000002' +
+  'f2a000000000000009f0ccbe2d9f0000000000000000000000000000000000000000000000fff3c4',
+  'hex',
+);
+
+/* Where the encoder string sits in a 24 kHz mono Xing/Info frame behind a
+   45-byte ID3v2 block: ID3 + 4 header + 9 side info + 8 tag/flags + 112 fields. */
+const ENC_24K_MONO = 45 + 4 + 9 + 8 + 112;
+const delayAt = (b: Buffer, enc: number): number => (b[enc + 21] << 4) | (b[enc + 22] >> 4);
+/* An ID3v2.4 block of `bodyBytes` zero padding (e.g. a cover) in place of the
+   45-byte one a real encode starts with. */
+function withBigId3(mp3: Buffer, bodyBytes: number): Buffer {
+  const header = Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]);
+  header[6] = (bodyBytes >> 21) & 0x7f;
+  header[7] = (bodyBytes >> 14) & 0x7f;
+  header[8] = (bodyBytes >> 7) & 0x7f;
+  header[9] = bodyBytes & 0x7f;
+  return Buffer.concat([header, Buffer.alloc(bodyBytes), mp3.subarray(id3v2TagLength(mp3))]);
 }
-const LAVC_8_1 = '4c61766336322e3238'; // "Lavc62.28"
-const LAVC_9_1 = '4c61766336332e3234'; // "Lavc63.24"
 
 describe('mp3StartPadShortfall (#4573)', () => {
-  it('reads 0 for the ffmpeg 8.x tag (delay 576, the honest value)', () => {
-    expect(mp3StartPadShortfall(tagHead(LAVC_8_1, '2403c0'))).toBe(0);
+  it('reads 0 for the ffmpeg 8.1.1 tag (delay 576, the honest value)', () => {
+    expect(delayAt(HEAD_8_1_XING, ENC_24K_MONO)).toBe(576);
+    expect(mp3StartPadShortfall(HEAD_8_1_XING)).toBe(0);
   });
 
   it('reads 529 for the ffmpeg 9.1 tag (delay 47 - decoders trim 529 samples short)', () => {
-    expect(mp3StartPadShortfall(tagHead(LAVC_9_1, '02f3c0'))).toBe(529);
+    expect(delayAt(HEAD_9_1_XING, ENC_24K_MONO)).toBe(47);
+    expect(mp3StartPadShortfall(HEAD_9_1_XING)).toBe(529);
   });
 
-  it('reads 0 for a head with no Xing/Info tag, or a foreign encoder string', () => {
+  it('reads an Info tag (9.1 writes one for CBR at low rates), delay 47 -> 529', () => {
+    expect(HEAD_9_1_INFO.includes('Info')).toBe(true);
+    expect(mp3StartPadShortfall(HEAD_9_1_INFO)).toBe(529);
+  });
+
+  it('reads 0 for a non-LAME ffmpeg encoder that writes a Lavc tag with delay 0', () => {
+    expect(HEAD_SHINE.includes('Lavc')).toBe(true);
+    expect(mp3StartPadShortfall(HEAD_SHINE)).toBe(0);
+  });
+
+  it('reads a Lavf string - a `-c copy` remux of a 9.1 file keeps delay 47', () => {
+    expect(HEAD_9_1_REMUX.includes('Lavf\0')).toBe(true);
+    expect(mp3StartPadShortfall(HEAD_9_1_REMUX)).toBe(529);
+  });
+
+  it('honours the Xing flags: a tag without its TOC puts the encoder string 100 bytes earlier', () => {
+    const noToc = Buffer.from(HEAD_9_1_XING);
+    const flagsAt = 45 + 4 + 9 + 4;
+    noToc[flagsAt + 3] = 0x0b; // frames + bytes + quality, no TOC
+    const tocAt = flagsAt + 4 + 8;
+    const trimmed = Buffer.concat([noToc.subarray(0, tocAt), noToc.subarray(tocAt + 100)]);
+    expect(mp3StartPadShortfall(trimmed)).toBe(529);
+  });
+
+  it('reads 0 for a head with no Xing/Info tag, a foreign encoder string, or a truncated head', () => {
     expect(mp3StartPadShortfall(Buffer.from('RIFF....WAVEfmt ', 'latin1'))).toBe(0);
-    expect(mp3StartPadShortfall(tagHead('5a5a5a5a5a5a5a5a5a', '02f3c0'))).toBe(0);
+    const foreign = Buffer.from(HEAD_9_1_XING);
+    foreign.write('ZZZZ', ENC_24K_MONO, 'latin1');
+    expect(mp3StartPadShortfall(foreign)).toBe(0);
+    expect(mp3StartPadShortfall(HEAD_9_1_XING.subarray(0, 100))).toBe(0);
+  });
+
+  it('finds the tag behind an ID3v2 block far larger than the old 2048-byte head (cover art)', () => {
+    const big = withBigId3(HEAD_9_1_XING, 11_000);
+    expect(big.indexOf('Xing')).toBeGreaterThan(2048);
+    expect(mp3StartPadShortfall(big)).toBe(529);
   });
 });
 
-describeIfFfmpeg('decodeAudioToPcm / decodeAudioFileToPcm lead-in alignment (#4573)', () => {
-  const sampleRate = 24_000;
-  /* 1 s of tone then 1 s of dead silence. A decode that keeps a lead-in lets the
-     tone bleed into the second half; a correct one leaves it silent. */
-  const pcm = Buffer.concat([sinePcm(sampleRate, 1.0), Buffer.alloc(sampleRate * 2)]);
-  function peak(buf: Buffer, fromSec: number, toSec: number): number {
-    let m = 0;
-    for (let i = Math.round(fromSec * sampleRate); i < Math.round(toSec * sampleRate); i++) {
-      m = Math.max(m, Math.abs(buf.readInt16LE(i * 2)));
-    }
-    return m;
-  }
+/* A 1 s clip at 24 / 16 / 8 kHz - 0.25 s silence, 0.5 s 440 Hz tone, 0.25 s
+   silence - encoded by ffmpeg 9.1 (libmp3lame -q:a 2) and committed raw, so the
+   decode-side tests run on any ffmpeg: each carries the wrong delay 47. */
+const toneFixture = (khz: number): string =>
+  fileURLToPath(new URL(`../__fixtures__/ffmpeg91-lead-in/tone-${khz}k.mp3`, import.meta.url));
+/* First sample louder than the ramp-free silence around the tone. */
+function onsetSample(pcm: Buffer): number {
+  for (let i = 0; i < pcm.length / 2; i++) if (Math.abs(pcm.readInt16LE(i * 2)) > 3000) return i;
+  return -1;
+}
 
-  it('decodes the pipe form sample-aligned to the source', async () => {
-    const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
-    const out = await decodeAudioToPcm(mp3, sampleRate);
-    expect(peak(out, 1.0, 2.0)).toBeLessThan(200);
+describeIfFfmpeg('decode helpers on a file carrying 9.1\'s wrong encoder delay (#4573)', () => {
+  /* The shortfall is in the MP3's own samples, so it must be rescaled to the
+     decode's output rate: an unscaled trim cuts real audio at 16 kHz and leaves
+     lead-in at 24 -> 48 kHz and below the source rate. */
+  const RATES: Array<[number, number]> = [
+    [24, 16],
+    [24, 48],
+    [16, 24],
+    [8, 24],
+    [24, 24],
+  ];
+
+  it.each(RATES)('pipe form, %i kHz stream decoded at %i kHz, keeps the onset on the source sample', async (inK, outK) => {
+    const mp3 = readFileSync(toneFixture(inK));
+    expect(mp3StartPadShortfall(mp3)).toBe(529);
+    const out = await decodeAudioToPcm(mp3, outK * 1000);
+    expect(Math.abs(onsetSample(out) - outK * 250)).toBeLessThanOrEqual(3);
   });
 
-  it('decodes the file form sample-aligned to the source', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'mp3-align-'));
+  it.each(RATES)('file form, %i kHz stream decoded at %i kHz, keeps the onset and the length', async (inK, outK) => {
+    const out = await decodeAudioFileToPcm(toneFixture(inK), outK * 1000);
+    expect(Math.abs(onsetSample(out) - outK * 250)).toBeLessThanOrEqual(3);
+    expect(Math.abs(out.length / 2 - outK * 1000)).toBeLessThanOrEqual(8);
+  });
+
+  it('finds the tag behind a cover-sized ID3v2 block in both forms', async () => {
+    const big = withBigId3(readFileSync(toneFixture(24)), 11_000);
+    expect(mp3StartPadShortfall(big)).toBe(529);
+    const pipe = await decodeAudioToPcm(big, 24_000);
+    expect(Math.abs(onsetSample(pipe) - 6000)).toBeLessThanOrEqual(3);
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-bigid3-'));
     try {
-      const file = join(dir, 'a.mp3');
-      writeFileSync(file, await encodePcmToAudio(pcm, sampleRate, { quality: 2 }));
-      const out = await decodeAudioFileToPcm(file, sampleRate);
-      expect(peak(out, 1.0, 2.0)).toBeLessThan(200);
-      expect(out.length).toBe(pcm.length);
+      const file = join(dir, 'big.mp3');
+      writeFileSync(file, big);
+      const out = await decodeAudioFileToPcm(file, 24_000);
+      expect(Math.abs(onsetSample(out) - 6000)).toBeLessThanOrEqual(3);
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
   });
+
+  it('keeps a `-c copy` remux (Lavf string, delay still 47) aligned', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'mp3-remux-'));
+    try {
+      const out = join(dir, 'remux.mp3');
+      const r = spawnSync(
+        'ffmpeg',
+        ['-y', '-loglevel', 'error', '-i', toneFixture(24), '-c:a', 'copy', '-f', 'mp3', out],
+        { windowsHide: true },
+      );
+      expect(r.status).toBe(0);
+      const pcm = await decodeAudioFileToPcm(out, 24_000);
+      expect(Math.abs(onsetSample(pcm) - 6000)).toBeLessThanOrEqual(3);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
 });
 
 /* writeChapterPeaksFile coverage (plan 56). No ffmpeg dependency — this is
