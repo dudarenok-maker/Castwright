@@ -10,7 +10,9 @@
    primitives (`buildSentenceGroups`, `buildCastResolver`,
    `resolveCharacterEngine`, `resolveCharacterQwenTier`,
    `computeQwenKokoroFallbackSet`, `resolveNarratorCharacterId`) rather than
-   re-implementing any of them. Nothing calls it yet. */
+   re-implementing any of them. Its callers are `computeRunQwenNeeds`
+   (`qwen-run-needs.ts`, the generation path's run-start and post-score keep)
+   and the parity test. */
 
 import type { SentenceOutput } from '../handoff/schemas.js';
 import { buildCastResolver } from '../store/cast-resolve.js';

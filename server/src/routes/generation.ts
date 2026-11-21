@@ -234,9 +234,11 @@ export async function triggerScoring(ctx: {
   /** #4560 — the full cast's tiers: the union's fall-back when a live same-book job declared no
       `tierNeeds`. Defaults to `keep`. */
   fullCastKeep?: { keep06: boolean; keep17: boolean };
-  /** Full-cast-superset tier set, supplied by the chapter-finalize path
-      protects an in-flight sibling chapter's tier, see the reconcile comment below;
-      the reconcile is also skipped while other work is active, #4445). Omitted by the resume route, which
+  /** The tier set the chapter-finalize path supplies: this run's keep at its start (the book's
+      unfinished chapters' needs, K(book), #1393). Used verbatim when `recomputeKeep` is absent
+      (it protects an in-flight sibling chapter's tier, see the reconcile comment below; the
+      reconcile is also skipped while other work is active, #4445), and as the post-score
+      fall-back when the recomputed needs are empty. Omitted by the resume route, which
       has no live run to derive a superset from and instead reconciles
       against scoreBook's own precise usedQwenTiers, and only while no render,
       splice or QA repair, or another book's score pass, is active anywhere (#4235) — the reconcile acts on the
@@ -419,9 +421,10 @@ export async function afterChapterFinalized(ctx: {
       `scoringInFlight`). See the write below and `scoreBook` in
       aggregate.ts for the full rationale. */
   justFinalized: { id: number; slug: string };
-  /** The Qwen base tier(s) this run's FULL cast uses (elevate-only, same as
-      routeFor) — computed once at run start and threaded here so the post-
-      audition reconcile evicts only tiers NO chapter of this book will use.
+  /** The Qwen base tier(s) this book's unfinished chapters use at this run's start (K(book):
+      elevate-only like routeFor, narrowed to the chapters still to render, #1393) — computed once
+      and threaded here so the post-audition reconcile evicts only tiers NO chapter of this book
+      will use.
       NOT derived from the finalized-chapters-only score pass, which can't see
       an in-flight sibling chapter's tier (the Finding-2 race). */
   keep: { keep06: boolean; keep17: boolean };
@@ -2650,15 +2653,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   /* Run-start VRAM hygiene: evict any resident Qwen base tier this run won't
      use, so a pure-1.7B render doesn't co-reside the 0.6B base (~1.2 GB) and
      vice-versa. Runs before this POST's chapter synth (the queue dispatcher
-     sends one POST per chapter, so it re-runs per chapter; the tier target is
-     the same each time, so the in-use tier stays warm across the book — load
-     price paid on chapter 1 only). `computeUsedQwenTiers` resolves the cast's per-character ttsModelKey
-     against the run default with the SAME elevate-only precedence
-     synthesise-chapter's routeFor uses, so a character whose stored tier is
-     stale/lower than the run default can't make this precompute evict the tier
-     routeFor is about to request (which forced a cold mid-run load on chapter 1,
-     defeating the whole point of this precompute). A genuinely mixed-tier book
-     still keeps both. Best-effort; a down / recycling sidecar skips. */
+     sends one POST per chapter, so it re-runs per chapter; each POST's target is
+     K(book), the tiers the book's unfinished chapters will use (`computeRunQwenNeeds`),
+     so a tier stays warm until the last chapter that uses it has rendered and is then
+     freed at a later POST). The needs go through `chapterQwenTierNeeds`, which resolves
+     the cast's per-character ttsModelKey against the run default with the SAME
+     elevate-only precedence synthesise-chapter's routeFor uses, so a character whose
+     stored tier is stale/lower than the run default can't make this precompute evict
+     the tier routeFor is about to request (which forced a cold mid-run load on chapter 1,
+     defeating the whole point of this precompute). `computeUsedQwenTiers` (the whole
+     cast) is only the fall-back when the queue or the helper can't be read. A genuinely
+     mixed-tier book still keeps both. Best-effort; a down / recycling sidecar skips. */
   if (qwenInUse && targetChapters.length > 0 && (usedQwenTiers.keep06 || usedQwenTiers.keep17)) {
     /* #4066 — a run that loads the Quality (1.7B) base also drops an on-GPU
        Kokoro here (owner decision); a run with no 1.7B is unchanged. #1393 —
