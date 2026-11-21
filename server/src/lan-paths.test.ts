@@ -174,9 +174,9 @@ describe('separator-insensitive home matching (#4446 review)', () => {
     expect(textForClient(lan, '/home/ann\\x', o)).toBe('/home/ann\\x');
     expect(textForClient(lan, "'/home/ann'", o)).toBe("'~'");
   });
-  /* Real `dir /x` pairs; the resolver stands in for the filesystem, since real 8.3 names
-     can't be produced on demand. A prefix not in the table resolves to itself, like a
-     path that does not exist. */
+  /* Real `dir /x` pairs; the resolver stands in for the filesystem so every shape is
+     deterministic on any OS (the win32-only test below uses the real one). A prefix not
+     in the table resolves to itself, like a path that does not exist. */
   const fakeFs = (table: Record<string, string>) => {
     const key = (p: string) => p.split(/[\\/]+/).join('\\').toLowerCase();
     const map = new Map(Object.entries(table).map(([k, v]) => [key(k), v]));
@@ -254,14 +254,46 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       const o = { home, platform: 'win32' as const, shortPaths: [`${home}\\no-such-dir\\Temp`] };
       expect(collapseHomePath(`${home}\\x`, o)).toBe('~\\x');
     });
-    it.skipIf(process.platform !== 'win32')('matches the alias the OS itself assigns to a non-ASCII profile', () => {
+    describe('a relocated profile (the alias is checked against the RESOLVED home)', () => {
+      const realHome = 'D:\\Profiles\\Michael Dudarenok';
+      it('collapses the alias when C:\\Users is a junction to another folder', () => {
+        const home = 'C:\\Users\\Michael Dudarenok';
+        const o = at(home, `C:\\Users\\MICHAE~1${temp}`, { [home]: realHome, 'C:\\Users\\MICHAE~1': realHome });
+        expect(collapseHomePath(`C:\\Users\\MICHAE~1${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);
+        expect(collapseHomePath(`${realHome}\\x`, o)).toBe('~\\x');
+        expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
+      });
+      it('collapses the alias when the profile folder is itself a junction', () => {
+        const home = 'C:\\Users\\Michael Dudarenok';
+        const o = at(home, `C:\\Users\\MICHAE~1${temp}`, { [home]: 'D:\\Mike', 'C:\\Users\\MICHAE~1': 'D:\\Mike' });
+        expect(collapseHomePath('C:\\Users\\MICHAE~1\\x', o)).toBe('~\\x');
+        expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
+      });
+      it('collapses the alias when home itself is spelled with an 8.3 ancestor', () => {
+        const home = 'C:\\LONGPA~1\\José García';
+        const longReal = 'C:\\LongPathDir\\José García';
+        const o = at(home, `C:\\LONGPA~1\\JOSGAR~1${temp}`, { [home]: longReal, 'C:\\LONGPA~1\\JOSGAR~1': longReal });
+        expect(collapseHomePath('C:\\LONGPA~1\\JOSGAR~1\\x', o)).toBe('~\\x');
+        expect(collapseHomePath('C:\\LONGPA~1\\José García\\x', o)).toBe('~\\x');
+        expect(collapseHomePath(`${longReal}\\x`, o)).toBe('~\\x');
+      });
+      it('does not mix spellings: a junction elsewhere into home never collapses a lookalike', () => {
+        const home = 'C:\\DD\\Users\\mike';
+        const o = at(home, `C:\\DD\\J\\link${temp}`, { [home]: 'E:\\real\\mike', 'C:\\DD\\J\\link': 'E:\\real\\mike' });
+        expect(collapseHomePath('C:\\DD\\J\\link\\secret.txt', o)).toBe('~\\secret.txt');
+        expect(collapseHomePath('C:\\DD\\Users\\link\\secret.txt', o)).toBe('C:\\DD\\Users\\link\\secret.txt');
+        expect(collapseHomePath('C:\\DD\\J\\mike\\secret.txt', o)).toBe('C:\\DD\\J\\mike\\secret.txt');
+      });
+    });
+    it.skipIf(process.platform !== 'win32')('matches the alias the OS itself assigns to a non-ASCII profile', (ctx) => {
       const parent = mkdtempSync(join(tmpdir(), 'lanp-'));
       try {
         const home = join(parent, 'José García');
         mkdirSync(home);
-        const dir = execFileSync('cmd', ['/c', 'dir', '/x', '/ad', parent], { encoding: 'utf8' });
+        // `/u` = UTF-16 output, so the non-ASCII name survives the OEM code page
+        const dir = execFileSync('cmd', ['/u', '/c', 'dir', '/x', '/ad', parent], { encoding: 'utf16le', windowsHide: true });
         const m = /(\S+~\d+\S*)\s+José García/i.exec(dir);
-        if (!m) return; // 8.3 name generation is disabled on this volume
+        if (!m) return ctx.skip('8.3 name generation is disabled on this volume');
         const o = { home, platform: 'win32' as const, shortPaths: [join(parent, m[1], 'Temp')] };
         expect(collapseHomePath(join(parent, m[1], 'x'), o)).toBe('~\\x');
         expect(collapseHomePath(`${join(parent, m[1])}0\\x`, o)).not.toMatch(/^~/);

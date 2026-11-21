@@ -11,7 +11,8 @@ import { isLoopbackRequest } from './loopback.js';
 /* `shortPaths`: paths the OS wrote in 8.3 form, the alias is learned from them (win32
    only; default `os.tmpdir()` and the TEMP/TMP/APPDATA/LOCALAPPDATA env paths).
    `resolve`: the filesystem resolver (default `realpathSync.native` of the longest
-   existing prefix); a test injects one because real 8.3 names can't be made on demand. */
+   existing prefix); a test injects one to model junction and 8.3 shapes deterministically
+   (the win32 test also exercises the default one against a real directory). */
 type PathOpts = {
   home?: string;
   platform?: NodeJS.Platform;
@@ -41,45 +42,57 @@ function resolveExisting(p: string): string {
 
 const normKey = (p: string) => p.split(/[\\/]+/).filter(Boolean).join('/').toLowerCase();
 
-/* The user's OWN alias per home segment, learned from paths the OS itself writes in
-   short form (`os.tmpdir()`, TEMP, ...). Windows' short-name algorithm is not modelled
+/* Other spellings of the home dir, each a WHOLE path: the resolved (real) home, and every
+   hint prefix (`os.tmpdir()`, TEMP, ... which the OS writes in short form) whose first
+   `segCount` segments resolve to it. Windows' short-name algorithm is not modelled
    (non-ASCII letters, hash forms and `~N` collisions all break a model); the filesystem
-   is asked instead: a hint's first `segs.length` segments count only when they resolve
-   to the home dir itself, and then each differing hint segment is the alias. A sibling
-   (`MICHAE~2`) resolves to another folder, so it never matches, which keeps it from
-   collapsing to `~` (`expandHomePath` would turn that into the user's own home). No
-   hint, an unresolvable one, or a resolver error: no alias. */
-const hintCache = new Map<string, (string | undefined)[]>();
+   is asked instead. The comparison is against the RESOLVED home, not the string
+   `os.homedir()` returned, so a relocated profile (junctioned `C:\Users`, a junctioned
+   profile folder, an 8.3-spelled ancestor) still matches. A sibling (`MICHAE~2`) resolves
+   to another folder, so it never matches, which keeps it from collapsing to `~`
+   (`expandHomePath` would turn that into the user's own home). Spellings are never mixed
+   per segment, so a junction elsewhere into home cannot make a lookalike path collapse.
+   No hint, an unresolvable one, or a resolver error: no alias. */
+const spellingCache = new Map<string, string[]>();
 
-function shortAliases(
+function homeSpellings(
   home: string,
-  segs: string[],
+  segCount: number,
   hints: string[],
   resolve?: (p: string) => string,
-): (string | undefined)[] {
-  const out: (string | undefined)[] = [];
-  const homeKey = normKey(home);
-  for (const hint of hints) {
-    const hs = hint.split(/[\\/]+/);
-    if (hs.length < segs.length) continue;
-    const cacheKey = `${home}|${hint}`;
-    let found = resolve ? undefined : hintCache.get(cacheKey);
-    if (!found) {
-      found = [];
+): string[] {
+  const cacheKey = `${home}|${hints.join('|')}`;
+  const cached = resolve ? undefined : spellingCache.get(cacheKey);
+  if (cached) return cached;
+  const out: string[] = [];
+  const res = resolve ?? resolveExisting;
+  try {
+    const realHome = res(home);
+    const realKey = normKey(realHome);
+    const seen = new Set([normKey(home)]);
+    if (!seen.has(realKey)) {
+      out.push(realHome);
+      seen.add(realKey);
+    }
+    for (const hint of hints) {
+      const hs = hint.split(/[\\/]+/);
+      if (hs.length < segCount) continue;
+      const prefix = hs.slice(0, segCount).join('\\');
+      const key = normKey(prefix);
+      if (seen.has(key)) continue;
       try {
-        const prefix = hs.slice(0, segs.length).join('\\');
-        if (normKey((resolve ?? resolveExisting)(prefix)) === homeKey) {
-          segs.forEach((s, i) => {
-            if (i > 0 && hs[i].toLowerCase() !== s.toLowerCase()) found![i] = hs[i];
-          });
+        if (normKey(res(prefix)) === realKey) {
+          out.push(prefix);
+          seen.add(key);
         }
       } catch {
-        found = [];
+        // an unresolvable hint contributes nothing
       }
-      if (!resolve) hintCache.set(cacheKey, found);
     }
-    found.forEach((a, i) => (out[i] ??= a));
+  } catch {
+    out.length = 0;
   }
+  if (!resolve) spellingCache.set(cacheKey, out);
   return out;
 }
 
@@ -90,15 +103,15 @@ function defaultShortPaths(): string[] {
 
 /* Regex source matching the home dir however a path spells it: any run of
    separators between segments (`C:\Users\a`, `C:/Users/a`, the doubled
-   `C:\\Users\\a` of a Python repr), plus, on win32, the user's own discovered 8.3
-   alias of a long segment. Callers append their own boundary lookahead. */
+   `C:\\Users\\a` of a Python repr), plus, on win32, each verified alternative spelling of
+   the whole path (resolved home, 8.3 hint prefix). Callers append their own boundary
+   lookahead. */
 function homeRegexSource(home: string, win: boolean, shortPaths?: string[], resolve?: (p: string) => string): string {
   const sepRe = win ? '[\\\\/]+' : '/+';
-  const segs = home.split(win ? /[\\/]+/ : /\/+/);
-  const aliases = win ? shortAliases(home, segs, shortPaths ?? defaultShortPaths(), resolve) : [];
-  return segs
-    .map((s, i) => (i > 0 && win && aliases[i] ? `(?:${escRe(s)}|${escRe(aliases[i]!)})` : escRe(s)))
-    .join(sepRe);
+  const split = win ? /[\\/]+/ : /\/+/;
+  const spell = (p: string) => p.split(split).map(escRe).join(sepRe);
+  const alts = win ? homeSpellings(home, home.split(split).length, shortPaths ?? defaultShortPaths(), resolve) : [];
+  return `(?:${[home, ...alts].map(spell).join('|')})`;
 }
 
 function trimHome(home: string, win: boolean): string {
