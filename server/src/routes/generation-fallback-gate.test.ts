@@ -1088,4 +1088,69 @@ describe('#4556 run needs: the reconcile keeps only the tiers the unfinished cha
     await post(2, { modelKey: 'qwen3-tts-1.7b', queueEntryId: OWN_ENTRY });
     expect(lastKeep()).toEqual({ keep06: false, keep17: true });
   }, 10_000);
+
+  /* #4557 — K(book) = runNeeds ∪ the tierNeeds of this book's live (non-aborted) jobs.
+     post(2) alone needs only 0.6B ({true,false}). */
+  it('R6: a same-book job declaring 1.7B is unioned into the keep', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest(needsBookId, [], false, { keep06: false, keep17: true });
+    try {
+      await post(2);
+      expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('R7: an ABORTED same-book sibling contributes nothing', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest(needsBookId, [], false, { keep06: false, keep17: true });
+    try {
+      /* The real pause route aborts every in-flight job for the book. */
+      await fetch(`${baseUrl}/api/books/${needsBookId}/generation/pause`, { method: 'POST' });
+      await post(2);
+      expect(lastKeep()).toEqual({ keep06: true, keep17: false });
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it('R8: a same-book job with NO tierNeeds falls back to the full-cast value', async () => {
+    const { __registerFakeJobForTest } = await import('./generation.js');
+    const release = __registerFakeJobForTest(needsBookId, []);
+    try {
+      await post(2);
+      expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+    } finally {
+      release();
+    }
+  }, 10_000);
+
+  it("R9: this book's own score pass in flight at run start falls back to the full-cast value", async () => {
+    const { triggerScoring, __awaitScoringSettled } = await import('./generation.js');
+    const cfg = await import('../config/resolver.js');
+    let releaseScore: (() => void) | undefined;
+    scoreBookImpl = () =>
+      new Promise((r) => {
+        releaseScore = () => r({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 });
+      });
+    const spy = vi.spyOn(cfg, 'configValue').mockReturnValue(true);
+    try {
+      await triggerScoring({
+        bookId: needsBookId,
+        bookDir: needsDir,
+        chapters: [{ id: 1, slug: 'chapter-1' }],
+        justFinalizedSlugs: [],
+      });
+      spy.mockRestore();
+      await vi.waitFor(() => expect(releaseScore).toBeTypeOf('function'));
+      await post(2);
+      expect(lastKeep()).toEqual({ keep06: true, keep17: true });
+    } finally {
+      spy.mockRestore();
+      releaseScore?.();
+      await __awaitScoringSettled(needsBookId);
+      scoreBookImpl = null;
+    }
+  }, 10_000);
 });

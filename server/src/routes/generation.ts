@@ -527,6 +527,11 @@ interface RunningJob {
       active-generation gate by the render lease, which only holds a tier a
       Quality render uses. Absent/false for a Kokoro-only or standard run. */
   usesQuality17?: boolean;
+  /** #4557 — the Qwen tiers THIS job's own run needs (`runNeeds`, not the
+      book-wide union `K`, so the union does not feed on itself). Read by a later
+      same-book run's reconcile keep. Absent = unknown, which makes that run fall
+      back to the full cast. */
+  tierNeeds?: { keep06: boolean; keep17: boolean };
   /** Chapter ids the loop has reported chapter_complete for in this
       run. The frontend reads `runDone` as `runDoneBase + this.size`. */
   completedThisRun: Set<number>;
@@ -688,10 +693,12 @@ export function __registerFakeJobForTest(
   bookId: string,
   subscribers: { send: (ev: unknown) => void; res: Response }[],
   usesQuality17 = false,
+  tierNeeds?: { keep06: boolean; keep17: boolean },
 ): () => void {
   const key = `${bookId}::test-${Math.random().toString(36).slice(2)}`;
   const job: RunningJob = {
     usesQuality17,
+    tierNeeds,
     controller: new AbortController(),
     subscribers: new Set(subscribers),
     bookId,
@@ -1206,14 +1213,15 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
 
      Accepted residuals (plan 293): the Qwen 0.6B pre-pass re-derive (§3.5) and
      the gap between one chapter finishing and the next being queued (D2) can
-     still cost a reload. The same-book job union is #4557. */
+     still cost a reload. The same-book job union is below (#4557). */
   const fullCastQwenTiers = () =>
     computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
-  let usedQwenTiers: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
+  /* This run's own needs (#4556). `usedQwenTiers` below widens it to K(book). */
+  let runNeeds: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
   if (qwenInUse) {
     try {
       const queueEntries = (await readQueueFile(queueJsonPath())).entries;
-      usedQwenTiers = computeRunQwenNeeds({
+      runNeeds = computeRunQwenNeeds({
         bookId,
         targetChapterIds: targetChapters.map((c) => c.id),
         queueEntries,
@@ -1229,7 +1237,26 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         '[generation] run-needs tier computation failed; keeping the full cast tiers:',
         (e as Error).message,
       );
+      runNeeds = fullCastQwenTiers();
+    }
+  }
+  /* #4557 — K(book) = runNeeds ∪ the tierNeeds of this book's registered, NON-aborted
+     jobs. Unknown terms fall back to the full cast (today's behaviour): a same-book
+     job that declared no `tierNeeds`, or this book's own score pass in flight (its
+     audition renders on tiers of RENDERED chapters, which runNeeds excludes). The
+     union is correct whether or not this run's own job is already registered. */
+  let usedQwenTiers = runNeeds;
+  if (qwenInUse) {
+    const liveSameBook = [...(inFlightByBook.get(bookId) ?? [])].filter(
+      (j) => !j.controller.signal.aborted,
+    );
+    if (scoringInFlight.has(bookId) || liveSameBook.some((j) => !j.tierNeeds)) {
       usedQwenTiers = fullCastQwenTiers();
+    } else {
+      usedQwenTiers = {
+        keep06: runNeeds.keep06 || liveSameBook.some((j) => j.tierNeeds?.keep06),
+        keep17: runNeeds.keep17 || liveSameBook.some((j) => j.tierNeeds?.keep17),
+      };
     }
   }
 
@@ -1509,6 +1536,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
     runInProgress: new Set(),
     hadSibling: false,
     usesQuality17: usedQwenTiers.keep17,
+    tierNeeds: runNeeds,
     children: [],
   };
   registerJob(key, job);
