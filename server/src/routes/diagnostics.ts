@@ -26,6 +26,7 @@ import { readinessSeverity } from '../tts/engine-presence.js';
 import { VOICE_ENGINES, type VoiceEngineId } from '../tts/voice-engine-registry.js';
 import type { EngineId } from '../tts/engine-health.js';
 import { classifyPackageFault } from '../tts/models-status.js';
+import { textForClient } from '../lan-paths.js';
 
 export type CheckStatus = 'ok' | 'warn' | 'fail';
 export type CheckId = 'gpu' | 'sidecar' | 'asr' | 'analyzer' | 'gemini' | 'ffmpeg' | 'disk';
@@ -366,6 +367,13 @@ export async function buildDiagnostics(opts?: { skip?: CheckId[] }): Promise<Dia
   };
 }
 
-diagnosticsRouter.get('/', async (_req: Request, res: Response) => {
-  res.json(await buildDiagnostics());
+diagnosticsRouter.get('/', async (req: Request, res: Response) => {
+  const out = await buildDiagnostics();
+  res.json({
+    ...out,
+    checks: out.checks.map((c) => ({
+      ...c,
+      detail: typeof c.detail === 'string' ? textForClient(req, c.detail) : c.detail,
+    })),
+  });
 });

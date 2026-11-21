@@ -12,6 +12,7 @@
 
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
+import { jobForClient } from '../lan-paths.js';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { WhisperInstallBootstrap } from '../tts/whisper-install-bootstrap.js';
@@ -36,9 +37,9 @@ whisperInstallRouter.get('/detect', async (_req: Request, res: Response) => {
   return res.json(await bootstrap.detect());
 });
 
-whisperInstallRouter.post('/install', (_req: Request, res: Response) => {
+whisperInstallRouter.post('/install', (req: Request, res: Response) => {
   const job = bootstrap.start();
-  return res.status(202).json(job);
+  return res.status(202).json(jobForClient(req, job));
 });
 
 whisperInstallRouter.get('/install/:id', (req: Request, res: Response) => {
@@ -46,7 +47,7 @@ whisperInstallRouter.get('/install/:id', (req: Request, res: Response) => {
   if (!job) {
     return res.status(404).json({ error: `No Whisper install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });
 
 whisperInstallRouter.post('/install/:id/recheck', async (req: Request, res: Response) => {
@@ -54,5 +55,5 @@ whisperInstallRouter.post('/install/:id/recheck', async (req: Request, res: Resp
   if (!job) {
     return res.status(404).json({ error: `No Whisper install job '${req.params.id}'` });
   }
-  return res.json(job);
+  return res.json(jobForClient(req, job));
 });

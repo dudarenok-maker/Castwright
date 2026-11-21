@@ -4644,8 +4644,13 @@ async function resolveVerifiedBookDirForRun(job: AnalysisJob): Promise<string> {
 export async function assertWriteTargetStable(job: AnalysisJob, writeDir: string): Promise<void> {
   const stateWriteDir = await resolveVerifiedBookDirForRun(job);
   if (stateWriteDir !== writeDir) {
+    /* #4446 — the message reaches LAN clients (SSE error + persisted haltReason),
+       so it carries no host paths; the dirs go to the server log only. */
+    console.error(
+      `[analysis] book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir})`,
+    );
     throw new BookDirUnresolvedError(
-      `book folder moved mid-persist (resolved ${stateWriteDir} after writing ${writeDir}); refusing to write the terminal state record`,
+      'book folder moved mid-persist; refusing to write the terminal state record',
     );
   }
 }

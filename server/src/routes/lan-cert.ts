@@ -22,6 +22,7 @@ import { enumerateLanIps } from '../lan-hosts.js';
 import { parseCertIps, computeCertHealth, type CertHealth } from '../lan-cert-health.js';
 import { getLanRuntime } from '../lan-runtime.js';
 import { isLanHttpsEnabled } from './export-lan.js';
+import { textForClient } from '../lan-paths.js';
 import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 export const lanCertRouter = Router();
@@ -179,7 +180,7 @@ lanCertRouter.post('/cert/regenerate', async (req: Request, res: Response) => {
       /* The child's stderr (a node stack on an fs error) and the `Command failed: <abs
          paths>` fallback both embed absolute paths (#3702); an execFile rejection has a
          numeric `code`, so the fs seam can never fire here -- scrub instead. */
-      res.status(500).json({ error: scrubChildOutput(message) });
+      res.status(500).json({ error: textForClient(req, scrubChildOutput(message)) });
       return;
     }
 

@@ -12,6 +12,8 @@
    never the plaintext. Env-var GEMINI_API_KEY still wins when set. */
 
 import { Router } from 'express';
+import { expandHomePath, pathForClient, pathForClientOrNull } from '../lan-paths.js';
+import { isLoopbackRequest } from '../lan-auth.js';
 import type { Request, Response } from '../http.js';
 import { z } from 'zod';
 import { lstat, unlink, writeFile } from 'node:fs/promises';
@@ -89,7 +91,7 @@ interface UserSettingsResponse extends Omit<UserSettings, 'geminiApiKey' | 'anal
   settingsFileUnreadable: boolean;
 }
 
-export function envDerived(settings: UserSettings): UserSettingsResponse {
+export function envDerived(settings: UserSettings, req: Request): UserSettingsResponse {
   /* Drop the plaintext key — frontend only ever sees apiKeyStatus. */
   const rest = { ...settings } as Partial<UserSettings>;
   delete rest.geminiApiKey;
@@ -119,7 +121,11 @@ export function envDerived(settings: UserSettings): UserSettingsResponse {
     analyzerPhase0Model: phase0Model.trim().length > 0 ? phase0Model : null,
     analyzerPhase1Model: phase1Model.trim().length > 0 ? phase1Model : null,
     analyzerPhase1MinLagChapters: configValue<number>('analyzer.phase1.minLagChapters'),
-    workspaceRoot: WORKSPACE_ROOT,
+    workspaceRoot: pathForClient(req, WORKSPACE_ROOT),
+    /* #4446 — stored, user-writable absolute paths; the PUT/test seams expand
+       a collapsed `~` back so these round-trip for LAN clients. */
+    workspaceDirOverride: pathForClientOrNull(req, settings.workspaceDirOverride ?? null) as UserSettings['workspaceDirOverride'],
+    exportSyncFolder: pathForClientOrNull(req, settings.exportSyncFolder ?? null) as UserSettings['exportSyncFolder'],
     workspaceSource: WORKSPACE_SOURCE,
     corruptSettingsFile: isUserSettingsFileCorrupt(),
     settingsFileUnreadable: isUserSettingsFileUnreadable(),
@@ -127,10 +133,10 @@ export function envDerived(settings: UserSettings): UserSettingsResponse {
   };
 }
 
-userSettingsRouter.get('/', async (_req: Request, res: Response) => {
+userSettingsRouter.get('/', async (req: Request, res: Response) => {
   try {
     const settings = await readUserSettings();
-    res.json(envDerived(settings));
+    res.json(envDerived(settings, req));
   } catch (err) {
     console.error('[user-settings] GET failed', err);
     res.status(500).json({ error: 'Failed to read user settings.' });
@@ -154,7 +160,7 @@ userSettingsRouter.post('/dropped-endpoint-entries/acknowledge', async (req: Req
     });
   }
   await acknowledgeDroppedEndpointEntries(parsed.data.archiveIds);
-  res.json(envDerived(await readUserSettings()));
+  res.json(envDerived(await readUserSettings(), req));
 });
 
 userSettingsRouter.put('/', async (req: Request, res: Response) => {
@@ -210,8 +216,17 @@ userSettingsRouter.put('/', async (req: Request, res: Response) => {
           capabilityRecordFor(stored, normalizeModelTag(model), getResolvedOllamaUrl()),
       }).parse(changedRequestControls(req.body ?? {}, stored));
     }
-    const updated = await writeUserSettings(withNormalizedOllamaReasoningKeys(req.body));
-    res.json(envDerived(updated));
+    /* #4446 — a LAN client only ever sees the collapsed `~` form, so only it can
+       send one back: expand it for non-loopback requests. Loopback stores as sent. */
+    let toWrite = req.body;
+    if (!isLoopbackRequest(req) && toWrite && typeof toWrite === 'object') {
+      toWrite = { ...toWrite };
+      for (const k of ['workspaceDirOverride', 'exportSyncFolder'] as const) {
+        if (typeof toWrite[k] === 'string') toWrite[k] = expandHomePath(toWrite[k]);
+      }
+    }
+    const updated = await writeUserSettings(withNormalizedOllamaReasoningKeys(toWrite));
+    res.json(envDerived(updated, req));
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: 'Invalid user settings.', issues: err.issues });
@@ -236,7 +251,7 @@ userSettingsRouter.put('/gemini-key', async (req: Request, res: Response) => {
   try {
     const { key } = geminiKeyPayloadSchema.parse(req.body);
     const updated = await writeGeminiApiKey(key);
-    res.json(envDerived(updated));
+    res.json(envDerived(updated, req));
   } catch (err) {
     if (err instanceof z.ZodError) {
       return res.status(400).json({ error: 'Invalid payload.', issues: err.issues });
@@ -269,6 +284,8 @@ userSettingsRouter.post('/sync-folder/test', async (req: Request, res: Response)
     }
     throw err;
   }
+  /* #4446 — expand a collapsed `~` from a LAN client (loopback: as sent). */
+  if (!isLoopbackRequest(req)) parsed = { ...parsed, path: expandHomePath(parsed.path) };
   /* srv-22 — require an existing directory and probe its writability; do NOT
      `mkdir(recursive)` an arbitrary tree (that was an unauthenticated
      arbitrary-directory-creation primitive). `lstat` (not `stat`) so a symlink
