@@ -83,16 +83,16 @@ void main() {
     // listenStatsApi is the [_ApiListenStatsApi] adapter wiring [ApiClient] as
     // the [ListenStatsApi] port.  Verify the adapter delegates correctly by
     // exercising it through a fake [ListenStatsApi] implementation — the real
-    // PUT uses a pinned HttpClient that is not injectable, so the transport is
-    // validated at the flush-service level (listen_stats_flush_service_test.dart).
+    // PUT goes through the injectable httpClientFactory, so its transport is pinned
+    // in api_client_writes_test.dart.
     test('listenStatsApi getter returns a ListenStatsApi', () {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
       expect(api.listenStatsApi, isA<ListenStatsApi>());
     });
 
     test('putListenStats serialises the JSON body correctly', () async {
-      // We can't inject a send hook into putListenStats because it creates its
-      // own pinned client.  Instead we verify the JSON shape directly using
+      // putListenStats builds its client from the injectable httpClientFactory
+      // (the real request is pinned in api_client_writes_test.dart).  Here we verify the JSON shape directly using
       // jsonEncode (the same code path the method uses) to confirm the contract
       // matches the server spec: { sessionId, days:[{date,seconds}] }.
       final days = [

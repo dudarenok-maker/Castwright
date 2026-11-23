@@ -192,7 +192,7 @@ class ApiClient {
     required double currentSec,
     required String listenedAt,
   }) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final req = await client.putUrl(_u('/api/books/$bookId/listen-progress'));
       req.headers.set(HttpHeaders.authorizationHeader,
@@ -231,7 +231,7 @@ class ApiClient {
   /// `.catchError((_) {})`.
   Future<void> setShelfStatus(String bookId,
       {bool? finished, bool? hidden}) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final body = shelfStatusBody(finished: finished, hidden: hidden);
       final req = await client.postUrl(
@@ -257,7 +257,7 @@ class ApiClient {
     required String sessionId,
     required List<StatDay> days,
   }) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final req = await client.putUrl(_u('/api/books/$bookId/listen-stats'));
       req.headers.set(
