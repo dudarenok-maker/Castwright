@@ -88,8 +88,13 @@ class ApiClient {
     final res = await _send('GET', _u(path), {
       HttpHeaders.authorizationHeader: 'Bearer ${connection.server.token}',
     }).timeout(requestTimeout);
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw ApiException(res.statusCode, 'Not authorised — re-pair the device.');
+    if (res.statusCode == 401) {
+      throw ApiException(401, 'Not authorised — re-pair the device.');
+    }
+    if (res.statusCode == 403) {
+      // #898: the token authenticated but its scope does not cover this
+      // endpoint. Re-pairing mints the same scope, so do not suggest it.
+      throw ApiException(403, 'Not permitted for this device.');
     }
     if (res.statusCode >= 400) {
       throw ApiException(res.statusCode, 'Request to $path failed (${res.statusCode}).');

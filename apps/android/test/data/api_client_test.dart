@@ -37,6 +37,26 @@ void main() {
       );
     });
 
+    test('a 401 from getJson keeps the re-pair message', () async {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(401, ''));
+      await expectLater(
+        api.getJson('/api/books/x/cover'),
+        throwsA(isA<ApiException>()
+            .having((e) => e.statusCode, 'status', 401)
+            .having((e) => e.message, 'message', contains('re-pair'))),
+      );
+    });
+
+    test('a 403 from getJson does not advise a re-pair (#898)', () async {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(403, ''));
+      await expectLater(
+        api.getJson('/api/books/x/cover'),
+        throwsA(isA<ApiException>()
+            .having((e) => e.statusCode, 'status', 403)
+            .having((e) => e.message, 'message', isNot(contains('re-pair')))),
+      );
+    });
+
     test('throws ApiException on 5xx', () async {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(503, ''));
       await expectLater(
