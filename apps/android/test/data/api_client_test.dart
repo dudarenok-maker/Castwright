@@ -23,7 +23,7 @@ void main() {
         sentUrl = url;
         return const HttpResult(200, '{"appVersion":"1.6.0"}');
       });
-      final body = await api.info();
+      final body = await api.getJson('/api/info');
       expect(body['appVersion'], '1.6.0');
       expect(sentAuth, 'Bearer tok');
       expect(sentUrl.toString(), 'https://10.0.0.5:8443/api/info');
@@ -32,7 +32,7 @@ void main() {
     test('throws ApiException on 401', () async {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(401, ''));
       await expectLater(
-        api.info(),
+        api.getJson('/api/info'),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 401)),
       );
     });
@@ -60,7 +60,7 @@ void main() {
     test('throws ApiException on 5xx', () async {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(503, ''));
       await expectLater(
-        api.info(),
+        api.getJson('/api/info'),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 503)),
       );
     });
@@ -77,7 +77,7 @@ void main() {
         requestTimeout: const Duration(milliseconds: 50),
         send: (_, _, _) => Completer<HttpResult>().future, // never completes
       );
-      await expectLater(api.info(), throwsA(isA<TimeoutException>()));
+      await expectLater(api.getJson('/api/info'), throwsA(isA<TimeoutException>()));
     });
 
     // listenStatsApi is the [_ApiListenStatsApi] adapter wiring [ApiClient] as

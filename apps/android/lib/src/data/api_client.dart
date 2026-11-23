@@ -106,10 +106,6 @@ class ApiClient {
     return decoded;
   }
 
-  /// GET /api/info — the server version / capabilities handshake (used to
-  /// gate features + confirm the server is new enough for the sync manifest).
-  Future<Map<String, dynamic>> info() => getJson('/api/info');
-
   /// GET /api/library/sync-manifest — the srv-32 INDEX (one row per book + the
   /// full active-book set). `?since=` (an ISO timestamp) trims the `books` list,
   /// never the active set.
