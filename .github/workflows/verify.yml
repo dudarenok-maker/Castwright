@@ -67,9 +67,10 @@ name: Verify
 # own `if:` scope condition already evaluates false for a docs-only diff, so
 # most jobs still complete in roughly the time of "Setup Node + deps" alone
 # and the aggregator reports green — no deadlock, negligible added time.
-# ONE exception: `check:register-citations` (see #3122) runs unconditionally,
-# since citations can appear in any file and diff-scope cannot predict whether
-# one broke; this step still runs on docs-only diffs, but remains negligible
+# TWO exceptions: `check:register-citations` (see #3122) and
+# `check:plan-numbers` (see #4582) run unconditionally, since citations and
+# plan numbers can appear in any file and diff-scope cannot predict whether
+# one broke; these steps still run on docs-only diffs, but remain negligible
 # (a few seconds), so overall timing is unaffected. Same reasoning is why no
 # job gates on PR `draft` status either — a draft-gated required check would
 # deadlock every draft PR the same way.
@@ -251,6 +252,14 @@ jobs:
       # (No scope gate: dedicated guard in workflow-wiring.test.mjs, not via parseLegs())
       - name: Register citation check
         run: npm run check:register-citations
+
+      # Plan-number check (unconditional — see #4582): the checker scans the
+      # WHOLE docs/features tree for duplicate plan numbers, so no diff-scope
+      # reliably predicts whether one broke; must run on every PR, docs-only
+      # included.
+      # (No scope gate: dedicated guard in workflow-wiring.test.mjs, not via parseLegs())
+      - name: Plan number check
+        run: npm run check:plan-numbers
 
       # #2434 → #2779: npm audit against the root lockfile, gated so it only
       # runs on a root package-lock.json diff (or a shared/global change).

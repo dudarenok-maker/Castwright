@@ -1692,6 +1692,44 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
   );
 });
 
+test('plan number check: must be unconditional (no if: guard) — issue #4582', () => {
+  // Same shape as the register citation check above: the checker scans the
+  // WHOLE docs/features tree for duplicate plan numbers, so no diff-scope can
+  // predict whether one broke. The step must run on every PR, docs-only included.
+  const yamlLines = source.split('\n');
+  const stepStartIdx = yamlLines.findIndex((l) => /^\s*- name: Plan number check\s*$/.test(l));
+  assert.ok(
+    stepStartIdx >= 0,
+    'Plan number check step (- name: Plan number check) not found in workflow',
+  );
+  const stepIndent = /^(\s*)/.exec(yamlLines[stepStartIdx])[1].length;
+
+  const stepLines = [yamlLines[stepStartIdx]];
+  for (let i = stepStartIdx + 1; i < yamlLines.length; i += 1) {
+    const line = yamlLines[i];
+    if (line.trim() === '') {
+      stepLines.push(line);
+      continue;
+    }
+    if (/^(\s*)/.exec(line)[1].length <= stepIndent) break;
+    stepLines.push(line);
+  }
+  const stepBlock = stepLines.join('\n');
+
+  assert.ok(
+    !/^\s*if:/m.test(stepBlock),
+    'Plan number check step must be unconditional (must have no `if:` guard, #4582).',
+  );
+  assert.ok(
+    !/^\s*continue-on-error:\s*/im.test(stepBlock),
+    'Plan number check step must not have `continue-on-error:` set, or a duplicate plan number would not fail CI.',
+  );
+  assert.ok(
+    /^\s*run:\s*npm run check:plan-numbers\s*$/m.test(stepBlock),
+    'Plan number check step must execute `npm run check:plan-numbers`, not a neutered or renamed command.',
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ffmpeg-floor leg contract (#4461). package.json castwright.ffmpeg.minimum is
 // a SUPPORT floor ("the oldest ffmpeg we test against"); the `ffmpeg-floor` job

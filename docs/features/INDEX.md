@@ -12,6 +12,7 @@ PRs that change behavior cited in a plan MUST update the relevant plan in the sa
 2. Add YAML frontmatter (`status`, `shipped`, `owner`). New plans start `status: draft` until they ship.
 3. Link the plan from the matching area section below.
 4. Land paired automated tests in the same PR — see CLAUDE.md "Testing discipline".
+5. Pick the next free plan number; `npm run check:plan-numbers` fails CI on a duplicate (the 25 older duplicates are a frozen allowlist inside the script).
 
 ## Plan lifecycle
 

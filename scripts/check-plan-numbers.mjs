@@ -19,9 +19,10 @@
 // (`legacy-stale`). The allowlist may only ever shrink or tighten; never add
 // an entry for a new collision - renumber the later-added plan instead.
 //
-// WIRING STATUS: not yet wired. `npm run check:plan-numbers` is runnable by
-// hand only; wiring into CI and the local verify run is #4605, which updates
-// this line when it lands.
+// WIRING STATUS: wired (#4605). It runs as the unconditional `Plan number
+// check` step in .github/workflows/verify.yml and via
+// UNCONDITIONAL_LOCAL_CHECK_SCRIPTS in scripts/verify-cache.mjs (every full
+// `npm run verify`).
 
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
