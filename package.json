@@ -179,6 +179,12 @@
     "openapi-typescript": {
       "typescript": "$typescript"
     },
-    "browserslist": "^4.28.8"
+    "browserslist": "^4.28.8",
+    "readdir-glob": {
+      "minimatch": "^11.0.9"
+    },
+    "@typescript-eslint/typescript-estree": {
+      "minimatch": "^11.0.9"
+    }
   }
 }
