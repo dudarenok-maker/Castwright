@@ -1,4 +1,5 @@
 import 'dart:async';
+import 'dart:io';
 
 import 'package:drift/native.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -590,6 +591,65 @@ void main() {
       }
       await player.dispose();
       await library.close();
+    });
+  });
+
+  group('probeServerReachable', () {
+    // A real ApiClient over an injected transport, not a hand-written fake.
+    ApiClient apiWith(Future<HttpResult> Function() reply) => ApiClient(
+          const Connection(
+            server: PairedServer(
+                url: 'https://10.0.0.5:8443', token: 'tok', caFingerprint: 'f'),
+            caPem: 'PEM',
+          ),
+          send: (_, _, _) => reply(),
+        );
+
+    test('a 401 reads as unreachable AND asks for a re-pair, exactly once',
+        () async {
+      var repairs = 0;
+      final ok = await probeServerReachable(
+        apiWith(() async => const HttpResult(401, '')),
+        onRepairNeeded: () => repairs++,
+      );
+      expect(ok, isFalse);
+      expect(repairs, 1);
+    });
+
+    test('a 403 reads as unreachable but does NOT ask for a re-pair',
+        () async {
+      // A 403 is an authorization failure: re-pairing mints a token with the
+      // same scope, so prompting would loop the user through pairing forever.
+      var repairs = 0;
+      final ok = await probeServerReachable(
+        apiWith(() async => const HttpResult(403, '')),
+        onRepairNeeded: () => repairs++,
+      );
+      expect(ok, isFalse);
+      expect(repairs, 0);
+    });
+
+    test('a transport failure reads as unreachable and does NOT re-pair',
+        () async {
+      // Offline is not a credential problem, and this probe runs on every
+      // network change: prompting here would nag on each Wi-Fi drop.
+      var repairs = 0;
+      final ok = await probeServerReachable(
+        apiWith(() async => throw const SocketException('no route')),
+        onRepairNeeded: () => repairs++,
+      );
+      expect(ok, isFalse);
+      expect(repairs, 0);
+    });
+
+    test('a 200 reads as reachable and does NOT re-pair', () async {
+      var repairs = 0;
+      final ok = await probeServerReachable(
+        apiWith(() async => const HttpResult(200, '{}')),
+        onRepairNeeded: () => repairs++,
+      );
+      expect(ok, isTrue);
+      expect(repairs, 0);
     });
   });
 }

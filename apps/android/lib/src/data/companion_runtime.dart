@@ -69,6 +69,30 @@ List<StreamSubscription<String>> wireFinishedTracking(
   return [completedSub, bookFinishedSub, replaySub];
 }
 
+/// The AutoSync reachability probe: `GET /api/info` through [api].
+///
+/// Returns true when the server answers. A **401** means the stored device
+/// token no longer authenticates, and a re-pair fixes it, so [onRepairNeeded]
+/// fires (an offline-first listener never streams, so this probe is the only
+/// place they would learn of it). A **403** is an AUTHORIZATION failure:
+/// re-pairing mints a token with the same scope, so prompting would loop. A
+/// transport failure (`SocketException`, timeout) is just offline: the probe
+/// runs on every network change, so it must not prompt either.
+Future<bool> probeServerReachable(
+  ApiClient api, {
+  required void Function() onRepairNeeded,
+}) async {
+  try {
+    await api.getJson('/api/info');
+    return true;
+  } on ApiException catch (e) {
+    if (e.statusCode == 401) onRepairNeeded();
+    return false;
+  } catch (_) {
+    return false;
+  }
+}
+
 /// The wired runtime for a paired server (app-shell integration): builds the
 /// cert-pinned [ApiClient], the on-device drift store, the [SyncController]
 /// (index + per-book download), the [PlayerController] over `just_audio`, and
@@ -226,14 +250,10 @@ class CompanionRuntime {
     final autoSync = AutoSyncService(
       loadSettings: settingsStore.load,
       currentNetwork: currentNetwork,
-      probeReachable: () async {
-        try {
-          await api.getJson('/api/info');
-          return true;
-        } catch (_) {
-          return false;
-        }
-      },
+      probeReachable: () => probeServerReachable(
+        api,
+        onRepairNeeded: onRepairNeeded ?? () {},
+      ),
       runSync: () async {
         final books = await library.listBooks();
         await resumeSync.syncAll([for (final b in books) b.bookId]);
