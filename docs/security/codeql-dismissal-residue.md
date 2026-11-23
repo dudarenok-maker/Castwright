@@ -153,9 +153,11 @@ rather than re-fixed, and the gate does not apply.
 
 ## Alerts #227–#236 — the #3721 security sweep (for dismissal)
 
-Dismissed on **2026-10-23** (#227–#232, #234, #235); #233 and #236 are to be
-dismissed after this change merges, together with the eleven `fixed`
-`js/tainted-format-string` alerts this change re-raises (see below). The GitHub
+Dismissed on **2026-10-23** (#227–#232, #234, #235, and also #233 and #236).
+The eleven `js/tainted-format-string` alerts this change re-raised (see below)
+were settled later: #211 and #214–#217 were dismissed on 2026-11-24, and #76,
+#77, #172, #210, #213 and #224 were closed by CodeQL as `fixed`, not dismissed
+(GitHub records no dismissal reason for them). The GitHub
 dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
 #232, #234 and #235 cite nothing. This file is the record.
 
@@ -191,7 +193,8 @@ dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
   `%s` placeholders do not work in server code, and the sites that used them were
   rewritten as template literals. `server/src/console-format-placeholder.guard.test.ts`
   fails the build on any `console` call whose first argument has a placeholder.
-- **Re-raised `js/tainted-format-string` alerts (dismiss after merge)** — commit
+- **Re-raised `js/tainted-format-string` alerts (#211 and #214–#217 dismissed
+  2026-11-24; #76, #77, #172, #210, #213 and #224 closed by CodeQL as `fixed`)** — commit
   `ebac5b35` (Aug 18) had fixed these by turning template literals into `%s`
   placeholders; #3721 reverts that at 10 sites, so the first weekly scan on
   `main` re-opens them: #76 (`routes/queue.ts`), #77 (`routes/voice-style.ts`),
@@ -208,10 +211,10 @@ dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
 | #232, `scripts/tests/stamp-publish-token.test.mjs:36` | js/incomplete-multi-character-sanitization | test asserting HTML-comment stripping hides a token; used in tests |
 | #234, `scripts/tests/npm-check-onbox-register-routing.test.mjs:53` | js/incomplete-sanitization | test-only `quoteArg` over hardcoded arguments; used in tests |
 | #235, `server/src/analyzer/catalog/gemini-catalog.ts:100` | js/insufficient-password-hash | SHA-256 of an API key as an in-memory cache key, not password storage; false positive |
-| #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismiss after merge |
-| #76, #77, #172, #210, #211, #213, #214, #215, #216, #217, #224 (re-raised after merge: `queue.ts`, `voice-style.ts`, `export.ts`, `voice-library.ts`, `purge-clone-artifacts.ts`) | js/tainted-format-string | same patch argument as #233/#236; `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts`; dismiss after merge |
+| #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismissed 2026-10-23 |
+| #76, #77, #172, #210, #211, #213, #214, #215, #216, #217, #224 (re-raised after merge: `queue.ts`, `voice-style.ts`, `export.ts`, `voice-library.ts`, `purge-clone-artifacts.ts`) | js/tainted-format-string | same patch argument as #233/#236; `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts`; #211 and #214–#217 dismissed 2026-11-24, #76, #77, #172, #210, #213 and #224 closed by CodeQL as `fixed` |
 
-## Alerts #211–#253 — the 2026-11-24 dismissals (for dismissal)
+## Alerts #237–#240 and #243–#253 — the 2026-11-24 dismissals (for dismissal)
 
 Dismissed on **2026-11-24**; the GitHub dismissal comments point at this file,
 which is the record.
@@ -222,11 +225,16 @@ which is the record.
   callers are gated by `requireLanToken` (`server/src/lan-auth.ts`, mounted over
   `/api` and `/workspace` in `server/src/app.ts:151`); a loopback caller is the
   local user. The path must already be an existing directory (`lstat`, so a
-  symlink is not followed and nothing is created, srv-22), and the only write is
-  a fixed `.audiobook-write-probe` name that is unlinked straight after.
+  symlink at the given path itself is refused and nothing is created, srv-22).
+  `lstat` inspects only the final path component: a junction or symlink in a
+  parent directory is followed, and `writeFile` (`:304`) follows a
+  `.audiobook-write-probe` symlink that already exists in the directory. The
+  threat model still holds, because the caller is the local user or a
+  token-gated LAN client configuring their own folder. The only write is a
+  fixed `.audiobook-write-probe` name that is unlinked straight after.
   Re-raised because #4446 added the `expandHomePath` reassignment (`:288`),
   which CodeQL reads as a fresh taint path.
-- **`js/weak-cryptographic-algorithm` (#246, `won't fix`)** — `previewTag` in
+- **`js/weak-cryptographic-algorithm` (#246, `false positive`)** — `previewTag` in
   `server/src/routes/qwen-voice.ts` (`:1530`): a SHA-1 of `bookId|characterId`
   cut to 10 hex characters, used as a filename tag. Not a security use; changing
   the algorithm would orphan preview files already staged under the old tag.
@@ -237,9 +245,10 @@ which is the record.
   `deterministicGradient` in `server/src/routes/import.ts` (`:61`) and
   `server/src/workspace/scan.ts` (`:684`): the loop bound is the length of a
   server-minted or scanned `bookId` string, not a user-controlled array-like.
-- **`js/tainted-format-string` (#211, #214–#217, #237–#240, #245, #248, #249)**
+- **`js/tainted-format-string` (#237–#240, #245, #248, #249)**
   — more re-raised instances of the template-literal `console` false positive
-  recorded above (#233/#236 and the re-raised set). `installTimestamps()`
+  recorded above (#233/#236 and the re-raised set, whose #211 and #214–#217
+  were dismissed in this same round). `installTimestamps()`
   (`server/src/logger.ts`) passes the timestamp as Node's format argument, so a
   caller's first argument is never format-interpreted; pinned by
   `server/src/console-format-placeholder.guard.test.ts`.
@@ -247,7 +256,7 @@ which is the record.
 | alert | rule | justification |
 |---|---|---|
 | #250–#253, `server/src/routes/user-settings.ts:295`–`:310` | js/path-injection | probes the user's own chosen sync folder; `requireLanToken` gates LAN callers; `lstat` requires an existing directory (no mkdir); writes/unlinks only a fixed `.audiobook-write-probe`; re-raised by #4446's `expandHomePath`; won't fix |
-| #246, `server/src/routes/qwen-voice.ts:1530` | js/weak-cryptographic-algorithm | SHA-1 as a non-security 10-char filename tag of `bookId\|characterId`; changing it orphans staged previews; won't fix |
+| #246, `server/src/routes/qwen-voice.ts:1530` | js/weak-cryptographic-algorithm | SHA-1 as a non-security 10-char filename tag of `bookId\|characterId`; changing it orphans staged previews; false positive |
 | #247, `server/src/routes/qwen-voice.ts:1807` | js/incomplete-sanitization | `VARIANT_FILE` escapes only constant `VARIANT_MEMBERS` literals; false positive |
 | #243, `server/src/routes/import.ts:61`; #244, `server/src/workspace/scan.ts:684` | js/loop-bound-injection | `deterministicGradient` loops over a server-minted / scanned `bookId` string's own length, not a user-controlled array-like; false positive |
-| #211, #214–#217, #237–#240, #245, #248, #249 | js/tainted-format-string | re-raised instances of the known console-template false positive; timestamp is Node's format argument (`logger.ts` `installTimestamps()`); guarded by `console-format-placeholder.guard.test.ts` |
+| #237–#240, #245, #248, #249 | js/tainted-format-string | re-raised instances of the known console-template false positive; timestamp is Node's format argument (`logger.ts` `installTimestamps()`); guarded by `console-format-placeholder.guard.test.ts` |
