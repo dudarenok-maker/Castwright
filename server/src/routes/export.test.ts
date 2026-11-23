@@ -198,6 +198,8 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(dl.body.length ?? dl.text?.length ?? 0).toBeGreaterThan(0);
   });
 
+  // #4537 / #2235 — the 45 s waitForDone window (and 60 s timeout) are deliberate: a real
+  // ffmpeg M4B build starves past the 5 s default on a loaded box. Do not shrink them.
   it('creates an M4B job, finishes successfully, and streams audio/mp4', async () => {
     const create = await request(app)
       .post(`/api/books/${bookId}/exports`)
@@ -207,7 +209,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(create.body.filename).toMatch(/\.m4b$/);
 
     const exportId = create.body.id as string;
-    const { body: done } = await waitForDone(exportId);
+    const { body: done } = await waitForDone(exportId, 45_000);
     expect(done.status).toBe('done');
     expect(done.format).toBe('m4b');
     expect(typeof done.sizeBytes).toBe('number');
@@ -217,7 +219,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(dl.status).toBe(200);
     expect(dl.headers['content-type']).toMatch(/audio\/mp4/);
     expect(dl.headers['content-disposition']).toMatch(/attachment; filename=/);
-  }, 30_000);
+  }, 60_000);
 
   it('refuses with 409 export_incomplete when a chapter has no MP3', async () => {
     /* Delete chapter 2's MP3 to simulate a partially-generated book. */
@@ -507,7 +509,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'm4b', destination: 'download' });
     const exportId = create.body.id as string;
-    const { body: done } = await waitForDone(exportId);
+    const { body: done } = await waitForDone(exportId, 45_000);
     expect(done.status).toBe('done');
 
     const filename = done.filename as string;
@@ -520,7 +522,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     /* Old layout MUST be empty (or absent) — no <bookDir>/.audiobook/exports/<id>/ */
     const legacyDir = join(bookDir, '.audiobook', 'exports');
     expect(existsSync(legacyDir)).toBe(false);
-  }, 30_000);
+  }, 60_000);
 
   /* #2078 / #2084 — this test (and, per #2078, the unrelated "404s for an
      unknown book" test below in this same file) has twice been observed
@@ -573,18 +575,18 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const zipId = zip.body.id as string;
-    await waitForDone(zipId);
+    await waitForDone(zipId, 45_000);
 
     const m4b = await request(app)
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'm4b', destination: 'download' });
     const m4bId = m4b.body.id as string;
-    await waitForDone(m4bId);
+    await waitForDone(m4bId, 45_000);
 
     /* Both manifests survive. */
     expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${zipId}.json`))).toBe(true);
     expect(existsSync(join(bookDir, '.audiobook', 'export-manifests', `${m4bId}.json`))).toBe(true);
-  }, 30_000);
+  }, 120_000);
 
   it('rehydration drops manifests whose artifact has been deleted from the exports folder', async () => {
     const create = await request(app)
@@ -645,7 +647,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
         .send({ format: 'm4b', destination: 'sync-folder' });
       expect(create.status).toBe(201);
 
-      const { body: done } = await waitForDone(create.body.id as string);
+      const { body: done } = await waitForDone(create.body.id as string, 45_000);
       expect(done.status).toBe('done');
 
       const expectedPath = join(syncRoot, sanitiseForZip(AUTHOR), done.filename as string);
@@ -655,7 +657,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       rmSync(syncRoot, { recursive: true, force: true });
       await writeUserSettings({ exportSyncFolder: null });
     }
-  });
+  }, 60_000);
 });
 
 describeIfFfmpeg('captions export', () => {
