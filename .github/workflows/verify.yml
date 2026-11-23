@@ -252,6 +252,13 @@ jobs:
       - name: Register citation check
         run: npm run check:register-citations
 
+      # #4586: non-UTF-8 text guard (unconditional): scans every tracked text
+      # file under server/, src/ and scripts/, so no diff scope reliably
+      # predicts whether one broke; must run on every PR, docs-only included.
+      # (No scope gate: same unconditional shape as the step above.)
+      - name: UTF-8 encoding check
+        run: npm run check:utf8
+
       # #2434 → #2779: npm audit against the root lockfile, gated so it only
       # runs on a root package-lock.json diff (or a shared/global change).
       # leg: audit
