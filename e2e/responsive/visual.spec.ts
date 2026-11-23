@@ -114,9 +114,10 @@ const topbarMask = (page: Page) => [
   page.getByTestId('status-pill'),
 ];
 
-/* #4391 — pin the top-bar Status chip in the full-page captures. The chip label
+/* #4391 — pin the top-bar Status chip in every page capture. The chip label
    is fixed per route under mocks (summarizeStatus, src/components/top-bar.tsx:
-   "Status" with no active book, "Revisions · 1" on the Solway Bay book routes),
+   "Status" when no pending revision exists, which covers the non-Solway-Bay
+   routes incl. confirm; "Revisions · 1" on the Solway Bay book routes),
    but VISUAL_DIFF_OPTS' 5% tolerance is loose enough to let a label change pass
    unnoticed: the committed baselines kept an older "Revisions · 1" chip on the
    no-book routes while the regen workflow rendered "Status". A DOM assertion
@@ -173,6 +174,7 @@ test.describe('visual baselines', () => {
   test('analysing (pre-start)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing.png', VISUAL_DIFF_OPTS);
   });
@@ -203,6 +205,7 @@ test.describe('visual baselines', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('listen.png', VISUAL_DIFF_OPTS);
   });
 
@@ -217,6 +220,7 @@ test.describe('visual baselines', () => {
     /* "CH 01" only renders once the chapters slice has hydrated. */
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
     await expectGenerateAtTop(page);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('generate.png', VISUAL_DIFF_OPTS);
   });
 
@@ -363,6 +367,7 @@ test.describe('visual baselines (dark theme)', () => {
   test('analysing (pre-start, dark)', async ({ page }) => {
     await goToAnalysing(page);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Status');
     await expectAtTop(page);
     await expect(page).toHaveScreenshot('analysing-dark.png', VISUAL_DIFF_OPTS);
   });
@@ -390,6 +395,7 @@ test.describe('visual baselines (dark theme)', () => {
     await page.goto('/#/books/sb/listen');
     await waitForListenViewReady(page, /Solway Bay/i);
     await page.waitForTimeout(300);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('listen-dark.png', VISUAL_DIFF_OPTS);
   });
 
@@ -403,6 +409,7 @@ test.describe('visual baselines (dark theme)', () => {
     await page.goto('/#/books/sb/generate');
     await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 5_000 });
     await expectGenerateAtTop(page);
+    await expectStatusChip(page, 'Revisions · 1');
     await expect(page).toHaveScreenshot('generate-dark.png', VISUAL_DIFF_OPTS);
   });
 
