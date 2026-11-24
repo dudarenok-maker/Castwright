@@ -265,9 +265,10 @@ jobs:
       # #4586: non-UTF-8 text guard: scans the tracked text files under
       # server/, src/ and scripts/ (scripts/check-utf8.mjs). Deliberately run
       # on every PR, docs-only included, with no scope gate; pinned as
-      # unconditional in scripts/tests/workflow-wiring.test.mjs. Not mirrored
-      # in verify-cache's UNCONDITIONAL_LOCAL_CHECK_SCRIPTS (that list is for
-      # whole-tree scans no diff scope can predict; this one covers 3 roots).
+      # unconditional in scripts/tests/workflow-wiring.test.mjs. Unlike the
+      # register-citation and plan-number checks above, it is not mirrored in
+      # verify-cache's UNCONDITIONAL_LOCAL_CHECK_SCRIPTS: today it is a CI-only
+      # guard, with no local `npm run verify` counterpart.
       - name: UTF-8 encoding check
         run: npm run check:utf8
 

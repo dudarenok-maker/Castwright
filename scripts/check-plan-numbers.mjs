@@ -16,8 +16,9 @@
 // WHY A LEGACY ALLOWLIST: 25 older numbers were already duplicated before
 // this check existed. Their files are frozen history - renumbering them would
 // rewrite citations all over the repo. LEGACY_DUPLICATES maps each such number
-// to its exact file set, so a FURTHER collision on any of them still fails
-// (`legacy-grew`), and an entry that no longer matches fails too
+// to its set of file BASENAMES (directories are ignored, so moving a file into
+// or out of `archive/` is transparent), so a FURTHER collision on any of them
+// still fails (`legacy-grew`), and an entry that no longer matches fails too
 // (`legacy-stale`). The allowlist may only ever shrink or tighten; never add
 // an entry for a new collision - renumber the later-added plan instead.
 //
@@ -100,7 +101,8 @@ export function findPlanNumberProblems(trackedPaths, legacyDuplicates) {
   return problems;
 }
 
-// Frozen legacy duplicates: key -> sorted repo-relative POSIX paths.
+// Frozen legacy duplicates: key -> sorted repo-relative POSIX paths
+// (recorded in full, but only their basenames are compared).
 // Generated from `git ls-files -- docs/features` on the #4582 branch head
 // (after #4603 renumbered 292 -> 295). May only shrink.
 export const LEGACY_DUPLICATES = {
