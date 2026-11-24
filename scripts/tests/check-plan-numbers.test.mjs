@@ -70,6 +70,49 @@ test('(e) a legacy entry whose file vanished fails legacy-stale', () => {
   assert.equal(problems[0].key, LEGACY_KEY);
 });
 
+const moveToArchive = (file) =>
+  `docs/features/archive/${file.slice(file.lastIndexOf('/') + 1)}`;
+const moveToTopLevel = (file) => `docs/features/${file.slice(file.lastIndexOf('/') + 1)}`;
+
+test('(d2) archiving one legacy file, then both, is transparent (basename match)', () => {
+  const frozen = { [LEGACY_KEY]: [...LEGACY_FILES] };
+  const [first, second] = LEGACY_FILES;
+  assert.deepEqual(findPlanNumberProblems([moveToArchive(first), second], frozen), []);
+  assert.deepEqual(findPlanNumberProblems([moveToTopLevel(first), second], frozen), []);
+  assert.deepEqual(
+    findPlanNumberProblems([moveToArchive(first), moveToArchive(second)], frozen),
+    [],
+  );
+});
+
+test('(d3) a real third file still fails legacy-grew after a legacy file moved to archive/', () => {
+  const thirdFile = `docs/features/${LEGACY_KEY}-third-arrival.md`;
+  const problems = findPlanNumberProblems(
+    [moveToArchive(LEGACY_FILES[0]), LEGACY_FILES[1], thirdFile],
+    { [LEGACY_KEY]: [...LEGACY_FILES] },
+  );
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'legacy-grew');
+});
+
+test('(d4) a legacy basename present in two directories counts as a grown set', () => {
+  const [first, second] = LEGACY_FILES;
+  const problems = findPlanNumberProblems(
+    [moveToArchive(first), moveToTopLevel(first), second],
+    { [LEGACY_KEY]: [...LEGACY_FILES] },
+  );
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'legacy-grew');
+});
+
+test('(d5) a vanished legacy file after an archive move of the other is still legacy-stale', () => {
+  const problems = findPlanNumberProblems([moveToArchive(LEGACY_FILES[0])], {
+    [LEGACY_KEY]: [...LEGACY_FILES],
+  });
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'legacy-stale');
+});
+
 test('(f) a .html twin, INDEX.md, TEMPLATE.md, README.md and unnumbered plans are ignored', () => {
   const tracked = [
     'docs/features/archive/277-v115-bug-chore-sweep-board.html',

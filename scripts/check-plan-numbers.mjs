@@ -33,6 +33,8 @@ const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
 const PLAN_KEY_RE = /^(\d+[a-z]?)-/;
 
+const baseName = (path) => path.slice(path.lastIndexOf('/') + 1);
+
 /**
  * Leading plan-number token of a tracked path, or null when the path is not a
  * numbered `.md` plan.
@@ -66,19 +68,30 @@ export function findPlanNumberProblems(trackedPaths, legacyDuplicates) {
       problems.push({ kind: 'duplicate', key, files });
       continue;
     }
-    const added = files.filter((f) => !frozen.includes(f));
-    if (added.length > 0) {
+    // Compare by BASENAME, multiset-wise: moving a frozen file between
+    // docs/features/ and docs/features/archive/ changes no plan number, so it is
+    // transparent; a genuine extra file (new name, or the same name in a second
+    // directory) still grows the set.
+    const frozenBases = frozen.map(baseName);
+    const added = files.filter((f) => !frozenBases.includes(baseName(f)));
+    if (added.length > 0 || files.length > frozen.length) {
       problems.push({ kind: 'legacy-grew', key, files });
     }
   }
   for (const key of Object.keys(legacyDuplicates)) {
-    const frozen = [...legacyDuplicates[key]].sort();
-    const current = [...(byKey.get(key) ?? [])].sort();
+    const frozen = [...legacyDuplicates[key]].map(baseName).sort();
+    const currentFiles = [...(byKey.get(key) ?? [])].sort();
+    const current = currentFiles.map(baseName).sort();
     const same = frozen.length === current.length && frozen.every((f, i) => f === current[i]);
     if (same) continue;
     // A grown set was already reported as legacy-grew above.
-    if (current.some((f) => !frozen.includes(f)) && current.length > 1) continue;
-    problems.push({ kind: 'legacy-stale', key, files: current.length > 0 ? current : frozen });
+    if (
+      current.length > 1 &&
+      (current.some((f) => !frozen.includes(f)) || current.length > frozen.length)
+    ) {
+      continue;
+    }
+    problems.push({ kind: 'legacy-stale', key, files: currentFiles.length > 0 ? currentFiles : [...legacyDuplicates[key]].sort() });
   }
   return problems;
 }
@@ -217,9 +230,10 @@ const REMEDIES = {
   duplicate:
     'a NEW collision - renumber the later-added plan to the next free number.',
   'legacy-grew':
-    'a third plan joined a frozen legacy number - renumber the newly added plan to' +
-    ' the next free number, or (only if the addition is itself history to keep)' +
-    ' update the LEGACY_DUPLICATES entry for it once.',
+    'a file beyond the frozen two now carries a legacy plan number (files are matched' +
+    ' by basename, so moving a frozen file into or out of archive/ is fine) - renumber' +
+    ' the newly added plan (the one NOT listed in LEGACY_DUPLICATES for this number) to' +
+    ' the next free number. Never add a file to the LEGACY_DUPLICATES entry.',
   'legacy-stale':
     'a LEGACY_DUPLICATES entry no longer matches the tracked files - shrink or' +
     ' update the entry in scripts/check-plan-numbers.mjs. The allowlist may only' +
