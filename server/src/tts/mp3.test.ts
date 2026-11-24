@@ -275,7 +275,7 @@ function tagCrc(b: Buffer, frameStart: number, enc: number): number {
   return crc;
 }
 /* An ID3v2.4 block of `bodyBytes` zero padding (e.g. a cover) in place of the
-   45-byte one a real encode starts with. */
+   fixtures' 45-byte ID3 block (a real encode's size depends on the ffmpeg build, #4629). */
 function withBigId3(mp3: Buffer, bodyBytes: number): Buffer {
   const header = Buffer.from([0x49, 0x44, 0x33, 4, 0, 0, 0, 0, 0, 0]);
   header[6] = (bodyBytes >> 21) & 0x7f;
@@ -519,7 +519,7 @@ describeIfFfmpeg('encodePcmToAudio writes the correct LAME encoder delay (#4573)
     /* The ID3v2 block's size depends on the ffmpeg build's TSSE string (45 bytes
        here, 44 on Homebrew's, #4629), so read it from the syncsafe header
        rather than assuming ENC_24K_MONO's 45. */
-    const frameStart = 10 + ((mp3[6] << 21) | (mp3[7] << 14) | (mp3[8] << 7) | mp3[9]);
+    const frameStart = id3v2TagLength(mp3);
     const enc = ENC_24K_MONO + (frameStart - 45);
     expect(delayAt(mp3, enc)).toBe(576);
     expect(storedCrcAt(mp3, enc)).toBe(tagCrc(mp3, frameStart, enc));
