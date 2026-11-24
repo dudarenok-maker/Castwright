@@ -8168,7 +8168,7 @@ The automated tests pin the range list, the message text and the log write again
 
 `probeServerReachable` (`companion_runtime.dart`) now routes a 401 from `GET /api/info` to `onRepairNeeded`. The automated tests pin that routing against a fake client. Nothing automated proves the user-visible consequence: the pairing screen opening on a phone whose library is downloaded and which therefore never streams (so it never hits a 401 on the stream path).
 
-1. **Setup.** Pair a phone, download at least one book fully, and confirm it plays offline.
+1. **Setup.** Pair a phone, download at least one book fully, and confirm it plays offline. Precondition: in the app's settings, "auto-sync on reconnect" must be on, and the Wi-Fi must be unmetered (or "unmetered Wi-Fi only" off). With either gate closed, auto-sync returns before probing, so no pairing screen opens and steps 4 and 5 would record a false failure.
 2. **Revoke.** On the desktop, revoke that device so its token now answers 401.
 3. **Trigger.** Put the phone back on the LAN and let auto-sync fire (toggle Wi-Fi off and on).
 4. **The pairing screen opens.** Before PR A the app reported the computer unreachable indefinitely, with no prompt.
