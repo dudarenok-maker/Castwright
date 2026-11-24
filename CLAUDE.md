@@ -1501,10 +1501,13 @@ Working practice below; this holds even under contention).
   (CLAUDE.md's own trivial-bar carve-out permits this, and the scan skips the
   primary as an assignment candidate) — still protects the wrong tree and can
   ALLOW a write to it, since fail-open covers "found nothing" and never
-  "found the wrong known root"; and **a denial is still not terminal**
-  ([#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)) — the
-  second 2026-09-19 occurrence's agent retried against the *wrong* root
-  instead of stopping, leaving a stray uncommitted
+  "found the wrong known root"; and **a denial can still be ignored**. By
+  owner decision on [#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)
+  (2026-11-18) the deny message now instructs the agent to STOP, make no
+  further writes against any root, and report the denial in its return value
+  — but that is an instruction the agent can still disregard (the guard cannot
+  kill a dispatch). The second 2026-09-19 occurrence's agent retried against
+  the *wrong* root instead of stopping, leaving a stray uncommitted
   `server/src/analyzer/errors.ts` edit on `main` in the primary checkout, the
   #3044 pattern reaching *through* the guard rather than in spite of it. The
   before/after porcelain check is what actually catches this class of failure.

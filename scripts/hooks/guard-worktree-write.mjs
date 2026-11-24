@@ -14,9 +14,10 @@
 // failure mode still reaches ~7.7% of them; a wrong-but-confident extraction
 // still protects the wrong tree and can ALLOW a write to it; a brief that
 // assigns the primary checkout directly is skipped by the polarity rule; and
-// the Bash/PowerShell check stays coarse. Separately still open: whether a
-// denial should be terminal (#3263's 2026-09-21 design-pass comment, parked,
-// tracked as #3369). So this guard remains a layer, NOT a full
+// the Bash/PowerShell check stays coarse. A denial is TERMINAL by owner
+// decision on #3369 (2026-11-18): the deny message instructs the agent to stop
+// and report (TERMINAL_DENIAL_INSTRUCTION), though that is an instruction the
+// agent can still ignore. So this guard remains a layer, NOT a full
 // replacement for the manual before/after `git status --porcelain` check.
 //
 // Wired via the `hooks:` frontmatter key on `.claude/agents/fix-agent.md`,
@@ -57,6 +58,11 @@ const { resolve, sep } = win32;
 // live worktree in passing would have that worktree returned instead. See the
 // residual-risk paragraph on extractAssignedRootFromTranscript.
 export const PRIMARY_CHECKOUT_ROOT = 'C:\\Claude\\Projects\\Audiobook-Generator';
+
+// Appended to every deny reason (#3369, owner decision 2026-11-18): a denial is
+// terminal, so the agent must stop and report rather than retry elsewhere.
+export const TERMINAL_DENIAL_INSTRUCTION =
+  'This denial is TERMINAL: STOP NOW. Make no further writes, edits or shell commands against ANY root (this one or any other), do not retry or work around it, and report this denial verbatim in your return value so the dispatcher can re-dispatch you at the correct worktree.';
 
 /** Enumerate every known checkout root: the primary checkout plus every real
  *  worktree `git worktree list` reports for it. Sourced from git itself
@@ -424,9 +430,9 @@ function extractAssignedRootFromTranscript(transcriptPath, knownRoots) {
  *  and wrongly ALLOWS one to the mis-extracted tree. That is a real, accepted
  *  residual risk, not an impossibility; it is the reason the manual
  *  before/after `git status --porcelain` check stays in CLAUDE.md as a
- *  backstop rather than being retired by this change. Still open, separately:
- *  whether a denial should be terminal (raised in #3263's 2026-09-21
- *  design-pass comment, now tracked as #3369, not addressed here).
+ *  backstop rather than being retired by this change. A denial is terminal by
+ *  owner decision on #3369 (2026-11-18): both deny reasons end with
+ *  TERMINAL_DENIAL_INSTRUCTION telling the agent to stop and report.
  *
  *  Write/Edit/NotebookEdit: resolve the target path (tool_input.file_path
  *  for Write/Edit, tool_input.notebook_path for NotebookEdit) against the
@@ -487,7 +493,7 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, a
       if (!isUnderRoot(abs, assignedRoot)) {
         return {
           deny: true,
-          reason: `guard-worktree-write: ${toolName} target "${abs}" is outside the assigned worktree "${assignedRoot}".`,
+          reason: `guard-worktree-write: ${toolName} target "${abs}" is outside the assigned worktree "${assignedRoot}". ${TERMINAL_DENIAL_INSTRUCTION}`,
         };
       }
       return { deny: false };
@@ -501,7 +507,7 @@ export function decideGuardVerdict({ toolName, toolInput, cwd, transcriptPath, a
         if (pathSpellings(root).some((spelling) => containsPathAtBoundary(command, spelling))) {
           return {
             deny: true,
-            reason: `guard-worktree-write: ${toolName} command references a foreign checkout root "${root}" while cwd is "${cwd}".`,
+            reason: `guard-worktree-write: ${toolName} command references a foreign checkout root "${root}" while cwd is "${cwd}". ${TERMINAL_DENIAL_INSTRUCTION}`,
           };
         }
       }
