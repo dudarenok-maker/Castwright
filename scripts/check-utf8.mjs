@@ -39,6 +39,10 @@ function extensionOf(path) {
   return dot === -1 ? '' : base.slice(dot + 1).toLowerCase();
 }
 
+function isSkipped(path) {
+  return BINARY_EXTENSIONS.has(extensionOf(path));
+}
+
 function isValidUtf8(bytes) {
   try {
     new TextDecoder('utf-8', { fatal: true }).decode(bytes);
@@ -83,7 +87,7 @@ function firstInvalidOffset(bytes) {
 export function findNonUtf8(entries) {
   const offenders = [];
   for (const { path, bytes } of entries) {
-    if (BINARY_EXTENSIONS.has(extensionOf(path))) continue;
+    if (isSkipped(path)) continue;
     const offset = firstInvalidOffset(bytes);
     if (offset !== -1) offenders.push({ path, offset });
   }
@@ -119,13 +123,16 @@ export function scanTrackedTextFiles(root) {
       // Tracked but absent from the working tree: nothing to check.
     }
   }
-  return { checked: entries.length, offenders: findNonUtf8(entries) };
+  const skipped = entries.filter((e) => isSkipped(e.path)).length;
+  return { checked: entries.length - skipped, skipped, offenders: findNonUtf8(entries) };
 }
 
 if (isDirectlyInvoked(import.meta.url)) {
-  const { checked, offenders } = scanTrackedTextFiles(process.cwd());
+  const { checked, skipped, offenders } = scanTrackedTextFiles(process.cwd());
   if (offenders.length === 0) {
-    process.stdout.write(`check-utf8: OK — ${checked} tracked text files are valid UTF-8.\n`);
+    process.stdout.write(
+      `check-utf8: OK — ${checked} tracked text files are valid UTF-8 (${skipped} skipped by extension).\n`,
+    );
     process.exitCode = 0;
   } else {
     process.stdout.write('check-utf8: FAIL — non-UTF-8 files:\n');

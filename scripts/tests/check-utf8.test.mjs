@@ -9,7 +9,7 @@ import { tmpdir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
-import { findNonUtf8 } from '../check-utf8.mjs';
+import { findNonUtf8, scanTrackedTextFiles } from '../check-utf8.mjs';
 import { scrubGitEnv } from '../git-env.mjs';
 
 const CLI = join(dirname(fileURLToPath(import.meta.url)), '..', 'check-utf8.mjs');
@@ -92,6 +92,35 @@ test('CLI: a clean temp git repo exits 0', () => {
     const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /check-utf8: OK — 1 tracked text files/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('scanTrackedTextFiles: extension-skipped files are counted as skipped, not checked', () => {
+  const dir = makeRepo({
+    'src/ok.ts': Buffer.from('// —\n'),
+    'src/logo.png': Buffer.from([0x89, 0x97]),
+  });
+  try {
+    const r = scanTrackedTextFiles(dir);
+    assert.equal(r.checked, 1);
+    assert.equal(r.skipped, 1);
+    assert.deepEqual(r.offenders, []);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('CLI: the OK line counts only decoded files and prints the skipped count', () => {
+  const dir = makeRepo({
+    'src/ok.ts': Buffer.from('// —\n'),
+    'src/logo.png': Buffer.from([0x89, 0x97]),
+  });
+  try {
+    const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8', windowsHide: true });
+    assert.equal(r.status, 0, r.stdout + r.stderr);
+    assert.match(r.stdout, /check-utf8: OK — 1 tracked text files are valid UTF-8 \(1 skipped by extension\)/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
