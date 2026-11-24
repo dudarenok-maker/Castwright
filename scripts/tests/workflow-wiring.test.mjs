@@ -1692,6 +1692,9 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
   );
 });
 
+// package.json half of the pin: the script must be exactly this command.
+const CHECK_UTF8_SCRIPT = /^node scripts\/check-utf8\.mjs$/;
+
 test('UTF-8 encoding check: must be unconditional, exact command, script wired — issue #4586', () => {
   // The non-UTF-8 guard scans server/, src/ and scripts/ and must run on every
   // PR (docs-only included). Nothing else spawns `check:utf8`, so without this
@@ -1734,9 +1737,21 @@ test('UTF-8 encoding check: must be unconditional, exact command, script wired �
   const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
   assert.match(
     pkg.scripts['check:utf8'] ?? '',
-    /^node\s+scripts\/check-utf8\.mjs\b/,
+    CHECK_UTF8_SCRIPT,
     "package.json's `check:utf8` script must run scripts/check-utf8.mjs.",
   );
+});
+
+test('UTF-8 encoding check: the npm script pin rejects a neutered script — issue #4586', () => {
+  assert.match('node scripts/check-utf8.mjs', CHECK_UTF8_SCRIPT);
+  for (const neutered of [
+    'node scripts/check-utf8.mjs || true',
+    'node scripts/check-utf8.mjs; true',
+    'node scripts/check-utf8.mjs --help',
+    'echo node scripts/check-utf8.mjs',
+  ]) {
+    assert.doesNotMatch(neutered, CHECK_UTF8_SCRIPT, neutered);
+  }
 });
 
 // ---------------------------------------------------------------------------
