@@ -516,6 +516,8 @@ describeIfFfmpeg('encodePcmToAudio writes the correct LAME encoder delay (#4573)
 
   it('stamps delay 576 and a valid tag CRC, so a decode is exact', async () => {
     const mp3 = await encodePcmToAudio(pcm, sampleRate, { quality: 2 });
+    const idSz = ((mp3[6] & 0x7f) << 21) | ((mp3[7] & 0x7f) << 14) | ((mp3[8] & 0x7f) << 7) | (mp3[9] & 0x7f);
+    expect(`DIAG id3size=${idSz} hex=${mp3.subarray(0, 400).toString('hex')}`).toBe('');
     expect(delayAt(mp3, ENC_24K_MONO)).toBe(576);
     expect(storedCrcAt(mp3, ENC_24K_MONO)).toBe(tagCrc(mp3, 45, ENC_24K_MONO));
     const dir = mkdtempSync(join(tmpdir(), 'mp3-enc-delay-'));
