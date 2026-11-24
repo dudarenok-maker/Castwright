@@ -1692,6 +1692,9 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
   );
 });
 
+// package.json half of the pin: the script must be exactly this command.
+const CHECK_PLAN_NUMBERS_SCRIPT = /^node scripts\/check-plan-numbers\.mjs$/;
+
 test('plan number check: must be unconditional (no if: guard) — issue #4582', () => {
   // Same shape as the register citation check above: the checker scans the
   // WHOLE docs/features tree for duplicate plan numbers, so no diff-scope can
@@ -1728,6 +1731,26 @@ test('plan number check: must be unconditional (no if: guard) — issue #4582', 
     /^\s*run:\s*npm run check:plan-numbers\s*$/m.test(stepBlock),
     'Plan number check step must execute `npm run check:plan-numbers`, not a neutered or renamed command.',
   );
+
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+  assert.match(
+    pkg.scripts['check:plan-numbers'] ?? '',
+    CHECK_PLAN_NUMBERS_SCRIPT,
+    "package.json's `check:plan-numbers` script must run scripts/check-plan-numbers.mjs.",
+  );
+});
+
+test('Plan number check: the npm script pin rejects a neutered script — issue #4582', () => {
+  assert.match('node scripts/check-plan-numbers.mjs', CHECK_PLAN_NUMBERS_SCRIPT);
+  for (const neutered of [
+    'node -e ""',
+    'node scripts/check-plan-numbers.mjs || true',
+    'node scripts/check-plan-numbers.mjs; true',
+    'node scripts/check-plan-numbers.mjs --help',
+    'echo node scripts/check-plan-numbers.mjs',
+  ]) {
+    assert.doesNotMatch(neutered, CHECK_PLAN_NUMBERS_SCRIPT, neutered);
+  }
 });
 
 // package.json half of the pin: the script must be exactly this command.
