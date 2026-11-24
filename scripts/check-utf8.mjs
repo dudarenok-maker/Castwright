@@ -9,7 +9,9 @@
 // Usage:
 //   node scripts/check-utf8.mjs      # scan the git repo at the cwd
 //
-// Binary files are skipped (a NUL byte anywhere, or a known binary extension).
+// Binary files are skipped by known binary extension only. A NUL byte is NOT a
+// binary signal: UTF-16 text (BOM FF FE / FE FF) and valid-UTF-8 sources with an
+// embedded NUL both contain them and are checked like any other text file.
 // There is deliberately NO per-file allowlist: if a text file must be non-UTF-8,
 // extend this script so the exception is visible in review.
 //
@@ -28,6 +30,7 @@ export const BINARY_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'pdf',
   'zip', 'gz', 'mp3', 'wav', 'mp4', 'm4a', 'm4b', 'onnx', 'bin',
   'safetensors', 'pt', 'pth', 'npz', 'npy',
+  'epub', 'pcm', 'webm',
 ]);
 
 function extensionOf(path) {
@@ -73,7 +76,7 @@ function firstInvalidOffset(bytes) {
 
 /**
  * Pure core. Returns the entries that are not valid UTF-8 text.
- * Binary entries (NUL byte, or extension in BINARY_EXTENSIONS) are skipped.
+ * Binary entries (extension in BINARY_EXTENSIONS) are skipped.
  * @param {{ path: string, bytes: Uint8Array }[]} entries
  * @returns {{ path: string, offset: number }[]}
  */
@@ -81,7 +84,6 @@ export function findNonUtf8(entries) {
   const offenders = [];
   for (const { path, bytes } of entries) {
     if (BINARY_EXTENSIONS.has(extensionOf(path))) continue;
-    if (bytes.includes(0)) continue;
     const offset = firstInvalidOffset(bytes);
     if (offset !== -1) offenders.push({ path, offset });
   }

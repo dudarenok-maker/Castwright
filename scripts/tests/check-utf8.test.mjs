@@ -26,9 +26,31 @@ test('findNonUtf8: a lone 0x97 byte fails and reports its offset', () => {
   ]);
 });
 
-test('findNonUtf8: a file containing a NUL byte is skipped as binary', () => {
+test('findNonUtf8: a BOM\'d UTF-16LE .ts is reported as non-UTF-8, not skipped', () => {
+  const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('// hi\n', 'utf16le')]);
+  assert.deepEqual(findNonUtf8([{ path: 'server/ps-out.ts', bytes }]), [
+    { path: 'server/ps-out.ts', offset: 0 },
+  ]);
+});
+
+test('findNonUtf8: a valid-UTF-8 .mjs with an embedded NUL passes', () => {
+  const bytes = Buffer.from('const k = `${a}\0${b}`;\n', 'utf8');
+  assert.deepEqual(findNonUtf8([{ path: 'scripts/keys.mjs', bytes }]), []);
+});
+
+test('findNonUtf8: an embedded NUL does not hide a stray 0x97 in a .mjs', () => {
+  const bytes = Buffer.concat([Buffer.from('// a '), Buffer.from([0x97]), Buffer.from('\nconst k = `${a}\0${b}`;\n')]);
+  assert.deepEqual(findNonUtf8([{ path: 'scripts/keys.mjs', bytes }]), [
+    { path: 'scripts/keys.mjs', offset: 5 },
+  ]);
+});
+
+test('findNonUtf8: epub, pcm and webm fixtures are skipped by extension', () => {
   const bytes = Buffer.from([0x00, 0x97, 0x41]);
-  assert.deepEqual(findNonUtf8([{ path: 'src/blob.dat', bytes }]), []);
+  assert.deepEqual(
+    findNonUtf8(['a.epub', 'a.pcm', 'a.webm'].map((p) => ({ path: `server/${p}`, bytes }))),
+    [],
+  );
 });
 
 test('findNonUtf8: a skip-listed extension is skipped even when not valid UTF-8', () => {
