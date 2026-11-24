@@ -67,10 +67,11 @@ name: Verify
 # own `if:` scope condition already evaluates false for a docs-only diff, so
 # most jobs still complete in roughly the time of "Setup Node + deps" alone
 # and the aggregator reports green — no deadlock, negligible added time.
-# ONE exception: `check:register-citations` (see #3122) runs unconditionally,
-# since citations can appear in any file and diff-scope cannot predict whether
-# one broke; this step still runs on docs-only diffs, but remains negligible
-# (a few seconds), so overall timing is unaffected. Same reasoning is why no
+# TWO exceptions: `check:register-citations` (see #3122) and `check:utf8`
+# (see #4586) run unconditionally, since citations and stray non-UTF-8 bytes
+# can appear in any file and diff-scope cannot predict whether one broke;
+# these steps still run on docs-only diffs, but remain negligible (a few
+# seconds), so overall timing is unaffected. Same reasoning is why no
 # job gates on PR `draft` status either — a draft-gated required check would
 # deadlock every draft PR the same way.
 
@@ -251,6 +252,15 @@ jobs:
       # (No scope gate: dedicated guard in workflow-wiring.test.mjs, not via parseLegs())
       - name: Register citation check
         run: npm run check:register-citations
+
+      # #4586: non-UTF-8 text guard: scans the tracked text files under
+      # server/, src/ and scripts/ (scripts/check-utf8.mjs). Deliberately run
+      # on every PR, docs-only included, with no scope gate; pinned as
+      # unconditional in scripts/tests/workflow-wiring.test.mjs. Not mirrored
+      # in verify-cache's UNCONDITIONAL_LOCAL_CHECK_SCRIPTS (that list is for
+      # whole-tree scans no diff scope can predict; this one covers 3 roots).
+      - name: UTF-8 encoding check
+        run: npm run check:utf8
 
       # #2434 → #2779: npm audit against the root lockfile, gated so it only
       # runs on a root package-lock.json diff (or a shared/global change).

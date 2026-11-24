@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { mkdtempSync, mkdirSync, writeFileSync, readFileSync, rmSync, statSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, join as platformJoin, win32, posix } from 'node:path';
-import { decideGuardVerdict, listKnownCheckoutRoots, resolveOwnTranscriptPath, PRIMARY_CHECKOUT_ROOT } from '../hooks/guard-worktree-write.mjs';
+import { decideGuardVerdict, listKnownCheckoutRoots, resolveOwnTranscriptPath, PRIMARY_CHECKOUT_ROOT, TERMINAL_DENIAL_INSTRUCTION } from '../hooks/guard-worktree-write.mjs';
 
 const WORKTREE = 'C:\\Claude\\Projects\\wt-3044-worktree-write-guard';
 const SIBLING_WORKTREE = 'C:\\Claude\\Projects\\wt-2997-commit-gate';
@@ -1158,4 +1158,63 @@ test('a transcript past the 32 MB bound is skipped and the verdict falls back to
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+// === Terminal denial (#3369, owner decision 2026-11-18) ======================
+
+function assertTerminal(verdict) {
+  assert.equal(verdict.deny, true);
+  assert.match(verdict.reason, /TERMINAL/);
+  assert.match(verdict.reason, /STOP NOW/);
+  assert.match(verdict.reason, /do not retry/);
+  assert.match(verdict.reason, /ANY root/);
+  assert.match(verdict.reason, /return value/);
+  assert.ok(verdict.reason.includes(TERMINAL_DENIAL_INSTRUCTION));
+}
+
+test('Write denial is terminal', () => {
+  assertTerminal(decideGuardVerdict({
+    toolName: 'Write',
+    toolInput: { file_path: `${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md`, content: 'x' },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  }));
+});
+
+test('Edit denial is terminal', () => {
+  assertTerminal(decideGuardVerdict({
+    toolName: 'Edit',
+    toolInput: { file_path: `${SIBLING_WORKTREE}\\a.mjs`, old_string: 'a', new_string: 'b' },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  }));
+});
+
+test('NotebookEdit denial is terminal', () => {
+  assertTerminal(decideGuardVerdict({
+    toolName: 'NotebookEdit',
+    toolInput: { notebook_path: `${SIBLING_WORKTREE}\\n.ipynb`, new_source: 'x' },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  }));
+});
+
+test('Bash denial is terminal', () => {
+  assertTerminal(decideGuardVerdict({
+    toolName: 'Bash',
+    toolInput: { command: `type "${PRIMARY_CHECKOUT_ROOT}\\RELEASE_NOTES.md"` },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  }));
+});
+
+test('an ALLOW verdict carries no reason', () => {
+  const verdict = decideGuardVerdict({
+    toolName: 'Write',
+    toolInput: { file_path: `${WORKTREE}\\CLAUDE.md`, content: 'x' },
+    cwd: WORKTREE,
+    knownRoots: KNOWN_ROOTS,
+  });
+  assert.equal(verdict.deny, false);
+  assert.equal(verdict.reason, undefined);
 });

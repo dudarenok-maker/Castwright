@@ -153,9 +153,11 @@ rather than re-fixed, and the gate does not apply.
 
 ## Alerts #227–#236 — the #3721 security sweep (for dismissal)
 
-Dismissed on **2026-10-23** (#227–#232, #234, #235); #233 and #236 are to be
-dismissed after this change merges, together with the eleven `fixed`
-`js/tainted-format-string` alerts this change re-raises (see below). The GitHub
+Dismissed on **2026-10-23** (#227–#232, #234, #235, and also #233 and #236).
+The eleven `js/tainted-format-string` alerts this change re-raised (see below)
+were settled later: #211 and #214–#217 were dismissed on 2026-11-24, and #76,
+#77, #172, #210, #213 and #224 were closed by CodeQL as `fixed`, not dismissed
+(GitHub records no dismissal reason for them). The GitHub
 dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
 #232, #234 and #235 cite nothing. This file is the record.
 
@@ -191,7 +193,8 @@ dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
   `%s` placeholders do not work in server code, and the sites that used them were
   rewritten as template literals. `server/src/console-format-placeholder.guard.test.ts`
   fails the build on any `console` call whose first argument has a placeholder.
-- **Re-raised `js/tainted-format-string` alerts (dismiss after merge)** — commit
+- **Re-raised `js/tainted-format-string` alerts (#211 and #214–#217 dismissed
+  2026-11-24; #76, #77, #172, #210, #213 and #224 closed by CodeQL as `fixed`)** — commit
   `ebac5b35` (Aug 18) had fixed these by turning template literals into `%s`
   placeholders; #3721 reverts that at 10 sites, so the first weekly scan on
   `main` re-opens them: #76 (`routes/queue.ts`), #77 (`routes/voice-style.ts`),
@@ -208,84 +211,52 @@ dismissal comments for #227–#231 cite #3721 ("Audited in #3721."); those for
 | #232, `scripts/tests/stamp-publish-token.test.mjs:36` | js/incomplete-multi-character-sanitization | test asserting HTML-comment stripping hides a token; used in tests |
 | #234, `scripts/tests/npm-check-onbox-register-routing.test.mjs:53` | js/incomplete-sanitization | test-only `quoteArg` over hardcoded arguments; used in tests |
 | #235, `server/src/analyzer/catalog/gemini-catalog.ts:100` | js/insufficient-password-hash | SHA-256 of an API key as an in-memory cache key, not password storage; false positive |
-| #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismiss after merge |
-| #76, #77, #172, #210, #211, #213, #214, #215, #216, #217, #224 (re-raised after merge: `queue.ts`, `voice-style.ts`, `export.ts`, `voice-library.ts`, `purge-clone-artifacts.ts`) | js/tainted-format-string | same patch argument as #233/#236; `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts`; dismiss after merge |
+| #233 `routes/book-state.ts:606`, #236 `routes/revisions.ts:271` | js/tainted-format-string | boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted; pinned by `logger.test.ts`; dismissed 2026-10-23 |
+| #76, #77, #172, #210, #211, #213, #214, #215, #216, #217, #224 (re-raised after merge: `queue.ts`, `voice-style.ts`, `export.ts`, `voice-library.ts`, `purge-clone-artifacts.ts`) | js/tainted-format-string | same patch argument as #233/#236; `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts`; #211 and #214–#217 dismissed 2026-11-24, #76, #77, #172, #210, #213 and #224 closed by CodeQL as `fixed` |
 
-## Alerts #237–#253 — the 2026-11-24 dismissals (for dismissal)
+## Alerts #237–#240 and #243–#253 — the 2026-11-24 dismissals (for dismissal)
 
-Dismissed on **2026-11-24** (#237–#240, #243–#253; the GitHub API returns
-their `dismissed_at` as 2026-11-23T19:32:40–19:33:27Z UTC). Alerts #241 and
-#242 were not dismissed and are not part of this record. Every dismissal
-comment ends by pointing back to this file; this section is that record.
-Every file:line below was re-verified against this branch's head.
+Dismissed on **2026-11-24**; the GitHub dismissal comments point at this file,
+which is the record.
 
-- **`js/path-injection` (#250–#253, `won't fix`)** — the four flagged sinks
-  are the whole point of the `POST /sync-folder/test` handler
-  (`server/src/routes/user-settings.ts:277`), the settings screen's
-  writability probe for **the user's own chosen sync folder** (Zod-parsed
-  `path` payload, `:280`): `lstat(parsed.path)` at `:295`,
-  `writeFile(probePath, 'ok')` at `:304`, and the `unlink(probePath)`
-  cleanups at `:305` (success path) and `:310` (failure path). LAN callers
-  are fronted by `requireLanToken` (`app.use(['/api', '/workspace'],
-  requireLanToken)`, `server/src/app.ts:151`), which 401s a non-loopback
-  caller without the LAN token (`server/src/lan-auth.ts:216-234`); a token
-  is auto-minted whenever LAN exposure is on (`server/src/index.ts:303-311`),
-  so the gate is live in every exposed configuration. The probe is
-  deliberately constrained: it requires an **existing directory** (`lstat`,
-  never `mkdir` — the comment at `:289-292` records that a recursive `mkdir`
-  here was an unauthenticated arbitrary-directory-creation primitive) and
-  writes/unlinks only the fixed probe file
-  `parsed.path/.audiobook-write-probe` (`:302`).
-- **`js/weak-cryptographic-algorithm` (#246, `false positive`)** —
-  `previewTag` (`server/src/routes/qwen-voice.ts:1530-1532`) sha1-hashes
-  `${bookId}|${characterId}` into a 10-hex-character tag. The tag is an
-  identity fragment of preview voice ids (`<realVoiceId>-preview-<tag>`,
-  `:1533-1535`) so a staged A/B preview belongs to exactly one cast row and
-  a decline can drop exactly the moved rows' previews (#3992/#4028, comment
-  at `:1525-1529`); no confidentiality or integrity property depends on it,
-  and changing the hash now would orphan every staged preview — the tag is
-  baked into staged ids and matched back by `isOwnStalePreview`
-  (`:1536-1546`).
-- **`js/incomplete-sanitization` (#247, `false positive`)** — the
-  `VARIANT_FILE` pattern (`server/src/routes/qwen-voice.ts:1807-1809`)
-  interpolates two compile-time constant lists into its RegExp source —
-  `VARIANT_EMOTIONS` (`:131`, the fixed emotion set minus `neutral`) and
-  `VARIANT_MEMBERS` (`:546`, `['.pt', '.json', '__master.wav', '__1.7b.pt']`)
-  — and escapes the latter's dots before use
-  (`s.replace(/\./g, '\\.')`, `:1808`); neither a backslash nor untrusted
-  input can reach the regex source.
-- **`js/loop-bound-injection` (#243, #244, `false positive`)** — the two
-  `deterministicGradient` copies (`server/src/routes/import.ts:61-75`,
-  `server/src/workspace/scan.ts:684-698`) hash a string: the flagged loop
-  (`import.ts:63` / `scan.ts:686`) runs over the seed string's **own
-  length** (`for (let i = 0; i < seed.length; i++) h = ((h << 5) - h +
-  seed.charCodeAt(i)) | 0`), so there is no array-like whose bound a taint
-  could stretch; and the seed is server-minted, never request-controlled —
-  in `import.ts` the gradient is `deterministicGradient(bookId)` (`:462`)
-  with `bookId` from `mintBookId(author, series, title)` (`:434`), and in
-  `scan.ts` (`:753`) it is the scanned book's `bookId`
-  (`state?.bookId ?? makeBookId(...)`, `:752`).
-- **`js/tainted-format-string` (#237–#240, #245, #248, #249, `false
-  positive`)** — seven `console` calls whose **first argument is a template
-  literal** over request-derived ids, all under `server/src/routes/`:
-  `export.ts:696` (sendFile failed), `export.ts:844` (could not restore
-  the previous export), `export.ts:877` (could not remove the superseded
-  export), `voice-style.ts:211` (per-character persona failure),
-  `voice-library.ts:2228` (revoke artifacts un-erased),
-  `voice-library.ts:2339` (delete artifacts un-erased), `queue.ts:149`
-  (engine-stamp failed). Same patch argument as #233/#236:
-  `installTimestamps()` (`server/src/logger.ts:38`, installed at boot in
-  `server/src/index.ts:21`) always passes the timestamp as Node's format
-  argument, so a caller's own first argument is never interpreted as a
-  format string (the comment at `export.ts:691-694` states this argument at
-  the first site), while a `%s` there would print literally; pinned by
-  `server/src/logger.test.ts` and
+- **`js/path-injection` (#250–#253, `won't fix`)** — `POST /sync-folder/test`
+  in `server/src/routes/user-settings.ts` (`:277`, the probe at `:295`–`:310`).
+  By design it probes the folder the user chose as their own sync target. LAN
+  callers are gated by `requireLanToken` (`server/src/lan-auth.ts`, mounted over
+  `/api` and `/workspace` in `server/src/app.ts:151`); a loopback caller is the
+  local user. The path must already be an existing directory (`lstat`, so a
+  symlink at the given path itself is refused and nothing is created, srv-22).
+  `lstat` inspects only the final path component: a junction or symlink in a
+  parent directory is followed, and `writeFile` (`:304`) follows a
+  `.audiobook-write-probe` symlink that already exists in the directory. The
+  threat model still holds, because the caller is the local user or a
+  token-gated LAN client configuring their own folder. The only write is a
+  fixed `.audiobook-write-probe` name that is unlinked straight after.
+  Re-raised because #4446 added the `expandHomePath` reassignment (`:288`),
+  which CodeQL reads as a fresh taint path.
+- **`js/weak-cryptographic-algorithm` (#246, `false positive`)** — `previewTag` in
+  `server/src/routes/qwen-voice.ts` (`:1530`): a SHA-1 of `bookId|characterId`
+  cut to 10 hex characters, used as a filename tag. Not a security use; changing
+  the algorithm would orphan preview files already staged under the old tag.
+- **`js/incomplete-sanitization` (#247, `false positive`)** — the `VARIANT_FILE`
+  regex in `qwen-voice.ts` (`:1807`) escapes only the dots of the constant
+  `VARIANT_MEMBERS` literals (`:546`), never user input.
+- **`js/loop-bound-injection` (#243, #244, `false positive`)** —
+  `deterministicGradient` in `server/src/routes/import.ts` (`:61`) and
+  `server/src/workspace/scan.ts` (`:684`): the loop bound is the length of a
+  server-minted or scanned `bookId` string, not a user-controlled array-like.
+- **`js/tainted-format-string` (#237–#240, #245, #248, #249)**
+  — more re-raised instances of the template-literal `console` false positive
+  recorded above (#233/#236 and the re-raised set, whose #211 and #214–#217
+  were dismissed in this same round). `installTimestamps()`
+  (`server/src/logger.ts`) passes the timestamp as Node's format argument, so a
+  caller's first argument is never format-interpreted; pinned by
   `server/src/console-format-placeholder.guard.test.ts`.
 
 | alert | rule | justification |
 |---|---|---|
-| #250 `user-settings.ts:295` (`lstat`), #251 `:304` (`writeFile`), #252 `:305`, #253 `:310` (`unlink`, the two cleanup paths) — `server/src/routes/`, `POST /sync-folder/test` | js/path-injection | probes the user's own chosen sync folder, by design; LAN callers gated by `requireLanToken` (`server/src/app.ts:151`); needs an existing directory (`lstat`, no `mkdir`); writes/unlinks only the fixed `.audiobook-write-probe` probe file; won't fix |
-| #246, `server/src/routes/qwen-voice.ts:1531` (`previewTag`) | js/weak-cryptographic-algorithm | 10-char sha1 tag of `bookId`\|`characterId`, a non-security identity fragment of preview voice ids; no confidentiality/integrity property depends on it; changing it would orphan staged previews |
-| #247, `server/src/routes/qwen-voice.ts:1808` (`VARIANT_FILE`) | js/incomplete-sanitization | escapes constant literals only (`VARIANT_EMOTIONS` `:131`, `VARIANT_MEMBERS` `:546`); no backslash or untrusted input reaches the regex source |
-| #243 `server/src/routes/import.ts:63`, #244 `server/src/workspace/scan.ts:686` (`deterministicGradient`) | js/loop-bound-injection | loop runs over the seed string's own length; the seed is the server-minted `bookId` (`mintBookId`, `import.ts:434`) / the scanned book's `bookId` (`scan.ts:752`), not a user-controlled array-like |
-| #237 `export.ts:696`, #248 `export.ts:844`, #249 `export.ts:877`, #238 `voice-style.ts:211`, #239 `voice-library.ts:2228`, #240 `voice-library.ts:2339`, #245 `queue.ts:149` (all `server/src/routes/`) | js/tainted-format-string | same patch argument as #233/#236; the boot-time timestamp patch makes the timestamp the format argument, so the template-literal first argument is never format-interpreted and a `%s` there printed literally; pinned by `logger.test.ts` and `console-format-placeholder.guard.test.ts` |
+| #250–#253, `server/src/routes/user-settings.ts:295`–`:310` | js/path-injection | probes the user's own chosen sync folder; `requireLanToken` gates LAN callers; `lstat` requires an existing directory (no mkdir); writes/unlinks only a fixed `.audiobook-write-probe`; re-raised by #4446's `expandHomePath`; won't fix |
+| #246, `server/src/routes/qwen-voice.ts:1530` | js/weak-cryptographic-algorithm | SHA-1 as a non-security 10-char filename tag of `bookId\|characterId`; changing it orphans staged previews; false positive |
+| #247, `server/src/routes/qwen-voice.ts:1807` | js/incomplete-sanitization | `VARIANT_FILE` escapes only constant `VARIANT_MEMBERS` literals; false positive |
+| #243, `server/src/routes/import.ts:61`; #244, `server/src/workspace/scan.ts:684` | js/loop-bound-injection | `deterministicGradient` loops over a server-minted / scanned `bookId` string's own length, not a user-controlled array-like; false positive |
+| #237–#240, #245, #248, #249 | js/tainted-format-string | re-raised instances of the known console-template false positive; timestamp is Node's format argument (`logger.ts` `installTimestamps()`); guarded by `console-format-placeholder.guard.test.ts` |
