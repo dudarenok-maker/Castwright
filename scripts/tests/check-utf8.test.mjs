@@ -26,6 +26,20 @@ test('findNonUtf8: a lone 0x97 byte fails and reports its offset', () => {
   ]);
 });
 
+test('findNonUtf8: a lead byte followed by ASCII reports the lead byte, not the ASCII', () => {
+  const bytes = Buffer.from([0x61, 0x62, 0xe2, 0x78]);
+  assert.deepEqual(findNonUtf8([{ path: 'server/a.ts', bytes }]), [
+    { path: 'server/a.ts', offset: 2 },
+  ]);
+});
+
+test('findNonUtf8: a sequence truncated at EOF reports its lead byte', () => {
+  const bytes = Buffer.from([0x61, 0x62, 0xe2, 0x80]);
+  assert.deepEqual(findNonUtf8([{ path: 'server/a.ts', bytes }]), [
+    { path: 'server/a.ts', offset: 2 },
+  ]);
+});
+
 test('findNonUtf8: a BOM\'d UTF-16LE .ts is reported as non-UTF-8, not skipped', () => {
   const bytes = Buffer.concat([Buffer.from([0xff, 0xfe]), Buffer.from('// hi\n', 'utf16le')]);
   assert.deepEqual(findNonUtf8([{ path: 'server/ps-out.ts', bytes }]), [

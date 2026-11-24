@@ -75,7 +75,23 @@ function firstInvalidOffset(bytes) {
     if (prefixOk(mid)) lo = mid + 1;
     else hi = mid;
   }
-  return lo - 1;
+  return leadOffset(bytes, lo - 1);
+}
+
+/**
+ * The faulting byte `f` may be a byte that merely interrupted (or followed a
+ * truncation of) a multi-byte sequence; the invalid sequence then starts at
+ * its lead byte. Step back to that lead when its sequence is still incomplete
+ * at `f`; otherwise `f` itself is the first invalid byte.
+ */
+function leadOffset(bytes, f) {
+  for (let i = f - 1; i >= 0 && i >= f - 3; i--) {
+    const b = bytes[i];
+    if ((b & 0xc0) === 0x80) continue; // continuation byte: keep looking back
+    const len = b >= 0xf8 ? 1 : b >= 0xf0 ? 4 : b >= 0xe0 ? 3 : b >= 0xc0 ? 2 : 1;
+    return len > f - i ? i : f;
+  }
+  return f;
 }
 
 /**
