@@ -252,10 +252,12 @@ jobs:
       - name: Register citation check
         run: npm run check:register-citations
 
-      # #4586: non-UTF-8 text guard (unconditional): scans every tracked text
-      # file under server/, src/ and scripts/, so no diff scope reliably
-      # predicts whether one broke; must run on every PR, docs-only included.
-      # (No scope gate: same unconditional shape as the step above.)
+      # #4586: non-UTF-8 text guard: scans the tracked text files under
+      # server/, src/ and scripts/ (scripts/check-utf8.mjs). Deliberately run
+      # on every PR, docs-only included, with no scope gate; pinned as
+      # unconditional in scripts/tests/workflow-wiring.test.mjs. Not mirrored
+      # in verify-cache's UNCONDITIONAL_LOCAL_CHECK_SCRIPTS (that list is for
+      # whole-tree scans no diff scope can predict; this one covers 3 roots).
       - name: UTF-8 encoding check
         run: npm run check:utf8
 

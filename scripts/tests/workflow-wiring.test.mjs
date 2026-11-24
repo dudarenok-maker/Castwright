@@ -1692,6 +1692,53 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
   );
 });
 
+test('UTF-8 encoding check: must be unconditional, exact command, script wired — issue #4586', () => {
+  // The non-UTF-8 guard scans server/, src/ and scripts/ and must run on every
+  // PR (docs-only included). Nothing else spawns `check:utf8`, so without this
+  // pin deleting the step, adding an `if:`, neutering `run:` or renaming the
+  // npm script would leave every suite green. Same indentation-based block
+  // extraction as the register-citation pin above.
+  const yamlLines = source.split('\n');
+  const stepStartIdx = yamlLines.findIndex((l) => /^\s*- name: UTF-8 encoding check\s*$/.test(l));
+  assert.ok(
+    stepStartIdx >= 0,
+    'UTF-8 encoding check step (- name: UTF-8 encoding check) not found in workflow',
+  );
+  const stepIndent = /^(\s*)/.exec(yamlLines[stepStartIdx])[1].length;
+
+  const stepLines = [yamlLines[stepStartIdx]];
+  for (let i = stepStartIdx + 1; i < yamlLines.length; i += 1) {
+    const line = yamlLines[i];
+    if (line.trim() === '') {
+      stepLines.push(line);
+      continue;
+    }
+    if (/^(\s*)/.exec(line)[1].length <= stepIndent) break;
+    stepLines.push(line);
+  }
+  const stepBlock = stepLines.join('\n');
+
+  assert.ok(
+    !/^\s*if:/m.test(stepBlock),
+    'UTF-8 encoding check step must be unconditional (no `if:` guard): it must run on every PR, including docs-only.',
+  );
+  assert.ok(
+    !/^\s*continue-on-error:/im.test(stepBlock),
+    'UTF-8 encoding check step must not set `continue-on-error:`; a failure must fail the job.',
+  );
+  assert.ok(
+    /^\s*run:\s*npm run check:utf8\s*$/m.test(stepBlock),
+    'UTF-8 encoding check step must execute `npm run check:utf8`, not a neutered or renamed command.',
+  );
+
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+  assert.match(
+    pkg.scripts['check:utf8'] ?? '',
+    /^node\s+scripts\/check-utf8\.mjs\b/,
+    "package.json's `check:utf8` script must run scripts/check-utf8.mjs.",
+  );
+});
+
 // ---------------------------------------------------------------------------
 // ffmpeg-floor leg contract (#4461). package.json castwright.ffmpeg.minimum is
 // a SUPPORT floor ("the oldest ffmpeg we test against"); the `ffmpeg-floor` job
