@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="151" data-publish-id="6feaf8502336"></div>
+  <div hidden data-published-as="152" data-publish-id="58a71abc02a2"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -1734,7 +1734,7 @@
       <div class="body">
         <p>The handshake probe now routes a 401 from <code>GET /api/info</code> to the pairing screen. The automated tests pin that routing against a fake client. Nothing automated proves the user-visible consequence: the pairing screen opening on a phone whose library is downloaded and which therefore never streams. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR A)</p>
         <ul>
-        <li><strong>Setup.</strong> Pair a phone, download at least one book fully, and confirm it plays offline.</li>
+        <li><strong>Setup.</strong> Pair a phone, download at least one book fully, and confirm it plays offline. Precondition: in the app&#8217;s settings, &#8220;auto-sync on reconnect&#8221; must be on, and the Wi-Fi must be unmetered (or &#8220;unmetered Wi-Fi only&#8221; off). With either gate closed, auto-sync returns before probing, so no pairing screen opens and steps 4 and 5 would record a false failure.</li>
         <li><strong>Revoke.</strong> On the desktop, revoke that device so its token now answers 401.</li>
         <li><strong>Trigger.</strong> Put the phone back on the LAN and let auto-sync fire (toggle Wi-Fi off and on).</li>
         <li><strong>The pairing screen opens.</strong> Before PR A the app reported the computer unreachable indefinitely, with no prompt.</li>
