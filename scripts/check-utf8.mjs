@@ -99,6 +99,7 @@ export function listTrackedFiles(root) {
     cwd: root,
     env: scrubGitEnv(),
     maxBuffer: 256 * 1024 * 1024,
+    windowsHide: true,
   });
   return out.toString('utf8').split('\0').filter(Boolean);
 }

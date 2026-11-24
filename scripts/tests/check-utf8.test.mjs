@@ -38,12 +38,12 @@ test('findNonUtf8: a skip-listed extension is skipped even when not valid UTF-8'
 
 function makeRepo(files) {
   const dir = mkdtempSync(join(tmpdir(), 'check-utf8-'));
-  spawnSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv() });
+  spawnSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv(), windowsHide: true });
   for (const [rel, bytes] of Object.entries(files)) {
     mkdirSync(join(dir, dirname(rel)), { recursive: true });
     writeFileSync(join(dir, rel), bytes);
   }
-  spawnSync('git', ['add', '-A'], { cwd: dir, env: scrubGitEnv() });
+  spawnSync('git', ['add', '-A'], { cwd: dir, env: scrubGitEnv(), windowsHide: true });
   return dir;
 }
 
@@ -53,7 +53,7 @@ test('CLI: a temp git repo with one bad file exits non-zero and names it', () =>
     'server/bad.ts': Buffer.concat([Buffer.from('x'), Buffer.from([0x97])]),
   });
   try {
-    const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 1, r.stdout + r.stderr);
     assert.match(r.stdout, /FAIL/);
     assert.match(r.stdout, /server\/bad\.ts/);
@@ -67,7 +67,7 @@ test('CLI: a temp git repo with one bad file exits non-zero and names it', () =>
 test('CLI: a clean temp git repo exits 0', () => {
   const dir = makeRepo({ 'src/ok.ts': Buffer.from('// —\n') });
   try {
-    const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [CLI], { cwd: dir, env: scrubGitEnv(), encoding: 'utf8', windowsHide: true });
     assert.equal(r.status, 0, r.stdout + r.stderr);
     assert.match(r.stdout, /check-utf8: OK — 1 tracked text files/);
   } finally {
