@@ -1167,6 +1167,8 @@ function assertTerminal(verdict) {
   assert.match(verdict.reason, /TERMINAL/);
   assert.match(verdict.reason, /STOP NOW/);
   assert.match(verdict.reason, /do not retry/);
+  assert.match(verdict.reason, /ANY root/);
+  assert.match(verdict.reason, /return value/);
   assert.ok(verdict.reason.includes(TERMINAL_DENIAL_INSTRUCTION));
 }
 
