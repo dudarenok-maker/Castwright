@@ -1175,8 +1175,8 @@ before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on
 `main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run.
 Docs-only PRs still complete `verify.yml` in seconds rather than deadlocking
 the required check — most legs' scope conditions evaluate false for a
-docs-only diff; two steps (`check:register-citations`, PR #3134, and
-`check:plan-numbers`, #4582) run unconditionally. Either way, the job completes in seconds and reports green (see
+docs-only diff; three steps (`check:register-citations`, PR #3134,
+`check:plan-numbers`, #4582, and `check:utf8`, #4586) run unconditionally. Either way, the job completes in seconds and reports green (see
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for why `paths-ignore` was deliberately removed rather than kept).
 See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md)
@@ -1501,10 +1501,13 @@ Working practice below; this holds even under contention).
   (CLAUDE.md's own trivial-bar carve-out permits this, and the scan skips the
   primary as an assignment candidate) — still protects the wrong tree and can
   ALLOW a write to it, since fail-open covers "found nothing" and never
-  "found the wrong known root"; and **a denial is still not terminal**
-  ([#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)) — the
-  second 2026-09-19 occurrence's agent retried against the *wrong* root
-  instead of stopping, leaving a stray uncommitted
+  "found the wrong known root"; and **a denial can still be ignored**. By
+  owner decision on [#3369](https://github.com/dudarenok-maker/Castwright/issues/3369)
+  (2026-11-18) the deny message now instructs the agent to STOP, make no
+  further writes against any root, and report the denial in its return value
+  — but that is an instruction the agent can still disregard (the guard cannot
+  kill a dispatch). The second 2026-09-19 occurrence's agent retried against
+  the *wrong* root instead of stopping, leaving a stray uncommitted
   `server/src/analyzer/errors.ts` edit on `main` in the primary checkout, the
   #3044 pattern reaching *through* the guard rather than in spite of it. The
   before/after porcelain check is what actually catches this class of failure.
