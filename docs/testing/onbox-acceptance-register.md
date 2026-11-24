@@ -8174,6 +8174,7 @@ The automated tests pin the range list, the message text and the log write again
 4. **The pairing screen opens.** Before PR A the app reported the computer unreachable indefinitely, with no prompt.
 5. **Re-pair.** Pair again: the library, the downloads and the listening positions survive.
 6. **Negative control.** With the phone off Wi-Fi entirely, the pairing screen must NOT open (an unreachable computer is still just "unreachable").
+7. **One re-pair, not a loop.** After the re-pair in step 5, toggle Wi-Fi off and on again, twice. The pairing screen must NOT open again: the replaced runtime is disposed on a successful re-pair, so no leftover probe sends the old revoked token.
 
 *Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
 

@@ -22,6 +22,11 @@ import 'src/domain/pairing_qr.dart';
 import 'src/ui/library_home_screen.dart';
 import 'src/ui/pairing_screen.dart';
 
+/// Builds the runtime for a paired connection. Production uses
+/// [CompanionRuntime.forConnection]; widget tests inject a fake-parts builder.
+typedef RuntimeFactory = Future<CompanionRuntime> Function(Connection connection,
+    {CompanionAudioHandler? handler, void Function()? onRepairNeeded});
+
 /// Default demo root — app-private, deleted on exit. Overridden in host tests.
 Future<String> _defaultDemoRoot() async =>
     '${(await getApplicationDocumentsDirectory()).path}/demo-runtime';
@@ -77,6 +82,7 @@ class AudiobookCompanionApp extends StatelessWidget {
       this.audioHandler,
       this.deepLinks,
       this.runtimeOverride,
+      this.runtimeFactory,
       this.themeMode = ThemeMode.system,
       this.demoRootResolver,
       this.demoFileStore,
@@ -96,6 +102,9 @@ class AudiobookCompanionApp extends StatelessWidget {
   /// Injectable pre-built runtime — used by the marketing capture + widget tests
   /// to skip pairing/connection and render posed screens. Null in production.
   final CompanionRuntime? runtimeOverride;
+
+  /// Injectable runtime builder (tests). Null in production.
+  final RuntimeFactory? runtimeFactory;
 
   /// Light/dark selection. Defaults to following the system; the capture harness
   /// forces a value per pass.
@@ -126,6 +135,7 @@ class AudiobookCompanionApp extends StatelessWidget {
           audioHandler: audioHandler,
           deepLinks: deepLinks,
           runtimeOverride: runtimeOverride,
+          runtimeFactory: runtimeFactory,
           demoRootResolver: demoRootResolver,
           demoFileStore: demoFileStore,
           demoAssetLoader: demoAssetLoader),
@@ -141,6 +151,7 @@ class HomePage extends StatefulWidget {
       this.audioHandler,
       this.deepLinks,
       this.runtimeOverride,
+      this.runtimeFactory,
       this.demoRootResolver,
       this.demoFileStore,
       this.demoAssetLoader});
@@ -154,6 +165,9 @@ class HomePage extends StatefulWidget {
 
   /// Injectable pre-built runtime (capture/tests). Null in production.
   final CompanionRuntime? runtimeOverride;
+
+  /// Injectable runtime builder (tests). Null in production.
+  final RuntimeFactory? runtimeFactory;
 
   final Future<String> Function()? demoRootResolver;
   final FileStore? demoFileStore;
@@ -252,7 +266,7 @@ class _HomePageState extends State<HomePage> {
     }
     // Offline-capable: rebuild the pinned runtime from stored creds, no network.
     try {
-      final runtime = await CompanionRuntime.forConnection(
+      final runtime = await (widget.runtimeFactory ?? CompanionRuntime.forConnection)(
           Connection(server: server, caPem: caPem),
           handler: widget.audioHandler,
           onRepairNeeded: () => _openPairing());
@@ -297,7 +311,7 @@ class _HomePageState extends State<HomePage> {
       }
       await widget.store.saveCaPem(caPem);
       final conn = Connection(server: server, caPem: caPem);
-      final runtime = await CompanionRuntime.forConnection(conn,
+      final runtime = await (widget.runtimeFactory ?? CompanionRuntime.forConnection)(conn,
           handler: widget.audioHandler, onRepairNeeded: () => _openPairing());
       if (mounted) {
         setState(() {
@@ -327,11 +341,30 @@ class _HomePageState extends State<HomePage> {
       );
       if (result != null && mounted) {
         _paired = result;
+        await _retireRuntime();
         await _boot();
       }
     } finally {
       _pairingOpen = false;
     }
+  }
+
+  /// Dispose the runtime a re-pair is about to replace. Its Connectivity
+  /// listener would otherwise keep probing with the old (revoked) token, and a
+  /// 401 there re-opens the pairing screen on every network change. Unmounts it
+  /// first (the UI must not hold a disposed runtime) and disposes BEFORE the new
+  /// one is built, because dispose() detaches the shared audio handler that the
+  /// new runtime re-attaches to.
+  Future<void> _retireRuntime() async {
+    final old = _runtime;
+    if (old == null || old == widget.runtimeOverride) return;
+    if (mounted) {
+      setState(() {
+        _runtime = null;
+        _loading = true;
+      });
+    }
+    await old.dispose();
   }
 
   Future<void> _unpair() async {

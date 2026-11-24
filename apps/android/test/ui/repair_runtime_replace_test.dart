@@ -1,0 +1,87 @@
+import 'dart:async';
+
+import 'package:castwright/main.dart';
+import 'package:castwright/src/data/companion_audio_handler.dart';
+import 'package:castwright/src/data/file_store.dart';
+import 'package:castwright/src/data/pairing_service.dart';
+import 'package:castwright/src/data/pairing_store.dart';
+import 'package:castwright/src/demo/demo_audio_engine.dart';
+import 'package:castwright/src/demo/demo_runtime.dart';
+import 'package:castwright/src/domain/paired_server.dart';
+import 'package:flutter_test/flutter_test.dart';
+
+class _PairedStore implements PairingStore {
+  PairedServer? server = const PairedServer(
+      url: 'https://192.168.1.5:8443',
+      token: 'old-revoked-token',
+      caFingerprint: 'f');
+  @override
+  Future<PairedServer?> load() async => server;
+  @override
+  Future<String?> loadCaPem() async => 'pem';
+  @override
+  Future<void> save(PairedServer s) async => server = s;
+  @override
+  Future<void> saveCaPem(String pem) async {}
+  @override
+  Future<void> clear() async => server = null;
+}
+
+class _RecordingEngine extends DemoAudioEngine {
+  bool disposed = false;
+  @override
+  Future<void> dispose() async => disposed = true;
+}
+
+void main() {
+  // E118 / PR #4635 review: a successful re-pair rebuilds the runtime. The old
+  // runtime must be disposed first, or its Connectivity listener keeps probing
+  // with the revoked token and (since a 401 now re-opens pairing) re-opens the
+  // pairing screen on every later network change.
+  testWidgets('a successful re-pair disposes the runtime it replaces',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    final engines = <_RecordingEngine>[];
+
+    final service = PairingService(
+      fetchCa: (_) async => 'pem',
+      verifyTag: (_, _) => true,
+      redeem: (_, _, _) async =>
+          const RedeemResult(token: 'new-token', caFingerprint: 'f'),
+    );
+
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _PairedStore(),
+      service: service,
+      deepLinks: links.stream,
+      runtimeFactory: (Connection c,
+          {CompanionAudioHandler? handler,
+          void Function()? onRepairNeeded}) async {
+        final engine = _RecordingEngine();
+        engines.add(engine);
+        return buildDemoRuntime(
+            fs: InMemoryFileStore(), root: '/t', engine: engine);
+      },
+    ));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+    expect(engines, hasLength(1));
+    expect(engines.single.disposed, isFalse);
+
+    links.add(Uri.parse(
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pair'));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 500)));
+    await tester.pumpAndSettle();
+
+    expect(engines, hasLength(2), reason: 'the re-pair rebuilt the runtime');
+    expect(engines.first.disposed, isTrue,
+        reason: 'the replaced runtime must be disposed (cancels its probe)');
+    expect(engines.last.disposed, isFalse,
+        reason: 'the new runtime must stay alive');
+  });
+}
