@@ -6,7 +6,9 @@
 // NNN-*.md` files sharing one number make every citation of it ambiguous.
 // The checker reads `git ls-files -- docs/features`, keeps `.md` files whose
 // BASENAME starts `^(\d+[a-z]?)-` (digits plus an optional single letter, so
-// `70a-` and `70b-` are different keys; `archive/` is just a directory), and
+// `70a-` and `70b-` are different keys; `archive/` is just a directory).
+// Keys are normalised: leading zeros stripped (`07-` = `7-`), suffix letter and
+// `.md` extension case-folded, and `-z` listing keeps non-ASCII names intact. It
 // fails when a key has two or more files outside the frozen allowlist.
 // INDEX.md, TEMPLATE.md, README.md, unnumbered plans and non-.md twins (the
 // `.html` board of a plan) are ignored.
@@ -31,19 +33,21 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 
 const REPO_ROOT = fileURLToPath(new URL('..', import.meta.url));
 
-const PLAN_KEY_RE = /^(\d+[a-z]?)-/;
+const PLAN_KEY_RE = /^(\d+)([a-z]?)-/i;
 
 const baseName = (path) => path.slice(path.lastIndexOf('/') + 1);
 
 /**
- * Leading plan-number token of a tracked path, or null when the path is not a
- * numbered `.md` plan.
+ * Normalised leading plan-number token of a tracked path, or null when the path
+ * is not a numbered `.md` plan. Leading zeros are stripped and the suffix letter
+ * and extension are case-folded, so `07-` and `7-` (and `296A-` / `296a-`,
+ * `.MD` / `.md`) are the same plan number.
  */
 export function extractPlanKey(path) {
-  if (!path.endsWith('.md')) return null;
-  const base = path.slice(path.lastIndexOf('/') + 1);
-  const match = PLAN_KEY_RE.exec(base);
-  return match ? match[1] : null;
+  if (!/\.md$/i.test(path)) return null;
+  const match = PLAN_KEY_RE.exec(baseName(path));
+  if (!match) return null;
+  return `${match[1].replace(/^0+(?=\d)/, '')}${match[2].toLowerCase()}`;
 }
 
 /**
@@ -211,19 +215,21 @@ class CliExitError extends Error {
   }
 }
 
-function gitLsFilesDocsFeatures() {
+export function listDocsFeaturesFiles(cwd = REPO_ROOT) {
   // Same shape as check-register-citations.mjs's gitLsFiles(): pin the cwd to
   // the repo root resolved from THIS file's own location (so a copy under a
   // scratch repo scans that repo, and a junctioned worktree is handled), with
   // the repository-redirection GIT_* vars scrubbed (#2169/#2216), and resolve
   // file URLs through fileURLToPath, never a raw .pathname (#3413).
-  const out = execFileSync('git', ['ls-files', '--', 'docs/features'], {
-    cwd: REPO_ROOT,
+  // `-z`: NUL-separated, never C-quoted, so a non-ASCII basename (core.quotepath)
+  // reaches the `.md` / key match intact.
+  const out = execFileSync('git', ['ls-files', '-z', '--', 'docs/features'], {
+    cwd,
     env: scrubGitEnv(),
     encoding: 'utf8',
     windowsHide: true,
   });
-  return out.split('\n').filter(Boolean);
+  return out.split('\0').filter(Boolean);
 }
 
 const REMEDIES = {
@@ -250,7 +256,7 @@ function renderProblem(problem) {
 }
 
 function runPlanNumbersCli() {
-  const trackedPaths = gitLsFilesDocsFeatures();
+  const trackedPaths = listDocsFeaturesFiles();
   const problems = findPlanNumberProblems(trackedPaths, LEGACY_DUPLICATES);
   if (problems.length > 0) {
     console.log(`check:plan-numbers: ${problems.length} problem(s) in docs/features:`);

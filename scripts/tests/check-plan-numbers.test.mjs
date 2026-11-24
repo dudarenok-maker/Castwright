@@ -8,10 +8,16 @@
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { spawnSync } from 'node:child_process';
+import { execFileSync, spawnSync } from 'node:child_process';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, join } from 'node:path';
-import { findPlanNumberProblems, extractPlanKey, LEGACY_DUPLICATES } from '../check-plan-numbers.mjs';
+import {
+  findPlanNumberProblems,
+  extractPlanKey,
+  listDocsFeaturesFiles,
+  LEGACY_DUPLICATES,
+} from '../check-plan-numbers.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const CLI_PATH = join(HERE, '..', 'check-plan-numbers.mjs');
@@ -163,3 +169,57 @@ test('(h) the CLI run against THIS repo exits 0 with the OK line', () => {
   assert.match(result.stdout, /check:plan-numbers: OK\./);
 });
 
+
+test('(i) a leading-zero number collides with its unpadded spelling', () => {
+  assert.equal(extractPlanKey('docs/features/archive/07-audio-tag-vocabulary.md'), '7');
+  assert.equal(extractPlanKey('docs/features/7-foo.md'), '7');
+  assert.equal(extractPlanKey('docs/features/archive/00-zero.md'), '0');
+  const problems = findPlanNumberProblems(
+    ['docs/features/archive/07-audio-tag-vocabulary.md', 'docs/features/7-foo.md'],
+    {},
+  );
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'duplicate');
+  assert.equal(problems[0].key, '7');
+});
+
+test('(j) the .md extension is matched case-insensitively', () => {
+  const problems = findPlanNumberProblems(
+    ['docs/features/296-x.md', 'docs/features/296-y.MD'],
+    {},
+  );
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'duplicate');
+  assert.equal(problems[0].key, '296');
+});
+
+test('(k) the single-letter suffix is folded to lower case', () => {
+  assert.equal(extractPlanKey('docs/features/296A-x.md'), '296a');
+  const problems = findPlanNumberProblems(
+    ['docs/features/296a-x.md', 'docs/features/296A-y.md'],
+    {},
+  );
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'duplicate');
+  assert.equal(problems[0].key, '296a');
+});
+
+test('(l) a non-ASCII basename is listed unquoted and still collides', () => {
+  const repo = mkdtempSync(join(HERE, 'scratch-repo-'));
+  try {
+    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { windowsHide: true });
+    git('init', '-q');
+    mkdirSync(join(repo, 'docs', 'features'), { recursive: true });
+    writeFileSync(join(repo, 'docs', 'features', '296-café.md'), 'x');
+    writeFileSync(join(repo, 'docs', 'features', '296-plain.md'), 'y');
+    git('add', '.');
+    const tracked = listDocsFeaturesFiles(repo);
+    assert.ok(tracked.includes('docs/features/296-café.md'), `listed: ${tracked.join('|')}`);
+    const problems = findPlanNumberProblems(tracked, {});
+    assert.equal(problems.length, 1);
+    assert.equal(problems[0].kind, 'duplicate');
+    assert.equal(problems[0].key, '296');
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
+});
