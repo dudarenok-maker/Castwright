@@ -9,9 +9,11 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { execFileSync, spawnSync } from 'node:child_process';
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
+import { scrubGitEnvForThrowawayRepo } from '../git-env.mjs';
 import {
   findPlanNumberProblems,
   extractPlanKey,
@@ -205,15 +207,22 @@ test('(k) the single-letter suffix is folded to lower case', () => {
 });
 
 test('(l) a non-ASCII basename is listed unquoted and still collides', () => {
-  const repo = mkdtempSync(join(HERE, 'scratch-repo-'));
+  // Under os.tmpdir(), never in the source tree: the scripts/ walkers in
+  // sibling test files would race the scratch .git. Every git call is fully
+  // scrubbed so an inherited GIT_DIR cannot point `add .` at the real repo (#2169).
+  const repo = mkdtempSync(join(tmpdir(), 'scratch-repo-'));
   try {
-    const git = (...args) => execFileSync('git', ['-C', repo, ...args], { windowsHide: true });
+    const rel = relative(realpathSync(tmpdir()), realpathSync(repo));
+    assert.ok(!rel.startsWith('..') && !isAbsolute(rel), `scratch repo outside tmpdir: ${repo}`);
+    const env = scrubGitEnvForThrowawayRepo();
+    const git = (...args) =>
+      execFileSync('git', ['-C', repo, ...args], { env, windowsHide: true });
     git('init', '-q');
     mkdirSync(join(repo, 'docs', 'features'), { recursive: true });
     writeFileSync(join(repo, 'docs', 'features', '296-café.md'), 'x');
     writeFileSync(join(repo, 'docs', 'features', '296-plain.md'), 'y');
     git('add', '.');
-    const tracked = listDocsFeaturesFiles(repo);
+    const tracked = listDocsFeaturesFiles(repo, env);
     assert.ok(tracked.includes('docs/features/296-café.md'), `listed: ${tracked.join('|')}`);
     const problems = findPlanNumberProblems(tracked, {});
     assert.equal(problems.length, 1);

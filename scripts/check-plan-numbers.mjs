@@ -217,7 +217,7 @@ class CliExitError extends Error {
   }
 }
 
-export function listDocsFeaturesFiles(cwd = REPO_ROOT) {
+export function listDocsFeaturesFiles(cwd = REPO_ROOT, env = process.env) {
   // Same shape as check-register-citations.mjs's gitLsFiles(): pin the cwd to
   // the repo root resolved from THIS file's own location (so a copy under a
   // scratch repo scans that repo, and a junctioned worktree is handled), with
@@ -227,7 +227,7 @@ export function listDocsFeaturesFiles(cwd = REPO_ROOT) {
   // reaches the `.md` / key match intact.
   const out = execFileSync('git', ['ls-files', '-z', '--', 'docs/features'], {
     cwd,
-    env: scrubGitEnv(),
+    env: scrubGitEnv(env),
     encoding: 'utf8',
     windowsHide: true,
   });
