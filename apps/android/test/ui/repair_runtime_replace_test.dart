@@ -2,6 +2,9 @@ import 'dart:async';
 
 import 'package:castwright/main.dart';
 import 'package:castwright/src/data/companion_audio_handler.dart';
+import 'package:castwright/src/data/companion_runtime.dart';
+import 'package:castwright/src/ui/library_home_screen.dart';
+import 'package:castwright/src/ui/player_screen.dart';
 import 'package:castwright/src/data/file_store.dart';
 import 'package:castwright/src/data/pairing_service.dart';
 import 'package:castwright/src/data/pairing_store.dart';
@@ -83,5 +86,63 @@ void main() {
         reason: 'the replaced runtime must be disposed (cancels its probe)');
     expect(engines.last.disposed, isFalse,
         reason: 'the new runtime must stay alive');
+  });
+
+  // PR #4635 review pass 2: on a phone a book's PlayerScreen is pushed on the
+  // root navigator, and the pairing screen is pushed on top of it (that is
+  // where the 401 fires). The re-pair disposes the old runtime, so the routes
+  // under pairing must be popped or the user lands back on a player bound to a
+  // closed database.
+  testWidgets('a re-pair started from the player leaves no route on the old runtime',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    final engines = <_RecordingEngine>[];
+    final runtimes = <CompanionRuntime>[];
+
+    final service = PairingService(
+      fetchCa: (_) async => 'pem',
+      verifyTag: (_, _) => true,
+      redeem: (_, _, _) async =>
+          const RedeemResult(token: 'new-token', caFingerprint: 'f'),
+    );
+
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _PairedStore(),
+      service: service,
+      deepLinks: links.stream,
+      runtimeFactory: (Connection c,
+          {CompanionAudioHandler? handler,
+          void Function()? onRepairNeeded}) async {
+        final engine = _RecordingEngine();
+        engines.add(engine);
+        final runtime = await buildDemoRuntime(
+            fs: InMemoryFileStore(), root: '/t', engine: engine);
+        runtimes.add(runtime);
+        return runtime;
+      },
+    ));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('The Drowning Bell'));
+    await tester.pumpAndSettle();
+    expect(find.byType(PlayerScreen), findsOneWidget);
+
+    links.add(Uri.parse(
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pair'));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 500)));
+    await tester.pumpAndSettle();
+
+    expect(engines.first.disposed, isTrue);
+    expect(find.byType(PlayerScreen), findsNothing,
+        reason: 'the player bound to the disposed runtime must be popped');
+    expect(find.byType(LibraryHomeScreen), findsOneWidget);
+    expect(tester.widget<LibraryHomeScreen>(find.byType(LibraryHomeScreen)).runtime,
+        same(runtimes.last));
   });
 }

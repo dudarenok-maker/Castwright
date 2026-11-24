@@ -341,6 +341,10 @@ class _HomePageState extends State<HomePage> {
       );
       if (result != null && mounted) {
         _paired = result;
+        // Routes pushed above home (the player, settings) hold the runtime
+        // that is about to be disposed; drop them so the user lands on the
+        // rebuilt home screen, not a screen bound to a closed database.
+        Navigator.of(context).popUntil((r) => r.isFirst);
         await _retireRuntime();
         await _boot();
       }

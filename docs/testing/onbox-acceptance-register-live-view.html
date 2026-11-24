@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="150" data-publish-id="5e4cb94d3894"></div>
+  <div hidden data-published-as="151" data-publish-id="6feaf8502336"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -1740,6 +1740,8 @@
         <li><strong>The pairing screen opens.</strong> Before PR A the app reported the computer unreachable indefinitely, with no prompt.</li>
         <li><strong>Re-pair.</strong> Pair again: the library, the downloads and the listening positions survive.</li>
         <li><strong>Negative control.</strong> With the phone off Wi-Fi entirely, the pairing screen must NOT open (an unreachable computer is still just &#8220;unreachable&#8221;).</li>
+        <li><strong>One re-pair, not a loop.</strong> After the re-pair in step 5, toggle Wi-Fi off and on again, twice. The pairing screen must NOT open again: the replaced runtime is disposed on a successful re-pair, so no leftover probe sends the old revoked token.</li>
+        <li><strong>Re-pair from the player, then keep listening.</strong> Open a book in the player, then trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on). Pair again. The app must land on the library, not on the player, and opening the book and pressing play must work with no error.</li>
         </ul>
         <p><em>Needs:</em> a real Android phone with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.</p>
       </div>
