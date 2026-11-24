@@ -30,7 +30,7 @@ export const BINARY_EXTENSIONS = new Set([
   'png', 'jpg', 'jpeg', 'gif', 'ico', 'woff', 'woff2', 'ttf', 'otf', 'pdf',
   'zip', 'gz', 'mp3', 'wav', 'mp4', 'm4a', 'm4b', 'onnx', 'bin',
   'safetensors', 'pt', 'pth', 'npz', 'npy',
-  'epub', 'pcm', 'webm',
+  'epub', 'pcm', 'webm', 'opus', 'mobi', 'azw3',
 ]);
 
 function extensionOf(path) {

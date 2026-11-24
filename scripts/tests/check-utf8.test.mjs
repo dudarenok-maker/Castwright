@@ -72,6 +72,14 @@ test('findNonUtf8: a skip-listed extension is skipped even when not valid UTF-8'
   assert.deepEqual(findNonUtf8([{ path: 'src/logo.PNG', bytes }]), []);
 });
 
+test('findNonUtf8: opus, mobi and azw3 (binary in .gitattributes) are skipped by extension', () => {
+  const bytes = Buffer.from([0x00, 0x97, 0x41]);
+  assert.deepEqual(
+    findNonUtf8(['a.opus', 'a.mobi', 'a.azw3'].map((p) => ({ path: `server/${p}`, bytes }))),
+    [],
+  );
+});
+
 function makeRepo(files) {
   const dir = mkdtempSync(join(tmpdir(), 'check-utf8-'));
   spawnSync('git', ['init', '-q'], { cwd: dir, env: scrubGitEnv(), windowsHide: true });
