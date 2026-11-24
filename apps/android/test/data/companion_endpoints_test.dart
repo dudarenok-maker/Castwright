@@ -32,10 +32,12 @@ const _bookId = 'book-1';
 const _chapterId = 7;
 
 /// #898 PR A (plan Task A-T4, R2 / the Dart half of M2): the device-scoped token
-/// is only honoured on nine `(method, path-shape)` pairs. This drives every
-/// companion call site against a recording transport and pins exactly those
-/// nine, so a companion change that adds, drops or re-methods an endpoint goes
-/// red here instead of 403ing on the phone.
+/// is only honoured on nine `(method, path-shape)` pairs. This drives the
+/// companion call sites it lists against a recording transport and pins exactly
+/// those nine, so a renamed path or a changed method on one of those call sites
+/// goes red here instead of 403ing on the phone. It does NOT discover new
+/// endpoints: a new `ApiClient` method or `getJson('/api/...')` caller is never
+/// exercised, so adding one stays green until it is listed here by hand.
 void main() {
   late HttpServer server;
   late List<String> recorded; // 'METHOD /normalised/path'
@@ -43,13 +45,12 @@ void main() {
   String shape(String method, String path) {
     final p = path
         .replaceAll(_bookId, '{id}')
-        .replaceAll('/chapters/$_chapterId/', '/chapters/{cid}/')
-        .replaceAll(RegExp(r'/chapters/$_chapterId$'), '/chapters/{cid}');
+        .replaceAll('/chapters/$_chapterId/', '/chapters/{cid}/');
     return '$method $p';
   }
 
-  /// Hook the recorder reads: tests swap it to prove the floor catches a
-  /// recorder that silently discards.
+  /// Hook the recorder reads. No test swaps it; the `hasLength(9)` floor below
+  /// is what fails if it silently discards (verified by hand, not in the suite).
   void Function(String method, String path) record = (m, p) {};
 
   setUp(() async {
@@ -102,7 +103,11 @@ void main() {
     // 2. GET /api/library/sync-manifest (index and per-book detail; one shape).
     await swallow(() => sendApi.syncManifestIndex());
     await swallow(() => sendApi.syncManifestBookDetail(_bookId));
-    // 3. GET /api/books/{id}/cover (the literal companion_runtime.dart passes).
+    // 3. GET /api/books/{id}/cover. The path is typed here and mirrors the
+    //    `ThumbnailCache.fetch` closure in `CompanionRuntime.forConnection`;
+    //    that closure is not reachable from a test (forConnection needs
+    //    path_provider, the audio engine and a real database), so a path change
+    //    there is NOT caught by this row.
     await swallow(() => httpApi.getBytes('/api/books/$_bookId/cover'));
     // 4. GET /api/books/{id}/chapters/{cid}/audio (waveform peaks JSON).
     await sendApi.getChapterPeaks(_bookId, _chapterId);
