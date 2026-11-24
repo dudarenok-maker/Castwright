@@ -511,7 +511,8 @@ already handles by re-pairing". It is not, for the user this app targets:
 
 - `onRepairNeeded` fires from **one** place, `player_controller.dart:436` —
   the LAN-stream failure path.
-- A 401 on the startup handshake is caught by `probeReachable`'s bare
+- A 401 on AutoSync's reconnect probe (`GET /api/info`, run on a
+  connectivity event when the sync gates allow) is caught by `probeReachable`'s bare
   `catch (_)` (`companion_runtime.dart:230-235`) and reported as **"server
   offline"**.
 - An **offline-first user whose library is already downloaded never streams**,
