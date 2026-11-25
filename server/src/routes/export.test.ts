@@ -706,11 +706,9 @@ describeIfFfmpeg('captions export', () => {
     expect(res.status).toBe(201);
     const exportId = res.body.id as string;
 
-    let job = res.body;
-    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      job = (await request(app).get(`/api/books/${bookId}/exports/${exportId}`)).body;
-    }
+    // #4537 — whole-book captions spawn ffprobe once per chapter, so the poll gets the same
+    // widened 45 s window / 60 s timeout as the other ffmpeg-family sites.
+    const { body: job } = await waitForDone(exportId, 45_000);
     expect(job.status).toBe('done');
     expect(job.filename).toMatch(/\.srt$/);
 
@@ -719,7 +717,7 @@ describeIfFfmpeg('captions export', () => {
     expect(dl.headers['content-type']).toContain('application/x-subrip');
     expect(dl.text).toContain('Chapter one begins.');
     expect(dl.text).toContain('Chapter two begins.');
-  });
+  }, 60_000);
 
   it('creates a per-chapter line .vtt export as a downloadable zip', async () => {
     const res = await request(app)
@@ -764,17 +762,13 @@ describeIfFfmpeg('captions export', () => {
         captionGranularity: 'sentence',
         captionScope: 'whole-book',
       });
-    let job = res.body;
-    for (let i = 0; i < 50 && job.status === 'in_progress'; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      job = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
-    }
+    const { body: job } = await waitForDone(res.body.id as string, 45_000);
     expect(job.status).toBe('done');
     // The fixture's segments.json (this describe block's beforeAll) carries
     // no textHash — round-2-of-plan-review decision: that's surfaced as a
     // persisted job warning, not silently ignored.
     expect(job.warning).toMatch(/couldn\u0027t fully verify/);
-  });
+  }, 60_000);
 
   it('does not revoke a sentence-mode export when a word-mode export of the same book completes', async () => {
     const first = await request(app)
@@ -786,11 +780,7 @@ describeIfFfmpeg('captions export', () => {
         captionGranularity: 'sentence',
         captionScope: 'whole-book',
       });
-    let firstJob = first.body;
-    for (let i = 0; i < 50 && firstJob.status === 'in_progress'; i++) {
-      await new Promise((r) => setTimeout(r, 50));
-      firstJob = (await request(app).get(`/api/books/${bookId}/exports/${firstJob.id}`)).body;
-    }
+    const { body: firstJob } = await waitForDone(first.body.id as string, 45_000);
     expect(firstJob.status).toBe('done');
 
     // A different scope (per-chapter) is a different variant — must not
@@ -813,7 +803,7 @@ describeIfFfmpeg('captions export', () => {
 
     const stillThere = await request(app).get(`/api/books/${bookId}/exports/${firstJob.id}`);
     expect(stillThere.status).toBe(200);
-  });
+  }, 60_000);
 });
 
 describe('GET /api/books/:bookId/exports (list)', () => {
