@@ -115,3 +115,75 @@ describe('GET /cert/root.crt', () => {
     expect(res.headers['cache-control']).toBe('no-store');
   });
 });
+
+describe('GET /cert/root.crt 404 probed block, LAN caller (#4572)', () => {
+  const origEnv = process.env.MKCERT_CAROOT;
+  const BACKSLASH = String.fromCharCode(92);
+  const foreignCaroot =
+    process.platform === 'win32'
+      ? ['C:', 'Users', 'alice-secret', 'AppData', 'Local', 'mkcert-missing'].join(BACKSLASH)
+      : '/home/alice-secret/.local/share/mkcert-missing';
+
+  function makeLanApp(): Express {
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.defineProperty(req, 'ip', { value: '192.168.1.50' });
+      next();
+    });
+    app.use('/cert', certRootRouter);
+    return app;
+  }
+
+  /* Hermetic: hide any real mkcert CLI / CA so the route reliably 404s. */
+  const saved: Record<string, string | undefined> = {};
+  let emptyDir: string;
+  beforeEach(() => {
+    emptyDir = mkdtempSync(join(tmpdir(), 'mkcert-lan-test-'));
+    for (const k of ['PATH', 'Path', 'LOCALAPPDATA', 'XDG_DATA_HOME']) saved[k] = process.env[k];
+    process.env.PATH = emptyDir;
+    process.env.LOCALAPPDATA = emptyDir;
+    process.env.XDG_DATA_HOME = emptyDir;
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(emptyDir, { recursive: true, force: true });
+    if (origEnv === undefined) delete process.env.MKCERT_CAROOT;
+    else process.env.MKCERT_CAROOT = origEnv;
+  });
+
+  it('scrubs a CAROOT outside the server home for a non-loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toContain('alice-secret');
+    expect(res.body.probed.env).toBe('<path>');
+  });
+
+  it('keeps the full diagnostic for a loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeApp()).get('/cert/root.crt');
+    expect(res.status).toBe(404);
+    expect(res.body.probed.env).toBe(foreignCaroot);
+  });
+
+  it('leaves no path in the other probes for a non-loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    const { mkcertCli, defaultForPlatform } = res.body.probed;
+    expect(defaultForPlatform).toBe('<path>');
+    if (mkcertCli !== null) {
+      expect(mkcertCli).not.toContain('/');
+      expect(mkcertCli).not.toContain(BACKSLASH);
+      expect(mkcertCli).not.toMatch(/^[A-Za-z]:/);
+    }
+  });
+
+  it('keeps probed.env null when MKCERT_CAROOT is unset', async () => {
+    delete process.env.MKCERT_CAROOT;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    expect(res.body.probed.env).toBeNull();
+  });
+});

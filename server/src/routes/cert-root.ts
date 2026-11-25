@@ -22,11 +22,20 @@ import { homedir, platform } from 'node:os';
 import { join, resolve } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
-import { pathForClientOrNull } from '../lan-paths.js';
+import { isLoopbackRequest } from '../loopback.js';
+import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 export const certRootRouter = Router();
 
 const CA_FILENAME = 'rootCA.pem';
+
+/* #4572: the 404 `probed` diagnostic is unauthenticated. Loopback callers (the
+   dev box itself) keep the full path; a LAN peer gets scrubChildOutput's
+   `<path>` so no filesystem path, and so no OS username, reaches a phone. */
+function probeForClient(req: Request, p: string | null): string | null {
+  if (p === null) return null;
+  return isLoopbackRequest(req) ? p : scrubChildOutput(p);
+}
 
 function tryMkcertCaroot(): string | null {
   try {
@@ -84,10 +93,10 @@ certRootRouter.get('/root.crt', (req: Request, res: Response) => {
       error: 'mkcert root CA not found on this machine',
       hint: 'Run `npm run install:cert-mobile` on the dev box to bootstrap the local CA + per-device install instructions.',
       probed: {
-        // #4446: unauthenticated route; collapse the home dir for LAN peers.
-        env: pathForClientOrNull(req, process.env.MKCERT_CAROOT ?? null),
-        mkcertCli: pathForClientOrNull(req, tryMkcertCaroot()),
-        defaultForPlatform: pathForClientOrNull(req, defaultCarootForPlatform()),
+        // #4572 (builds on #4446): scrub every probed path for non-loopback callers.
+        env: probeForClient(req, process.env.MKCERT_CAROOT ?? null),
+        mkcertCli: probeForClient(req, tryMkcertCaroot()),
+        defaultForPlatform: probeForClient(req, defaultCarootForPlatform()),
       },
     });
     return;
