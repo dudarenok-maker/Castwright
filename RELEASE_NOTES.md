@@ -51,6 +51,7 @@
 - **On a phone, the analysing screen's model dropdown no longer spills off the edge.** The model picker now wraps inside its card instead of running past the side of the screen, so the page no longer pans sideways.
 - **On a phone, Help, Theme and Account now live in the menu.** The top bar used to push them off the edge of the screen. They sit in the menu instead, and the analysing screen has a menu button too.
 - **The QA report no longer offers to resume a voice check that is switched off.** It now says Render-integrity QA (voice match) is off, and points you to Advanced settings → Per-sentence QA gates to turn it on.
+- **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
 
 # Castwright 1.15.0
 
