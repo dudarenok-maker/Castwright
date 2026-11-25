@@ -14,13 +14,13 @@ import type { ThemePreference } from '../lib/use-theme';
 
 const CYCLE_ORDER: ThemePreference[] = ['system', 'light', 'dark'];
 
-const LABELS: Record<ThemePreference, string> = {
+export const LABELS: Record<ThemePreference, string> = {
   system: 'Theme: System (follows OS) — click to switch to Light',
   light: 'Theme: Light — click to switch to Dark',
   dark: 'Theme: Dark — click to switch to System',
 };
 
-function nextMode(current: ThemePreference): ThemePreference {
+export function nextMode(current: ThemePreference): ThemePreference {
   const idx = CYCLE_ORDER.indexOf(current);
   return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.length];
 }
