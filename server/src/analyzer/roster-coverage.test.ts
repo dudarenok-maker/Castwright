@@ -323,6 +323,23 @@ describe('roster guard — localized detection (es/ru/fr/de) #1051', () => {
     const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
     expect(res.missingSpeakers.map((s) => s.name)).toContain('Гесер');
   });
+  const RU_OBLIQUE_FORMS = [
+    'его', 'ему', 'им', 'ими', 'их',
+    'ним', 'ними', 'них', 'него', 'нему',
+    'нём', 'нем', 'неё', 'нее',
+    'её', 'ее', 'ей', 'ею', 'нею', 'ней',
+  ];
+  it.each(RU_OBLIQUE_FORMS)('does NOT flag a Russian oblique pronoun "%s" before a speech verb (stopword, #4659)', (form: string) => {
+    const w = form[0].toUpperCase() + form.slice(1);
+    const body = `${w} сказал маг, и в амулете остался один заряд. ${w} сказала Ольга, что всё иначе.`;
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).not.toContain(w);
+  });
+  it('still flags a genuine unrostered Russian speaker despite the oblique-pronoun stopwords (#4659 control)', () => {
+    const body = 'Ей сказал маг. «Слушай», — сказал Гесер мне в детстве.';
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Гесер');
+  });
 });
 
 describe('validateAttributionCoverage — localized half-state (es/ru) #1051', () => {
