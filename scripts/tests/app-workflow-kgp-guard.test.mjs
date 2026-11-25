@@ -98,7 +98,7 @@ function runGuard(script, props) {
   try {
     mkdirSync(join(dir, 'android'));
     writeFileSync(join(dir, 'android', 'gradle.properties'), props);
-    return spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8' });
+    return spawnSync('bash', ['-c', script], { cwd: dir, encoding: 'utf8', windowsHide: true });
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
