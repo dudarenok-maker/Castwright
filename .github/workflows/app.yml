@@ -10,10 +10,12 @@ on:
     paths:
       - 'apps/android/**'
       - '.github/workflows/app.yml'
+      - '.github/workflows/app-deps-watch.yml'
   pull_request:
     paths:
       - 'apps/android/**'
       - '.github/workflows/app.yml'
+      - '.github/workflows/app-deps-watch.yml'
 
 defaults:
   run:
@@ -24,6 +26,27 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
+      # ops-17 / #790 — Trip B. The KGP escape-hatch flags must stay present:
+      # deleting them is silently undone by Flutter's migrators (they re-add an
+      # ABSENT flag as false), and setting either to true breaks the build:
+      # Flutter 3.44.1's own Gradle plugin force-applies kotlin-android to every
+      # plugin subproject (builtInKotlin=true) and NPEs on the legacy DSL
+      # (newDsl=true). The plugins themselves are migrated. This guard MUST run
+      # before the first `flutter build`: the migrators run only in the Gradle
+      # build (buildGradleApp, not `flutter pub get`) and re-add a deleted flag,
+      # so a guard placed after a build passes on the very deletion it exists to
+      # catch (a Gradle build that bypasses the Flutter CLI, e.g. an Android
+      # Studio sync, runs no migrator). It sits ahead of the SDK step, so it also
+      # precedes `pub get`.
+      - name: Guard KGP escape-hatch flags (ops-17 / #790)
+        run: |
+          set -euo pipefail
+          props=android/gradle.properties
+          for flag in 'android.builtInKotlin=false' 'android.newDsl=false'; do
+            grep -qxF "$flag" "$props" || {
+              echo "::error::missing '$flag' in $props — KGP escape hatch (ops-17/#790)"; exit 1; }
+          done
+          echo "ok: KGP escape-hatch flags present"
       - uses: subosito/flutter-action@v2
         with:
           channel: stable
@@ -65,19 +88,6 @@ jobs:
       # NOT a Play upload artifact; the real Play AAB is built locally with the
       # upload keystore (`android/key.properties`). See apps/android/README.md.
       - run: flutter build appbundle --release
-      # ops-17 / #790 — Trip B. The KGP escape-hatch flags must stay present:
-      # deleting them silently re-breaks the build under AGP 9 (the unmigrated
-      # flutter_foreground_task / mobile_scanner plugins; audio_session dropped
-      # off this list at 0.2.4).
-      - name: Guard KGP escape-hatch flags (ops-17 / #790)
-        run: |
-          set -euo pipefail
-          props=android/gradle.properties
-          for flag in 'android.builtInKotlin=false' 'android.newDsl=false'; do
-            grep -qF "$flag" "$props" || {
-              echo "::error::missing '$flag' in $props — KGP escape hatch (ops-17/#790)"; exit 1; }
-          done
-          echo "ok: KGP escape-hatch flags present"
       # ops-17 / #790 — Trip B. The whole "escape-hatch removal can't surprise
       # us" guarantee rests on the Flutter pin holding. Assert EVERY flutter-version
       # in app.yml (it pins two jobs: android + ios-compile) AND app-deps-watch.yml
