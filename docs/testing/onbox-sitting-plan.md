@@ -289,7 +289,7 @@ moved to Blocked, removed) + 1 (E5, joined 2026-08-23 from the operator set) +
 2 (G, opportunistic — G1, G2) = **16** (was 15 before this wave's two moves,
 16 before B3's discharge, 18 before wave 4's three removals).
 
-### 2.3 Blocked-on-acquisition (3 rows, 1 pack)
+### 2.3 Blocked-on-acquisition (1 row, 1 pack; was 3 before the 2026-11-26 H2 discharge)
 
 These need hardware or material the operator does not yet have on the bench —
 real full-length CJK manuscripts. They get a pack so the procedure is ready
@@ -310,7 +310,8 @@ in the arithmetic below is the historical wave-4 figure. (Plain code span, not a
 
 ### Arithmetic
 
-**48** (operator) + **16** (wave-3) + 3 (blocked) = **67**. Every register row
+**48** (operator) + **16** (wave-3) + 3 (blocked) = **67** (historical wave-4
+figures; blocked is now 1 — see the row-count correction above). Every register row
 appears exactly once. (Before wave 4 (the 2026-08-21 correction above), this
 read 52 + 18 + 4 = 74 — wave 4's retirements/discharges/reclassifications
 account for the full delta: −3 operator, −3 wave-3, −1 blocked, net −7,
@@ -491,8 +492,11 @@ incident** is the reason this rule exists and is named here.
   - **A1** — "multi-hour" (the row's own unchanged estimate; not a single number).
   - **F1** — discharged 2026-08-21 (repo owner, live end-to-end on a real
     device); Group F no longer exists in the register or this plan. The
-    blocked pack now carries only the three remaining blocked rows'
-    **50 minutes** (H1 + H2 + D3) for when the hardware lands.
+    blocked pack now carries only the remaining blocked row's **15
+    minutes** (H1) for when the hardware lands. **Correction, 2026-11-26
+    (#3270, #4673):** H2 and D3 are both discharged (§2.3), so the three
+    rows / **50 minutes** (H1 + H2 + D3) this bullet used to state is the
+    historical wave-4 figure.
 - **Wave-3 agent-runnable:** 16 rows — 14 runnable now + 2 opportunistic
   (was 15 before this wave — E5 joined from the operator set and G1/G2 were
   re-labelled opportunistic within this same set, 2026-08-23, see §2.2; was
@@ -503,4 +507,6 @@ incident** is the reason this rule exists and is named here.
   operator minutes.
 
 **Grand reconciliation:** 48 operator + 16 wave-3 + 3 blocked = **67 rows**, the
-register's full owed count, each exactly once.
+register's full owed count, each exactly once. (Historical wave-4 figures: the
+blocked 3 and the 67 total predate the D3 and H2 discharges, §2.3 correction
+2026-11-26 — blocked is now **1** row, H1.)
