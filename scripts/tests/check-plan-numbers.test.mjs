@@ -113,6 +113,15 @@ test('(d4) a legacy basename present in two directories counts as a grown set', 
   assert.equal(problems[0].kind, 'legacy-grew');
 });
 
+test('(d4b) one legacy basename in two directories, partner deleted, is legacy-grew', () => {
+  const [first] = LEGACY_FILES;
+  const problems = findPlanNumberProblems([moveToArchive(first), moveToTopLevel(first)], {
+    [LEGACY_KEY]: [...LEGACY_FILES],
+  });
+  assert.equal(problems.length, 1);
+  assert.equal(problems[0].kind, 'legacy-grew');
+});
+
 test('(d5) a vanished legacy file after an archive move of the other is still legacy-stale', () => {
   const problems = findPlanNumberProblems([moveToArchive(LEGACY_FILES[0])], {
     [LEGACY_KEY]: [...LEGACY_FILES],
@@ -147,6 +156,11 @@ test('LEGACY_DUPLICATES invariants: frozen two-file POSIX sets keyed on basename
     assert.match(key, /^\d+[a-z]?$/);
     assert.equal(files.length, 2, `key ${key}: frozen as exactly two files`);
     assert.deepEqual(files, [...files].sort(), `key ${key}: file set sorted`);
+    assert.equal(
+      new Set(files.map((f) => f.slice(f.lastIndexOf('/') + 1))).size,
+      files.length,
+      `key ${key}: distinct basenames`,
+    );
     for (const file of files) {
       assert.ok(!file.includes('\\'), `POSIX separators expected: ${file}`);
       assert.ok(file.startsWith('docs/features/'), `under docs/features: ${file}`);

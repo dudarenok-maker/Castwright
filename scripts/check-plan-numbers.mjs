@@ -51,6 +51,19 @@ export function extractPlanKey(path) {
   return `${match[1].replace(/^0+(?=\d)/, '')}${match[2].toLowerCase()}`;
 }
 
+// True when `files` holds any basename more times than `frozen` does (a real
+// multiset comparison), which also covers more files overall.
+function growsBasenames(files, frozen) {
+  const budget = new Map();
+  for (const f of frozen) budget.set(baseName(f), (budget.get(baseName(f)) ?? 0) + 1);
+  for (const f of files) {
+    const left = budget.get(baseName(f)) ?? 0;
+    if (left === 0) return true;
+    budget.set(baseName(f), left - 1);
+  }
+  return false;
+}
+
 /**
  * Pure check. Returns a list of `{ kind, key, files }` problems (empty = pass).
  * kind: `duplicate` | `legacy-grew` | `legacy-stale`.
@@ -77,9 +90,7 @@ export function findPlanNumberProblems(trackedPaths, legacyDuplicates) {
     // docs/features/ and docs/features/archive/ changes no plan number, so it is
     // transparent; a genuine extra file (new name, or the same name in a second
     // directory) still grows the set.
-    const frozenBases = frozen.map(baseName);
-    const added = files.filter((f) => !frozenBases.includes(baseName(f)));
-    if (added.length > 0 || files.length > frozen.length) {
+    if (growsBasenames(files, frozen)) {
       problems.push({ kind: 'legacy-grew', key, files });
     }
   }
@@ -90,10 +101,7 @@ export function findPlanNumberProblems(trackedPaths, legacyDuplicates) {
     const same = frozen.length === current.length && frozen.every((f, i) => f === current[i]);
     if (same) continue;
     // A grown set was already reported as legacy-grew above.
-    if (
-      current.length > 1 &&
-      (current.some((f) => !frozen.includes(f)) || current.length > frozen.length)
-    ) {
+    if (current.length > 1 && growsBasenames(currentFiles, legacyDuplicates[key])) {
       continue;
     }
     problems.push({ kind: 'legacy-stale', key, files: currentFiles.length > 0 ? currentFiles : [...legacyDuplicates[key]].sort() });
