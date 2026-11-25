@@ -2,6 +2,7 @@
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   KGP_PLUGINS,
   compareSemver,
@@ -363,4 +364,16 @@ test('publish: the sticky write throws -> the transition POST already happened (
   );
   assert.equal(gh.calls.length, 2);
   assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
+});
+
+test('the real apps/android pubspec pins the same KGP plugin versions the lock resolves (#790)', () => {
+  const dir = new URL('../../apps/android/', import.meta.url);
+  const pubspec = readFileSync(new URL('pubspec.yaml', dir), 'utf8');
+  const lock = readFileSync(new URL('pubspec.lock', dir), 'utf8');
+  const pins = parsePins(pubspec, KGP_PLUGINS);
+  for (const name of KGP_PLUGINS) {
+    const m = lock.match(new RegExp(`^  ${name}:\n(?:    .*\n)*?    version: "([^"]+)"`, 'm'));
+    assert.ok(m, `${name} missing from pubspec.lock`);
+    assert.equal(pins[name], m[1], `${name}: pubspec pin must equal the lock, or the watch re-pings a verified release`);
+  }
 });

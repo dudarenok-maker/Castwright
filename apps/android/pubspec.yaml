@@ -71,7 +71,7 @@ dependencies:
   # receives the future https://castwright.ai/pair App Link (deep-link readiness).
   image_picker: ^1.2.2
   app_links: ^7.1.1
-  mobile_scanner: ^7.4.3
+  mobile_scanner: ^7.5.0
 
 dev_dependencies:
   flutter_test:
