@@ -15,7 +15,7 @@ import { dirname, resolve } from 'node:path';
 import { parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
-import { isValidDeviceToken } from './workspace/device-tokens.js';
+import { authenticateDeviceToken } from './workspace/device-tokens.js';
 import { getLanRuntime } from './lan-runtime.js';
 import { isLoopbackRequest } from './loopback.js';
 
@@ -222,7 +222,7 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
     const expected = getLanAuthToken();
     if (expected !== undefined && safeEqual(provided, expected)) return next();
     /* … or an individually-revocable per-device token (srv-33). */
-    if (isValidDeviceToken(provided)) return next();
+    if (authenticateDeviceToken(provided) !== null) return next();
   }
   // #2278 — the body carries the same port-correct guidance a pairing 403
   // does, so a 401'd caller can render live-port text straight from the

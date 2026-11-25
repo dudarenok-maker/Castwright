@@ -28,7 +28,7 @@ vi.mock('../lan-runtime.js', () => ({
    vi.fn so we can mock them per-test. requireLanToken is exposed as a forwarding
    wrapper so it always calls through to the freshly-imported REAL requireLanToken
    (which shares the same device-tokens module as deviceTokens, keeping
-   isValidDeviceToken in sync with created device tokens). */
+   authenticateDeviceToken in sync with created device tokens). */
 let _requireLanToken: typeof import('../lan-auth.js')['requireLanToken'] | null = null;
 vi.mock('../lan-auth.js', async (o) => {
   const real = await o<typeof import('../lan-auth.js')>();
@@ -83,7 +83,7 @@ beforeEach(async () => {
   deviceTokens = await import('../workspace/device-tokens.js');
   lanAuth = await import('../lan-auth.js');
   // Load the real (un-mocked) lan-auth so requireLanToken shares the same
-  // device-tokens instance as deviceTokens, keeping isValidDeviceToken in sync.
+  // device-tokens instance as deviceTokens, keeping authenticateDeviceToken in sync.
   const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
   _requireLanToken = realLanAuth.requireLanToken;
   ({ devicesRouter } = await import('./devices.js'));
@@ -95,7 +95,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _requireLanToken = null;
-  // Flush any fire-and-forget touchLastSeen write isValidDeviceToken kicked
+  // Flush any fire-and-forget touchLastSeen write authenticateDeviceToken kicked
   // off (e.g. the "accepts a minted device token" test below) before wiping
   // the workspace — otherwise the in-flight write can race the recursive rm
   // and intermittently fail with ENOTEMPTY.

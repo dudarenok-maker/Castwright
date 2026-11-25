@@ -149,7 +149,7 @@ let cache: DeviceTokenRecord[] | null = null;
  *  `cache` and the malformed-only re-read. The extra read is bounded by
  *  write frequency — mint, revoke, and the hourly-throttled touch — never by
  *  request frequency (see `persistDegradedAt` below); the synchronous auth
- *  guard (`isValidDeviceToken`) never calls `persist` and is unaffected. */
+ *  guard (`authenticateDeviceToken`) never calls `persist` and is unaffected. */
 let quarantine: unknown[] = [];
 
 /** True when the most recent `loadSync` hit a whole-store fault (corrupt
@@ -167,7 +167,7 @@ let degradedAt = 0;
  *  populated (see `loadDegraded` above), which used to mean every single
  *  call re-ran `existsSync` -> `readFileSync` -> `JSON.parse` and emitted a
  *  fresh `console.warn`. `loadSync` sits under the SYNCHRONOUS LAN-auth
- *  guard (`isValidDeviceToken`), which fires on every `/api` and
+ *  guard (`authenticateDeviceToken`), which fires on every `/api` and
  *  `/workspace` request — a phone streaming chapter audio issues hundreds
  *  of these, so a degraded store meant blocking disk IO plus a log line on
  *  the hot path, per request, unbounded, for as long as the store stayed
@@ -591,18 +591,23 @@ export async function touchLastSeen(id: string, now: number): Promise<void> {
  *  so a second touch fired before the first settles isn't dropped. */
 const pendingWrites = new Set<Promise<unknown>>();
 
-/** Sync token check used by the LAN guard (cache-backed). */
-export function isValidDeviceToken(rawToken: string): boolean {
+/** Sync token check used by the LAN guard (cache-backed). Returns the matched
+ *  RECORD (not a boolean or a `{ scope }` projection) so the guard can read
+ *  `scope` and its denial log can name the device (`label`, `id`) without a
+ *  second, timing-sensitive hash lookup. `null` when no valid device matches. */
+export function authenticateDeviceToken(rawToken: string): DeviceTokenRecord | null {
   const now = Date.now();
   const device = findValidDevice(loadSync(), rawToken, now);
-  if (!device) return false;
-  // Best-effort touch — must not throw on the sync guard path; swallow any rejection.
+  if (!device) return null;
+  // The touch fires before any scope decision by the caller: the device did
+  // present a valid token. Best-effort - must not throw on the sync guard path;
+  // swallow any rejection.
   if (shouldTouchLastSeen(device, now)) {
     const write = touchLastSeen(device.id, now).catch(() => {});
     pendingWrites.add(write);
     void write.finally(() => pendingWrites.delete(write));
   }
-  return true;
+  return device;
 }
 
 /** Mint a new per-device token. Returns the raw token ONCE (only its hash is
@@ -725,7 +730,7 @@ export function _resetDeviceTokenCacheForTests(): void {
 }
 
 /** Test hook — await every fire-and-forget `touchLastSeen` write kicked off
- *  by `isValidDeviceToken`, so a temp-workspace teardown (recursive rm) run
+ *  by `authenticateDeviceToken`, so a temp-workspace teardown (recursive rm) run
  *  right after doesn't race an in-flight write and intermittently fail with
  *  ENOTEMPTY. */
 export async function _flushPendingWritesForTests(): Promise<void> {

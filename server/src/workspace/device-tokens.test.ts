@@ -84,7 +84,7 @@ afterEach(async () => {
   readFileSyncCallCount = 0;
   vi.useRealTimers(); // safety net in case a fake-timer test threw before restoring
   delete process.env.WORKSPACE_DIR;
-  // Flush any fire-and-forget touchLastSeen write isValidDeviceToken kicked
+  // Flush any fire-and-forget touchLastSeen write authenticateDeviceToken kicked
   // off before wiping the workspace — otherwise the in-flight write can race
   // the recursive rm and intermittently fail with ENOTEMPTY (same race
   // devices.test.ts hit).
@@ -114,14 +114,25 @@ it('shouldTouchLastSeen treats a malformed lastSeenAt as absent (touch now), not
   expect(dt.shouldTouchLastSeen(garbage, now)).toBe(true);
 });
 
-it('touchLastSeen persists lastSeenAt; isValidDeviceToken triggers it', async () => {
+it('touchLastSeen persists lastSeenAt; authenticateDeviceToken triggers it', async () => {
   const { device } = await dt.createDevice('Phone', 30, 'full');
   await dt.touchLastSeen(device.id, Date.now());      // awaitable → deterministic
   dt._resetDeviceTokenCacheForTests();
   expect(dt.listDevices()[0].lastSeenAt).toBeDefined();
 
   const { token } = await dt.createDevice('Phone2', 30, 'full');
-  expect(dt.isValidDeviceToken(token)).toBe(true);     // fire-and-forget touch path still returns true
+  expect(dt.authenticateDeviceToken(token)).not.toBeNull();     // fire-and-forget touch path still returns the record
+});
+
+it('authenticateDeviceToken returns the MATCHED record, not the first one', async () => {
+  await dt.createDevice('First', 30, 'full');
+  const second = await dt.createDevice('Second', 30, 'companion');
+  const rec = dt.authenticateDeviceToken(second.token);
+  expect(rec).not.toBeNull();
+  expect(rec?.id).toBe(second.device.id);
+  expect(rec?.label).toBe('Second');
+  expect(rec?.scope).toBe('companion');
+  await dt._flushPendingWritesForTests();
 });
 
 it('_flushPendingWritesForTests waits for an in-flight touchLastSeen write before resolving', async () => {
@@ -135,7 +146,7 @@ it('_flushPendingWritesForTests waits for an in-flight touchLastSeen write befor
     await actual.writeFile(path, data, encoding);
   };
 
-  expect(dt.isValidDeviceToken(token)).toBe(true); // fresh device -> fires the (now-gated) write
+  expect(dt.authenticateDeviceToken(token)).not.toBeNull(); // fresh device -> fires the (now-gated) write
 
   let flushed = false;
   const flush = dt._flushPendingWritesForTests().then(() => { flushed = true; });
@@ -264,9 +275,9 @@ it('a store with one malformed record and three good records authenticates the t
   // by defence-in-depth alone and never exercises loadSync's validation.
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1', 'g2', 'g3']);
 
-  expect(dt.isValidDeviceToken(t1)).toBe(true);
-  expect(dt.isValidDeviceToken(t2)).toBe(true);
-  expect(dt.isValidDeviceToken(t3)).toBe(true);
+  expect(dt.authenticateDeviceToken(t1)).not.toBeNull();
+  expect(dt.authenticateDeviceToken(t2)).not.toBeNull();
+  expect(dt.authenticateDeviceToken(t3)).not.toBeNull();
   await dt._flushPendingWritesForTests();
 });
 
@@ -281,13 +292,13 @@ it('a wholly malformed store does not throw, does not prevent startup, and authe
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   expect(() => dt.listDevices()).not.toThrow();
   expect(dt.listDevices()).toEqual([]);
-  expect(dt.isValidDeviceToken('anything')).toBe(false);
+  expect(dt.authenticateDeviceToken('anything')).toBeNull();
   warn.mockRestore();
 });
 
 // #2181 review — a corrupt/unparseable store or a store whose "devices"
 // field isn't an array was silently swallowed (0 warnings). The underlying
-// auth path (isValidDeviceToken) still fails closed — untouched here, see
+// auth path (authenticateDeviceToken) still fails closed — untouched here, see
 // the F1 tests below — but #2204 review (F2/F7) changed listDevices itself:
 // it now THROWS rather than silently presenting a degraded store as
 // "genuinely zero devices" (200 {devices: []}). See devices.test.ts for the
@@ -310,15 +321,15 @@ it('throws DeviceStoreDegradedError when device-tokens.json\'s "devices" field i
   warn.mockRestore();
 });
 
-// #2204 review (F2/F7) — the sync auth path must NOT throw: isValidDeviceToken
+// #2204 review (F2/F7) — the sync auth path must NOT throw: authenticateDeviceToken
 // still fails closed silently on a degraded store, same as before. Only the
 // admin-facing reads (listDevices/revokeDevice) and the write (createDevice)
 // changed to surface the degraded state as an error.
-it('isValidDeviceToken still fails closed (returns false, does not throw) on a degraded store', () => {
+it('authenticateDeviceToken still fails closed (returns false, does not throw) on a degraded store', () => {
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  expect(() => dt.isValidDeviceToken('anything')).not.toThrow();
-  expect(dt.isValidDeviceToken('anything')).toBe(false);
+  expect(() => dt.authenticateDeviceToken('anything')).not.toThrow();
+  expect(dt.authenticateDeviceToken('anything')).toBeNull();
   warn.mockRestore();
 });
 
@@ -368,7 +379,7 @@ it('createDevice throws DeviceStoreDegradedError (typed, not a generic Error) wh
 // #2204 review F1 — while degraded, `cache` is deliberately never populated
 // (so a transient fault doesn't get remembered forever), which used to mean
 // EVERY call on the hot sync auth path re-ran existsSync -> readFileSync ->
-// JSON.parse. isValidDeviceToken sits directly under the LAN guard
+// JSON.parse. authenticateDeviceToken sits directly under the LAN guard
 // (requireLanToken), which fires on every /api and /workspace request — a
 // phone streaming chapter audio issues hundreds of these. This proves the
 // negative-cache actually blocks the amplification, not just that a retry
@@ -388,13 +399,13 @@ it('retries a persisting store fault at most once per DEGRADED_RETRY_MS on the h
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
   // 5 calls at the same instant: exactly one real disk read reaches the fault.
-  for (let i = 0; i < 5; i++) expect(dt.isValidDeviceToken('t1')).toBe(false);
+  for (let i = 0; i < 5; i++) expect(dt.authenticateDeviceToken('t1')).toBeNull();
   expect(readFileSyncCallCount).toBe(1);
 
   // Still inside the TTL window (500ms later, TTL is 1000ms): still no
   // second disk read, even though nothing else has changed.
   vi.setSystemTime(start + 500);
-  expect(dt.isValidDeviceToken('t1')).toBe(false);
+  expect(dt.authenticateDeviceToken('t1')).toBeNull();
   expect(readFileSyncCallCount).toBe(1);
 
   // Past the TTL: retries for real. Clear the fault first so the retry can
@@ -402,7 +413,7 @@ it('retries a persisting store fault at most once per DEGRADED_RETRY_MS on the h
   // failed attempt.
   readFileSyncPersistentThrow = null;
   vi.setSystemTime(start + 1001);
-  expect(dt.isValidDeviceToken('t1')).toBe(true);
+  expect(dt.authenticateDeviceToken('t1')).not.toBeNull();
   expect(readFileSyncCallCount).toBe(2);
 
   warn.mockRestore();
@@ -422,11 +433,11 @@ it('warns once for a persisting store fault across several real retries, not onc
   vi.useFakeTimers();
   const start = 1_700_000_000_000;
   vi.setSystemTime(start);
-  dt.isValidDeviceToken('x');
+  dt.authenticateDeviceToken('x');
   vi.setSystemTime(start + 1001);
-  dt.isValidDeviceToken('x');
+  dt.authenticateDeviceToken('x');
   vi.setSystemTime(start + 2002);
-  dt.isValidDeviceToken('x');
+  dt.authenticateDeviceToken('x');
 
   const storeFaultWarnings = warn.mock.calls.filter((c) =>
     String(c[0]).includes('failed to read/parse'),
@@ -441,14 +452,14 @@ it('warns once for a persisting store fault across several real retries, not onc
   writeRawStore(dir, [good]);
   dt._resetDeviceTokenCacheForTests();
   vi.setSystemTime(start + 3003);
-  expect(dt.isValidDeviceToken('t1')).toBe(true); // real success, resets lastWarnedError
+  expect(dt.authenticateDeviceToken('t1')).not.toBeNull(); // real success, resets lastWarnedError
 
   readFileSyncPersistentThrow = () => {
     throw new Error('EACCES: permission denied (simulated)');
   };
   dt._resetDeviceTokenCacheForTests();
   vi.setSystemTime(start + 4004);
-  dt.isValidDeviceToken('x');
+  dt.authenticateDeviceToken('x');
   const storeFaultWarningsAfter = warn.mock.calls.filter((c) =>
     String(c[0]).includes('failed to read/parse'),
   );
@@ -561,7 +572,7 @@ it('drops a record with no id at all; it never authenticates (#2183)', () => {
 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
   expect(dt.listDevices()).toEqual([]);
-  expect(dt.isValidDeviceToken('idless-token')).toBe(false);
+  expect(dt.authenticateDeviceToken('idless-token')).toBeNull();
   warn.mockRestore();
 });
 
@@ -570,7 +581,7 @@ it('drops a record whose id is an empty string (#2183)', () => {
   const bad = { ...goodRecord('unused', dt.hashToken('empty-id-token')), id: '' };
   writeRawStore(dir, [bad, good]);
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
-  expect(dt.isValidDeviceToken('empty-id-token')).toBe(false);
+  expect(dt.authenticateDeviceToken('empty-id-token')).toBeNull();
 });
 
 // #2183 — createdAt is now strictly required (previously only validated
@@ -601,7 +612,7 @@ it('quarantines a malformed record: survives authenticate + touchLastSeen + pers
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
   warn.mockRestore();
 
-  expect(dt.isValidDeviceToken('good-token')).toBe(true);
+  expect(dt.authenticateDeviceToken('good-token')).not.toBeNull();
   await dt._flushPendingWritesForTests(); // the touchLastSeen this triggers -> persist
 
   const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
@@ -612,7 +623,7 @@ it('quarantines a malformed record: survives authenticate + touchLastSeen + pers
   // "restart": drop the in-memory cache and reload from disk.
   dt._resetDeviceTokenCacheForTests();
   expect(dt.listDevices().map((d) => d.id)).toEqual(['g1']);
-  expect(dt.isValidDeviceToken('irrelevant')).toBe(false);
+  expect(dt.authenticateDeviceToken('irrelevant')).toBeNull();
 });
 
 // #2182(b) — a transient read failure (e.g. a momentary OneDrive/AV file
@@ -892,7 +903,7 @@ it('a persisting fresh-read fault costs at most one disk read per DEGRADED_RETRY
   // fire-and-forget touchLastSeen (loadSync short-circuits on the populated
   // cache — no read there); only persist's fresh re-read touches disk.
   for (let i = 0; i < 5; i++) {
-    expect(dt.isValidDeviceToken(token)).toBe(true); // auth itself is unaffected — best-effort touch only
+    expect(dt.authenticateDeviceToken(token)).not.toBeNull(); // auth itself is unaffected — best-effort touch only
   }
   await dt._flushPendingWritesForTests();
   warn.mockRestore();
@@ -933,7 +944,7 @@ it('a persisting WRITE fault costs at most one READ and one WRITE attempt per DE
   // 20 guarded requests at effectively the same instant — matches the scale
   // measured in the independent review.
   for (let i = 0; i < 20; i++) {
-    expect(dt.isValidDeviceToken(token)).toBe(true); // auth itself is unaffected — best-effort touch only
+    expect(dt.authenticateDeviceToken(token)).not.toBeNull(); // auth itself is unaffected — best-effort touch only
   }
   await dt._flushPendingWritesForTests();
 

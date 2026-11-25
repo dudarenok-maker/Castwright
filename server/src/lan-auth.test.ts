@@ -5,8 +5,19 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const mockState = vi.hoisted(() => ({ scope: 'full' as 'full' | 'companion' }));
 vi.mock('./workspace/device-tokens.js', () => ({
-  isValidDeviceToken: (t: string) => t === 'goodtoken',
+  authenticateDeviceToken: (t: string) =>
+    t === 'goodtoken'
+      ? {
+          id: 'd1',
+          label: 'Anna phone',
+          tokenHash: 'h',
+          createdAt: '',
+          expiresAt: '',
+          scope: mockState.scope,
+        }
+      : null,
 }));
 
 import {
@@ -23,14 +34,21 @@ interface ReqOpts {
   ip?: string;
   headers?: Record<string, string>;
   query?: Record<string, unknown>;
+  method?: string;
+  originalUrl?: string;
+  path?: string;
 }
 function mkReq(opts: ReqOpts = {}) {
   const ip = opts.ip ?? '203.0.113.5'; // documentation range — non-loopback by default
+  const originalUrl = opts.originalUrl ?? '/api/info';
   return {
     ip,
     socket: { remoteAddress: ip },
     headers: opts.headers ?? {},
     query: opts.query ?? {},
+    method: opts.method ?? 'GET',
+    originalUrl,
+    path: opts.path ?? originalUrl.replace(/^\/api(?=\/)/, '').split('?')[0],
   } as never;
 }
 function mkRes() {
