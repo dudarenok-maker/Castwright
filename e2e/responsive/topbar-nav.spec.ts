@@ -4,7 +4,12 @@
  * skip the collapsed assertions on desktop chromium (1280, inline strip), and
  * skip the inline assertion on mobile/tablet. */
 import { test, expect } from '@playwright/test';
-import { waitForListenViewReady } from '../helpers';
+import {
+  goToAnalysing,
+  goToConfirm,
+  waitForConfirmViewReady,
+  waitForListenViewReady,
+} from '../helpers';
 
 test.describe('top-bar nav — responsive collapse', () => {
   test('below xl: inline tabs are hidden and the hamburger drawer reaches Cast', async ({
@@ -71,9 +76,10 @@ test.describe('top-bar nav — responsive collapse', () => {
       const vw = page.viewportSize()?.width ?? 0;
       expect(box, `${label} has a box`).not.toBeNull();
       expect(box!.x, `${label} not clipped off the left`).toBeGreaterThanOrEqual(-1);
-      expect(box!.x + box!.width, `${label} not clipped off the right (vw=${vw})`).toBeLessThanOrEqual(
-        vw + 1,
-      );
+      expect(
+        box!.x + box!.width,
+        `${label} not clipped off the right (vw=${vw})`,
+      ).toBeLessThanOrEqual(vw + 1);
     };
 
     /* #4567 — below sm the inline copies are hidden; Help / Theme / Account
@@ -90,13 +96,13 @@ test.describe('top-bar nav — responsive collapse', () => {
   });
 
   /* #916 — Admin moves off the inline phone bar into the hamburger drawer (it
-     stays inline at sm+). Confirm it is still reachable on phone via the drawer. */
+     stays inline at sm+, on every stage). Confirm it is still reachable on phone via the drawer. */
   test('phone: Admin is reachable via the hamburger drawer', async ({ page }) => {
     const width = page.viewportSize()?.width ?? 0;
     test.skip(width >= 640, 'phone-only: Admin stays an inline pill at sm+');
 
     await page.goto('/#/');
-    // Inline Admin pill is hidden on a nav stage at phone width.
+    // Inline Admin pill is hidden at phone width.
     await expect(page.getByTestId('topbar-admin-link')).toBeHidden();
 
     await page.getByTestId('topbar-nav-toggle').click();
@@ -104,4 +110,33 @@ test.describe('top-bar nav — responsive collapse', () => {
     await page.getByTestId('nav-drawer-link-admin').click();
     await expect(page).toHaveURL(/#\/admin/);
   });
+
+  /* #4567 — the drawer trigger shifts the right cluster right by ~56px, which
+     used to clip the inline Admin pill ("● Adm") on the no-nav stages. The pill
+     is now hidden below sm on every stage and Admin lives in the drawer. */
+  for (const [name, reach] of [
+    ['analysing', goToAnalysing],
+    [
+      'confirm',
+      async (p: import('@playwright/test').Page) => {
+        await goToConfirm(p);
+        await waitForConfirmViewReady(p);
+      },
+    ],
+  ] as const) {
+    test(`phone: Admin is reachable via the drawer on ${name} (no clipped inline pill)`, async ({
+      page,
+    }) => {
+      const width = page.viewportSize()?.width ?? 0;
+      test.skip(width >= 640, 'phone-only: Admin stays an inline pill at sm+');
+
+      await reach(page);
+      await expect(page.getByTestId('topbar-admin-link')).toBeHidden();
+
+      await page.getByTestId('topbar-nav-toggle').click();
+      await expect(page.getByTestId('topbar-nav-drawer')).toBeVisible();
+      await page.getByTestId('nav-drawer-link-admin').click();
+      await expect(page).toHaveURL(/#\/admin/);
+    });
+  }
 });
