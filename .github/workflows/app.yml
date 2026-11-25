@@ -32,10 +32,12 @@ jobs:
       # Flutter 3.44.1's own Gradle plugin force-applies kotlin-android to every
       # plugin subproject (builtInKotlin=true) and NPEs on the legacy DSL
       # (newDsl=true). The plugins themselves are migrated. This guard MUST run
-      # before the first `flutter pub get` / build: those run the migrators,
-      # which re-add a deleted flag, so a guard placed after them passes on the
-      # very deletion it exists to catch (a Gradle build that bypasses the
-      # Flutter CLI, e.g. an Android Studio sync, runs no migrator).
+      # before the first `flutter build`: the migrators run only in the Gradle
+      # build (buildGradleApp, not `flutter pub get`) and re-add a deleted flag,
+      # so a guard placed after a build passes on the very deletion it exists to
+      # catch (a Gradle build that bypasses the Flutter CLI, e.g. an Android
+      # Studio sync, runs no migrator). It sits ahead of the SDK step, so it also
+      # precedes `pub get`.
       - name: Guard KGP escape-hatch flags (ops-17 / #790)
         run: |
           set -euo pipefail
