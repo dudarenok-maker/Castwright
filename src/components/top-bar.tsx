@@ -496,16 +496,25 @@ export function TopBar({
           <span className="hidden sm:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
-          <HelpMenu stage={stage} view={view} />
-          <ThemeToggleButton />
-          <button
-            type="button"
-            onClick={onOpenAccount}
-            aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
-            className={`inline-flex items-center justify-center min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
-          >
-            <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
-          </button>
+          {/* Below sm, Help / Theme / Account live in the drawer rows on every
+              stage (#4567), so the inline copies are hidden to stop the right
+              cluster overflowing the 412px viewport. sm+ is unchanged. */}
+          <span className="hidden sm:inline-flex" data-testid="topbar-help-wrap">
+            <HelpMenu stage={stage} view={view} />
+          </span>
+          <span className="hidden sm:inline-flex" data-testid="topbar-theme-wrap">
+            <ThemeToggleButton />
+          </span>
+          <span className="hidden sm:inline-flex" data-testid="topbar-account-wrap">
+            <button
+              type="button"
+              onClick={onOpenAccount}
+              aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
+              className={`inline-flex items-center justify-center min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
+            >
+              <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
+            </button>
+          </span>
         </div>
       </div>
     </header>

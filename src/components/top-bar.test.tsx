@@ -1107,6 +1107,23 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     expect(wrap.className).toMatch(/inline-flex/);
   });
 
+  it.each(['books', 'upload', 'analysing'] as const)(
+    'hides the inline Help / Theme / Account below sm on the %s stage (#4567)',
+    (kind) => {
+      renderWithStore(
+        <TopBar {...makeProps({ stage: kind, view: kind === 'books' ? makeProps().view : null })} />,
+      );
+      const help = screen.getByTestId('topbar-help').closest('span.hidden');
+      const theme = screen.getByTestId('theme-toggle').closest('span.hidden');
+      const account = screen.getByRole('button', { name: /^Account/ }).closest('span.hidden');
+      for (const wrap of [help, theme, account]) {
+        expect(wrap).not.toBeNull();
+        expect(wrap!.className).toMatch(/\bhidden\b/);
+        expect(wrap!.className).toMatch(/sm:inline-flex/);
+      }
+    },
+  );
+
   it('surfaces Admin as a phone-only drawer row that fires onOpenAdmin and closes the drawer', () => {
     const onOpenAdmin = vi.fn();
     renderWithStore(<TopBar {...makeProps({ stage: 'books', onOpenAdmin })} />);

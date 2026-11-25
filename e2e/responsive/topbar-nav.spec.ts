@@ -57,6 +57,16 @@ test.describe('top-bar nav — responsive collapse', () => {
     await page.goto('/#/');
     const inViewport = async (locator: ReturnType<typeof page.locator>, label: string) => {
       await expect(locator, `${label} present`).toBeVisible();
+      /* The drawer slides in: wait for the box to stop moving before measuring. */
+      let prev = -9999;
+      await expect
+        .poll(async () => {
+          const x = (await locator.boundingBox())?.x ?? -9998;
+          const settled = x === prev;
+          prev = x;
+          return settled;
+        })
+        .toBe(true);
       const box = await locator.boundingBox();
       const vw = page.viewportSize()?.width ?? 0;
       expect(box, `${label} has a box`).not.toBeNull();
@@ -66,9 +76,17 @@ test.describe('top-bar nav — responsive collapse', () => {
       );
     };
 
-    await inViewport(page.getByTestId('topbar-help'), 'Help button');
-    await inViewport(page.getByTestId('theme-toggle'), 'Theme toggle');
-    await inViewport(page.getByRole('button', { name: /account/i }), 'Account avatar');
+    /* #4567 — below sm the inline copies are hidden; Help / Theme / Account
+       are reached through the drawer rows, which must sit inside the viewport. */
+    await expect(page.getByTestId('topbar-help')).toBeHidden();
+    await expect(page.getByTestId('theme-toggle')).toBeHidden();
+    await expect(page.getByRole('button', { name: /^account/i })).toBeHidden();
+
+    await page.getByTestId('topbar-nav-toggle').click();
+    await expect(page.getByTestId('topbar-nav-drawer')).toBeVisible();
+    await inViewport(page.getByTestId('nav-drawer-link-help'), 'Drawer Help row');
+    await inViewport(page.getByTestId('nav-drawer-link-theme'), 'Drawer Theme row');
+    await inViewport(page.getByTestId('nav-drawer-link-account'), 'Drawer Account row');
   });
 
   /* #916 — Admin moves off the inline phone bar into the hamburger drawer (it
