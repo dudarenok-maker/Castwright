@@ -2,7 +2,7 @@
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readNormalized } from '../lib/read-normalized.mjs';
 import {
   KGP_PLUGINS,
   compareSemver,
@@ -368,8 +368,8 @@ test('publish: the sticky write throws -> the transition POST already happened (
 
 test('the real apps/android pubspec pins the same KGP plugin versions the lock resolves (#790)', () => {
   const dir = new URL('../../apps/android/', import.meta.url);
-  const pubspec = readFileSync(new URL('pubspec.yaml', dir), 'utf8');
-  const lock = readFileSync(new URL('pubspec.lock', dir), 'utf8');
+  const pubspec = readNormalized(new URL('pubspec.yaml', dir));
+  const lock = readNormalized(new URL('pubspec.lock', dir));
   const pins = parsePins(pubspec, KGP_PLUGINS);
   for (const name of KGP_PLUGINS) {
     const m = lock.match(new RegExp(`^  ${name}:\n(?:    .*\n)*?    version: "([^"]+)"`, 'm'));
