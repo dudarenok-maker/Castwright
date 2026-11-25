@@ -1493,7 +1493,7 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
 describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, book-scale excerpt)', () => {
   const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-zilu.zh.md');
   const ZH_BOOK_FIXTURE = join(__dirname, '..', '__fixtures__', 'hongloumeng-1-21.zh.md');
-  const JA_FIXTURE =join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
+  const JA_FIXTURE = join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
 
   /** Splits the Analects fixture's `## <title>` headings into {title, body}
    *  chapters, mirroring how a real `##`-delimited manuscript import splits. */
