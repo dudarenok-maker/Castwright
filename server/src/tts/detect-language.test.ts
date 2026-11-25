@@ -1490,7 +1490,7 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    already found — flipping this repo's KANA_NGRAM_SIZE from 3 to 2 makes the
    pre-existing finding-3(b) test fail while this fixture's test stays green).
    Corrected to narrowed before merge — see the register row's own history. */
-describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, book-scale excerpt)', () => {
+describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, 紅樓夢 excerpt)', () => {
   const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-zilu.zh.md');
   const ZH_BOOK_FIXTURE = join(__dirname, '..', '__fixtures__', 'hongloumeng-1-21.zh.md');
   const JA_FIXTURE = join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
