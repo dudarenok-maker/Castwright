@@ -1467,7 +1467,8 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
 
 /* Register rows H1 and H2 (docs/testing/onbox-acceptance-register.md, Group
    H). H1 is NARROWED 2026-09-19, not discharged; H2 was narrowed 2026-09-19
-   and is locked at book scale by the 紅樓夢 test below. Both are real-manuscript
+   and then discharged, and is locked at book scale by the 紅樓夢 test below.
+   Both are real-manuscript
    CJK richness fixtures, not the synthetic hand-authored samples finding
    3(b)/C5 (H1) and finding B3 (H2) flagged as unproven.
    H2 (zh): the Analects (論語), chapters 學而 through 子路 (13 of the work's
@@ -1546,7 +1547,7 @@ describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK f
     // Measured 2026-11-25 on the gates' actual sample (every chapter wins zh;
     // no chapter reaches prepareSample's 20,000-char cap): N = 115,515 Han
     // chars, V = 3,348 distinct Han chars, R = guiraudR = 9.9547 against
-    // LEXICAL_RICHNESS_FLOOR (3). The register row H2 cites these numbers.
+    // LEXICAL_RICHNESS_FLOOR (3). Register row H2 (discharged) cited these numbers.
     expect(hanChars.length).toBeGreaterThan(105_000);
     expect(new Set(hanChars).size).toBeGreaterThan(3_000);
     expect(guiraudR(sample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
