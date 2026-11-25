@@ -966,6 +966,20 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     }
   });
 
+  it('no-nav stage: the drawer Admin row has no divider/top padding (it is the first child, #4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const admin = screen.getByTestId('nav-drawer-link-admin');
+    expect(admin.className).not.toMatch(/border-t/);
+    expect(admin.className).not.toMatch(/\bpt-3\b/);
+  });
+
+  it('nav stage: the drawer Admin row keeps the divider above it (#4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-admin').className).toMatch(/border-t/);
+  });
+
   it('keeps the drawer unmounted until the trigger is clicked (duplicate-selector safety)', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
     expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();

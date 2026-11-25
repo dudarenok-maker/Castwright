@@ -675,7 +675,7 @@ function NavDrawer({
                 data-testid="nav-drawer-link-admin"
                 aria-current={adminActive ? 'page' : undefined}
                 onClick={() => select(onOpenAdmin)}
-                className={`sm:hidden mt-1 pt-3 border-t border-ink/10 w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                className={`sm:hidden ${rows.length > 0 ? 'mt-1 pt-3 border-t border-ink/10 ' : ''}w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
                   adminActive ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
                 }`}
               >
