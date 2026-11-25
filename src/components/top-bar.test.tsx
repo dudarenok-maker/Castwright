@@ -49,6 +49,7 @@ import {
   type DesignPillData,
   type ExportPillData,
 } from './top-bar';
+import { LABELS } from './theme-toggle';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
 import { tourSlice } from '../store/tour-slice';
@@ -1235,6 +1236,17 @@ describe('TopBar — #4567 drawer on every stage (phone-only Help/Theme/Account)
     expect(store.getState().ui.themeOverride).toBe('light');
     expect(screen.getByTestId('topbar-nav-drawer')).toBeInTheDocument();
     expect(screen.getByTestId('nav-drawer-link-theme').textContent).toMatch(/light/i);
+  });
+
+  it('Theme row shows the short label as text, keeps the full LABELS string as aria-label, and both track a click', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = () => screen.getByTestId('nav-drawer-link-theme');
+    expect(row().textContent).toBe('Theme: System');
+    expect(row()).toHaveAttribute('aria-label', LABELS.system);
+    fireEvent.click(row());
+    expect(row().textContent).toBe('Theme: Light');
+    expect(row()).toHaveAttribute('aria-label', LABELS.light);
   });
 
   it('Account row fires onOpenAccount, closes the drawer, and is aria-current on the account stage', () => {

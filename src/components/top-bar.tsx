@@ -10,7 +10,7 @@ import {
   CastwaveMark,
 } from '../lib/icons';
 import { Avatar } from './primitives';
-import { ThemeToggleButton, nextMode, LABELS } from './theme-toggle';
+import { ThemeToggleButton, nextMode, LABELS, SHORT_LABELS } from './theme-toggle';
 import { useAppInfo } from '../lib/use-app-info';
 import { useDismissedVersion, shouldShowUpdateNotice } from '../lib/update-notice';
 import { buildInfo } from '../lib/build-info';
@@ -730,12 +730,13 @@ function NavDrawer({
                   type="button"
                   role="menuitem"
                   data-testid="nav-drawer-link-theme"
+                  aria-label={LABELS[currentMode]}
                   onClick={() => {
                     dispatch(uiActions.setThemeOverride(nextMode(currentMode)));
                   }}
                   className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5"
                 >
-                  {LABELS[currentMode]}
+                  {SHORT_LABELS[currentMode]}
                 </button>
                 <button
                   type="button"
