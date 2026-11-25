@@ -6,8 +6,9 @@
 >
 > Plan of record: [`onbox-sitting-plan.md`](onbox-sitting-plan.md) §2.3, §5
 > Register rows: [`onbox-acceptance-register.md`](onbox-acceptance-register.md)
-> H1 and H2 (Group H). D3 (Group D) was discharged 2026-09-06 and removed from
-> the register; its §4.3 below is kept for the historical run record.
+> H1 (Group H). D3 (Group D) was discharged 2026-09-06 and H2 (Group H) was
+> discharged 2026-11-26; both were removed from the register, and their §4.3 and
+> §4.2 below are kept for the historical run record.
 > Audit input: [`onbox-acceptance-staleness-audit.md`](onbox-acceptance-staleness-audit.md)
 
 ---
@@ -26,14 +27,18 @@ Ship notes. This pack now covers only the three CJK-manuscript rows.
 ## 1. Purpose & scope
 
 This sitting covers the three register rows blocked on something that must be
-**obtained**, not on time or a free GPU slot: **H1**, **H2** and **D3** need a
-real CJK manuscript this repo's corpus does not currently have available.
+**obtained**, not on time or a free GPU slot: **H1**, **H2** and **D3** needed a
+real CJK manuscript this repo's corpus did not have available. **D3** was
+discharged 2026-09-06 and **H2** 2026-11-26 (the full-length Han book is now in
+the tree, §4.2); only **H1** (an all-kana Japanese manuscript) still waits on
+acquisition.
 Unlike every other sitting in this wave, this pack cannot be scheduled today
 — it exists so the procedure is ready the moment each prerequisite lands.
 
 **Running time total (this sitting, once unblocked):** H1 (15 min) + H2
-(15 min) + D3 (20 min) = **50 minutes** for the three CJK-manuscript rows,
-run together once one or both manuscripts are in hand.
+(15 min) + D3 (20 min) = **50 minutes** for the three CJK-manuscript rows as
+originally budgeted. H2 and D3 are discharged, so what remains is **H1,
+15 minutes**.
 
 **Card / box:** H1 and H2 need no GPU, sidecar, or analyzer — pure functions
 over chapter text, runnable on any machine. D3 needs a working TTS engine
@@ -56,8 +61,10 @@ staleness audit.
   Coalfall Commission translations the audit found: two real CJK samples
   (`煤落的委托` — zh, `コールフォールの依頼` — ja **mixed** kanji+kana), no
   all-kana Japanese text and no full-length Han book. **Audit verdict (STILL
-  OWED, both rows) confirmed** — no new manuscript has arrived since the
-  audit ran.
+  OWED, both rows) confirmed** at the time — no new manuscript had arrived
+  since the audit ran. **Superseded for H2, 2026-11-26:** the full-length Han
+  book arrived as `server/src/__fixtures__/hongloumeng-1-21.zh.md` and H2 is
+  discharged (§4.2). H1 is still owed.
 - **D3** (`server/src/analyzer/dialogue-structure/parser.ts`, #2315):
   `gh api repos/dudarenok-maker/Castwright/issues/2315` →
   `{"state":"closed","closed_at":"2026-08-13T21:32:45Z"}` — matches the
@@ -79,7 +86,8 @@ staleness audit.
   "primary-pair-straddle," confirmed. **Audit verdict (STILL OWED)
   confirmed.**
 
-No row is excluded on re-resolution — all three remain genuinely blocked.
+No row was excluded on re-resolution — all three were genuinely blocked then.
+Since: D3 discharged 2026-09-06, H2 discharged 2026-11-26; H1 remains blocked.
 
 ## 3. Preconditions
 
@@ -90,10 +98,10 @@ Stated once for the sitting; H1/H2/D3 share a single session.
 - [ ] A real, legally usable **all-kana (no kanji) Japanese manuscript** —
       the realistic shape is a children's book or early-reader text with no
       kanji at all — for H1.
-- [ ] A real, legally usable **full-length Han (Chinese) manuscript** — book
-      scale, not an excerpt — for H2. (H1 and H2 need two *different* texts;
-      neither of this repo's existing Coalfall samples satisfies either,
-      per §2 above.)
+- [x] ~~A real, legally usable **full-length Han (Chinese) manuscript** for
+      H2.~~ Met 2026-11-26 (H2 discharged): `hongloumeng-1-21.zh.md` is in
+      the tree (§4.2). Neither of this repo's existing Coalfall samples
+      satisfies H1's all-kana need either, per §2 above.
 - [ ] For **D3**, no new manuscript is strictly required if either the H1 or
       H2 manuscript (or this repo's existing `コールフォールの依頼` / `煤落的委托`
       samples) contains a continuation paragraph of the shape the design doc
@@ -131,22 +139,32 @@ Stated once for the sitting; H1/H2/D3 share a single session.
    **Result:** _(fill in: combined character count, and whether the margin
    at that scale still clears the floor)_
 
-### 4.2 H2 — lexical-richness floor at full-length real Han-book scale
+### 4.2 H2 (discharged 2026-11-26, removed from the register) — lexical-richness floor at Han-book scale
 
-*Blocked pending corpus.* Once a full-length Chinese manuscript is in hand:
+*Discharged.* The fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` is
+an **excerpt**, chapters 1-21 of 120 of 《紅樓夢》 (public domain, from Chinese
+Wikisource, #4671), not the whole book. The Group H describe block of
+`server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf) runs it
+through the gates. Procedure as run:
 
-1. Import it (or run `detectManuscriptLanguageFromChapters` over its
-   chapters directly) and record the result.
-   **Result:** _(fill in: `{ language, supported, fallback }`, expected `zh`)_
-2. Record the combined character count of the joined winning sample the
-   gates actually saw (every winning chapter's `prepareSample` output, each
-   capped at 20,000 chars, joined) and the observed `guiraudR` against
-   `LEXICAL_RICHNESS_FLOOR` (3).
-   **Result:** _(fill in: N, and observed R)_
+1. Run `detectManuscriptLanguageFromChapters` over the 21 chapters directly.
+   **Result:** `{ language: 'zh', supported: true, fallback: false }`, and the
+   same with the chapters reversed.
+2. Record the combined size of the joined winning sample the gates actually
+   saw (no chapter reaches the 20,000-character `prepareSample` cap) and the
+   observed `guiraudR` against `LEXICAL_RICHNESS_FLOOR` (3).
+   **Result:** gate figures **N = 112,304** tokens (after `dedupeProseUnits`
+   and digit-token removal); R = 9.9547. (Raw Han counts before the dedupe,
+   for reference only: 115,515 characters.)
 3. Record the distinct-Han-character count at that scale — the `V` in
-   `V / sqrt(N)`. At N ≈ 400,000, R clears the floor only if V is above
-   ~1,900; this is the number that answers the row.
-   **Result:** _(fill in: distinct-Han-character count V)_
+   `V / sqrt(N)`.
+   **Result:** gate figure **V = 3,336**, so R = 3,336 / sqrt(112,304) =
+   9.9547, well above the floor of 3. (Raw pre-dedupe count: 3,348.) Bound
+   for longer text: dedupe only grows V, so any longer sample of this book
+   keeps R >= 3,336 / sqrt(N), above 3 for every N below about 1.24M tokens.
+   The whole book projects to about 640k tokens, giving R >= 4.2. The uncapped
+   gate clears the floor at book scale; no length-correction follow-up is
+   owed.
 
 ### 4.3 D3 (discharged 2026-09-06, removed from the register) — the recovered turn actually sounds right when voiced
 
@@ -161,7 +179,7 @@ qualifying paragraph). Once a qualifying zh or ja manuscript is available:
    with no closer of its own, itself containing a quoted turn (that section
    quotes a worked `zh` example: `…眾鬼嘩然並出，曰：「爾恃符咒拘遣我...」聚而攢擊。…`
    recovering as two runs rather than one merged run). If H1's all-kana or
-   H2's Han manuscript already contains such a paragraph, reuse it here
+   H2's Han manuscript (now in the tree, §4.2) already contains such a paragraph, reuse it here
    rather than importing a third text.
 2. Generate that chapter with a working TTS engine (any of Kokoro/Coqui/
    Qwen — engine choice is not the variable under test).
