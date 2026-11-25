@@ -1,10 +1,16 @@
 // Tests for scripts/check-plan-numbers.mjs - the docs/features plan-number
 // duplicate checker (parent #4582; checker and tests land in child #4604).
-// Cases (a)-(g) exercise the pure function against synthetic tracked-path
-// lists (no network, no scratch repos); case (h) runs the real CLI against
-// THIS repo once and expects the acceptance baseline: the branch tree is
-// clean of any duplicate outside the frozen legacy allowlist, so the
-// checker must exit 0.
+// Cases (a)-(g), (d2)-(d5), (d4b) and (i)-(k) exercise the pure function
+// against synthetic tracked-path lists (no network, no git): duplicates,
+// the frozen legacy allowlist (grew / stale / archive-move transparency by
+// basename), ignored files, letter suffixes, leading zeros and extension
+// case. The LEGACY_DUPLICATES invariants test pins the allowlist's shape
+// (two-file sorted POSIX sets, distinct basenames). Case (h) runs the real
+// CLI against THIS repo once and expects the acceptance baseline: the branch
+// tree is clean of any duplicate outside the frozen legacy allowlist, so the
+// checker must exit 0. Case (l) is the one test that builds a throwaway
+// scratch git repo, under os.tmpdir() with a scrubbed git env, to prove a
+// non-ASCII basename is listed unquoted by listDocsFeaturesFiles.
 
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
