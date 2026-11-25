@@ -1466,7 +1466,8 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
 });
 
 /* Register rows H1 and H2 (docs/testing/onbox-acceptance-register.md, Group
-   H) — both NARROWED 2026-09-19, neither discharged. Both are real-manuscript
+   H). H1 is NARROWED 2026-09-19, not discharged; H2 was narrowed 2026-09-19
+   and is locked at book scale by the 紅樓夢 test below. Both are real-manuscript
    CJK richness fixtures, not the synthetic hand-authored samples finding
    3(b)/C5 (H1) and finding B3 (H2) flagged as unproven.
    H2 (zh): the Analects (論語), chapters 學而 through 子路 (13 of the work's
@@ -1474,8 +1475,8 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    a public-domain classical Chinese text (~5th century BCE). Real, ~2.25x
    the Han-character scale of this repo's prior largest real sample (the
    Coalfall Commission zh translation, 4,425 Han chars / R=12.078 — see the
-   register row). NOT full novel scale (the register's own N=400,000 concern)
-   — narrows the row, does not discharge the book-scale question.
+   register row). That fixture alone is NOT novel scale; the full-length
+   紅樓夢 fixture (21 chapters, ~115K Han chars) below is.
    H1 (ja): the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首,
    13th century), rendered in the standard all-hiragana karuta reading-card
    (読み札) form — the conventional no-kanji transcription of this anthology,
@@ -1487,9 +1488,10 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    already found — flipping this repo's KANA_NGRAM_SIZE from 3 to 2 makes the
    pre-existing finding-3(b) test fail while this fixture's test stays green).
    Corrected to narrowed before merge — see the register row's own history. */
-describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, narrowed)', () => {
+describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, book scale)', () => {
   const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-zilu.zh.md');
-  const JA_FIXTURE = join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
+  const ZH_BOOK_FIXTURE = join(__dirname, '..', '__fixtures__', 'hongloumeng-1-21.zh.md');
+  const JA_FIXTURE =join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
 
   /** Splits the Analects fixture's `## <title>` headings into {title, body}
    *  chapters, mirroring how a real `##`-delimited manuscript import splits. */
@@ -1528,6 +1530,28 @@ describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK f
     expect(hanChars.length).toBeGreaterThan(9000);
     expect(new Set(hanChars).size).toBeGreaterThan(1000);
     expect(guiraudR(joined)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+  });
+
+  it('H2 — a full-length real Han novel excerpt (紅樓夢 第一回–第二十一回, 21 chapters) detects as zh at book scale', () => {
+    const md = readFileSync(ZH_BOOK_FIXTURE, 'utf8');
+    const chapters = splitZhFixtureChapters(md);
+    expect(chapters.length).toBe(21);
+    expect(chapters[0].title).toBe('第一回　甄士隱夢幻識通靈　賈雨村風塵懷閨秀');
+    expect(chapters.at(-1)!.title).toBe('第二十一回　賢襲人嬌嗔箴寶玉　俏平兒軟語救賈璉');
+
+    expect(detectManuscriptLanguageFromChapters(chapters)).toEqual({ language: 'zh', supported: true, fallback: false });
+
+    const sample = joinSamplesForGates(chapters.map((c) => prepareSample(c.body, {})));
+    const hanChars = sample.match(/[一-鿿]/g) ?? [];
+    // Measured 2026-11-25 on the gates' actual sample (every chapter wins zh;
+    // no chapter reaches prepareSample's 20,000-char cap): N = 115,515 Han
+    // chars, V = 3,348 distinct Han chars, R = guiraudR = 9.9547 against
+    // LEXICAL_RICHNESS_FLOOR (3). The register row H2 cites these numbers.
+    expect(hanChars.length).toBeGreaterThan(105_000);
+    expect(new Set(hanChars).size).toBeGreaterThan(3_000);
+    expect(guiraudR(sample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
+
+    expect(detectManuscriptLanguageFromChapters([...chapters].reverse())).toEqual({ language: 'zh', supported: true, fallback: false });
   });
 
   it('H1 — the real Hyakunin Isshu all-kana fixture (50 poems) detects as ja, supported, not a fallback guess', () => {
