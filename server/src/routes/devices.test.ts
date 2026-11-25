@@ -50,13 +50,17 @@ let lanAuth: typeof import('../lan-auth.js');
 let pairingSessions: typeof import('../workspace/pairing-sessions.js');
 let devicesRouter: import('express').Router;
 
-function mkReq(opts: { ip?: string; headers?: Record<string, string> } = {}) {
+function mkReq(
+  opts: { ip?: string; headers?: Record<string, string>; method?: string; originalUrl?: string } = {},
+) {
   const ip = opts.ip ?? '203.0.113.5'; // non-loopback documentation range
   return {
     ip,
     socket: { remoteAddress: ip },
     headers: opts.headers ?? {},
     query: {},
+    method: opts.method ?? 'GET',
+    originalUrl: opts.originalUrl ?? '/api/info',
   } as never;
 }
 function mkRes() {
@@ -225,6 +229,33 @@ describe('devices route (srv-33)', () => {
       },
     );
     expect(passed).toBe(true);
+  });
+
+  // Invariant 5 (#898): a scope-denied request still authenticated, so the
+  // device's lastSeenAt is touched. Real guard + real store: a mock of
+  // authenticateDeviceToken could not catch the touch moving behind a scope check.
+  it('a scope-denied companion token still stamps lastSeenAt (invariant 5)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { device, token } = await deviceTokens.createDevice('Anna phone', 30, 'companion');
+    const res = mkRes();
+    let passed = false;
+    lanAuth.requireLanToken(
+      mkReq({
+        headers: { authorization: `Bearer ${token}` },
+        method: 'DELETE',
+        originalUrl: '/api/books/x/cover',
+      }),
+      res as never,
+      () => {
+        passed = true;
+      },
+    );
+    warn.mockRestore();
+    expect(passed).toBe(false);
+    expect(res._res.statusCode).toBe(403);
+    await deviceTokens._flushPendingWritesForTests();
+    const listed = deviceTokens.listDevices().find((d) => d.id === device.id);
+    expect(listed?.lastSeenAt).toBeDefined();
   });
 
   it('the LAN guard rejects a revoked device token (but the shared secret still works)', async () => {

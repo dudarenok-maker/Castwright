@@ -16,6 +16,7 @@ import { parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { authenticateDeviceToken } from './workspace/device-tokens.js';
+import { companionAllows, pathnameOf } from './device-scope.js';
 import { getLanRuntime } from './lan-runtime.js';
 import { isLoopbackRequest } from './loopback.js';
 
@@ -221,8 +222,22 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
     /* Legacy shared secret (srv-20) … */
     const expected = getLanAuthToken();
     if (expected !== undefined && safeEqual(provided, expected)) return next();
-    /* … or an individually-revocable per-device token (srv-33). */
-    if (authenticateDeviceToken(provided) !== null) return next();
+    /* … or an individually-revocable per-device token (srv-33), now scoped
+       (#898). Match req.originalUrl, NEVER req.path: this middleware is
+       mounted on an ARRAY path (app.ts:151) and Express presents path=/info
+       for both /api/info and /workspace/info. */
+    const device = authenticateDeviceToken(provided);
+    if (device !== null) {
+      if (device.scope === 'full') return next();
+      const pathname = pathnameOf(req.originalUrl ?? '');
+      if (companionAllows(req.method, pathname)) return next();
+      console.warn(
+        `[lan-auth] scope-denied companion device "${device.label}" (${device.id}): ` +
+          `${req.method} ${pathname}`,
+      );
+      res.status(403).json({ error: 'scope-denied', scope: 'companion' });
+      return;
+    }
   }
   // #2278 — the body carries the same port-correct guidance a pairing 403
   // does, so a 401'd caller can render live-port text straight from the
