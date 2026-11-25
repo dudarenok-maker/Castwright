@@ -49,6 +49,7 @@
 - **A chapter in your queue keeps the voice quality it was queued with.** If you switch between Standard and Quality voice while chapters are waiting, each waiting chapter still renders with the one it was queued under, and it follows the browser that queued it, not the one that happens to pick it up. Castwright now keeps loaded only the voice models your unfinished chapters will use, rather than every model the whole cast could need.
 - **On a phone, the analysing screen's model dropdown no longer spills off the edge.** The model picker now wraps inside its card instead of running past the side of the screen, so the page no longer pans sideways.
 - **The QA report no longer offers to resume a voice check that is switched off.** It now says Render-integrity QA (voice match) is off, and points you to Advanced settings → Per-sentence QA gates to turn it on.
+- **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
 
 # Castwright 1.15.0
 
