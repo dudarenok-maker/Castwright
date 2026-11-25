@@ -39,7 +39,7 @@ jobs:
           set -euo pipefail
           props=android/gradle.properties
           for flag in 'android.builtInKotlin=false' 'android.newDsl=false'; do
-            grep -qF "$flag" "$props" || {
+            grep -qxF "$flag" "$props" || {
               echo "::error::missing '$flag' in $props — KGP escape hatch (ops-17/#790)"; exit 1; }
           done
           echo "ok: KGP escape-hatch flags present"
