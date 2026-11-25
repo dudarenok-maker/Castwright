@@ -40,6 +40,12 @@ function guardRunsFirst(job) {
   return guardAt !== -1 && action !== -1 && guardAt < action;
 }
 
+test('app.yml triggers on app-deps-watch.yml, an input of its Flutter-pin lockstep guard (#790)', () => {
+  const triggers = appYml.slice(0, appYml.indexOf('\ndefaults:'));
+  const listed = triggers.match(/^ {6}- '\.github\/workflows\/app-deps-watch\.yml'$/gm) ?? [];
+  assert.equal(listed.length, 2, 'both the push and the pull_request paths must list it');
+});
+
 test('app.yml runs the KGP flag guard before the Flutter SDK step (#790)', () => {
   assert.ok(guardRunsFirst(androidJob(appYml)), 'move the guard above subosito/flutter-action');
 });

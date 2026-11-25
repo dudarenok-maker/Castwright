@@ -10,10 +10,12 @@ on:
     paths:
       - 'apps/android/**'
       - '.github/workflows/app.yml'
+      - '.github/workflows/app-deps-watch.yml'
   pull_request:
     paths:
       - 'apps/android/**'
       - '.github/workflows/app.yml'
+      - '.github/workflows/app-deps-watch.yml'
 
 defaults:
   run:
