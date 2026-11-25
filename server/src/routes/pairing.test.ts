@@ -148,6 +148,8 @@ describe('pairing routes', () => {
     // session.selfBind. createDevice is called with no options argument at all.
     expect(vi.mocked(createDevice).mock.lastCall?.length).toBe(3);
     expect(vi.mocked(createDevice).mock.lastCall?.[3]).toBeUndefined();
+    // M11: the Android companion gets the restricted scope.
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toBe('companion');
     const second = await request(redeem).post('/api/pair/redeem').send({ code: session.body.code });
     expect(second.status).toBe(410);
   });
@@ -273,6 +275,8 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
     expect(res.status).toBe(201);
     expect(vi.mocked(createDevice).mock.lastCall?.[3]).toEqual({ selfBind: true });
+    // M12: redeem-browser mints for a LAN browser running the full UI; 'companion' would 403 the entire web app.
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toBe('full');
   });
 
   // ... a non-self-bind session's redeem (the QR cross-device pairing flow)
@@ -283,6 +287,8 @@ describe('pairing routes', () => {
     const res = await request(appWith(pairRedeemRouter)).post('/api/pair/redeem-browser').send({ code });
     expect(res.status).toBe(201);
     expect(vi.mocked(createDevice).mock.lastCall?.[3]).toEqual({ selfBind: false });
+    // M12: redeem-browser mints for a LAN browser running the full UI; 'companion' would 403 the entire web app.
+    expect(vi.mocked(createDevice).mock.lastCall?.[2]).toBe('full');
   });
 
   it('redeem-browser 409s when LAN auth not enforced', async () => {
