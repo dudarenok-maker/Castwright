@@ -1467,7 +1467,8 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
 
 /* Register rows H1 and H2 (docs/testing/onbox-acceptance-register.md, Group
    H). H1 is NARROWED 2026-09-19, not discharged; H2 was narrowed 2026-09-19
-   and then discharged, and is locked at book scale by the 紅樓夢 test below.
+   and then discharged, and is locked by the 紅樓夢 excerpt test below (measured on the
+   excerpt, extended to book scale by the bound in the register's discharge entry).
    Both are real-manuscript
    CJK richness fixtures, not the synthetic hand-authored samples finding
    3(b)/C5 (H1) and finding B3 (H2) flagged as unproven.
@@ -1476,8 +1477,8 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    a public-domain classical Chinese text (~5th century BCE). Real, ~2.25x
    the Han-character scale of this repo's prior largest real sample (the
    Coalfall Commission zh translation, 4,425 Han chars / R=12.078 — see the
-   register row). That fixture alone is NOT novel scale; the full-length
-   紅樓夢 fixture (21 chapters, ~115K Han chars) below is.
+   register row). That fixture alone is NOT novel scale; the 紅樓夢 excerpt
+   (21 of 120 chapters, ~115K Han chars) below is closer to it.
    H1 (ja): the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首,
    13th century), rendered in the standard all-hiragana karuta reading-card
    (読み札) form — the conventional no-kanji transcription of this anthology,
@@ -1489,7 +1490,7 @@ describe('detectManuscriptLanguageFromChapters — #2256 review round 2 regressi
    already found — flipping this repo's KANA_NGRAM_SIZE from 3 to 2 makes the
    pre-existing finding-3(b) test fail while this fixture's test stays green).
    Corrected to narrowed before merge — see the register row's own history. */
-describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, book scale)', () => {
+describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK fixtures (register row H1, narrowed; H2, book-scale excerpt)', () => {
   const ZH_FIXTURE = join(__dirname, '..', '__fixtures__', 'analects-xueer-zilu.zh.md');
   const ZH_BOOK_FIXTURE = join(__dirname, '..', '__fixtures__', 'hongloumeng-1-21.zh.md');
   const JA_FIXTURE =join(__dirname, '..', '__fixtures__', 'hyakunin-isshu-1-50.ja.md');
@@ -1533,7 +1534,7 @@ describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK f
     expect(guiraudR(joined)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
   });
 
-  it('H2 — a full-length real Han novel excerpt (紅樓夢 第一回–第二十一回, 21 chapters) detects as zh at book scale', () => {
+  it('H2 — a real Han novel excerpt (紅樓夢 第一回–第二十一回, 21 of 120 chapters) detects as zh', () => {
     const md = readFileSync(ZH_BOOK_FIXTURE, 'utf8');
     const chapters = splitZhFixtureChapters(md);
     expect(chapters.length).toBe(21);

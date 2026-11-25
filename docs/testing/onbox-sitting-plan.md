@@ -303,8 +303,8 @@ acquisition.
 **Row count:** **3** (was 4 — **F1** discharged by the repo owner 2026-08-21,
 confirmed live end-to-end on a real device; Group F no longer exists in the
 register). **Correction, 2026-11-26 (#3270, #4673):** H2 discharged and
-removed from the register (the full-length Han book is in the tree and the
-richness floor was measured at book scale), joining D3 (2026-09-06); one
+removed from the register (a 21-of-120-chapter Han book excerpt is in the tree and the
+richness floor was measured on it, with a bound covering the whole book), joining D3 (2026-09-06); one
 blocked row remains, **H1**, so the set is now **1** row, and the 3 here and
 in the arithmetic below is the historical wave-4 figure. (Plain code span, not a link — same not-yet-written-sibling reason as §2.1's table; see the note there.)
 

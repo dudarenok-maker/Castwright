@@ -29,8 +29,8 @@ Ship notes. This pack now covers only the three CJK-manuscript rows.
 This sitting covers the three register rows blocked on something that must be
 **obtained**, not on time or a free GPU slot: **H1**, **H2** and **D3** needed a
 real CJK manuscript this repo's corpus did not have available. **D3** was
-discharged 2026-09-06 and **H2** 2026-11-26 (the full-length Han book is now in
-the tree, §4.2); only **H1** (an all-kana Japanese manuscript) still waits on
+discharged 2026-09-06 and **H2** 2026-11-26 (a 21-of-120-chapter Han book excerpt is now
+in the tree, §4.2); only **H1** (an all-kana Japanese manuscript) still waits on
 acquisition.
 Unlike every other sitting in this wave, this pack cannot be scheduled today
 — it exists so the procedure is ready the moment each prerequisite lands.
@@ -62,8 +62,8 @@ staleness audit.
   (`煤落的委托` — zh, `コールフォールの依頼` — ja **mixed** kanji+kana), no
   all-kana Japanese text and no full-length Han book. **Audit verdict (STILL
   OWED, both rows) confirmed** at the time — no new manuscript had arrived
-  since the audit ran. **Superseded for H2, 2026-11-26:** the full-length Han
-  book arrived as `server/src/__fixtures__/hongloumeng-1-21.zh.md` and H2 is
+  since the audit ran. **Superseded for H2, 2026-11-26:** a Han book
+  excerpt (chapters 1-21 of 120) arrived as `server/src/__fixtures__/hongloumeng-1-21.zh.md` and H2 is
   discharged (§4.2). H1 is still owed.
 - **D3** (`server/src/analyzer/dialogue-structure/parser.ts`, #2315):
   `gh api repos/dudarenok-maker/Castwright/issues/2315` →
@@ -163,7 +163,7 @@ through the gates. Procedure as run:
    for longer text: dedupe only grows V, so any longer sample of this book
    keeps R >= 3,336 / sqrt(N), above 3 for every N below about 1.24M tokens.
    The whole book projects to about 640k tokens, giving R >= 4.2. The uncapped
-   gate clears the floor at book scale; no length-correction follow-up is
+   gate clears the floor on the excerpt, and by this bound at book scale; no length-correction follow-up is
    owed.
 
 ### 4.3 D3 (discharged 2026-09-06, removed from the register) — the recovered turn actually sounds right when voiced

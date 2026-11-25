@@ -291,7 +291,7 @@ export const PROSE_UNIT_FLOOR = 20;
    reaches ~250 distinct Han characters while real Chinese prose reaches
    thousands, so any synthetic ">20,000 characters, still accepted" fixture
    would be measuring its own vocabulary rather than the gate. Whether R
-   stays above LEXICAL_RICHNESS_FLOOR for a full-length real Han book is
+   stays above LEXICAL_RICHNESS_FLOOR for a real Han book is
    therefore was UNVERIFIED, and was recorded as on-box acceptance row H2
    (discharged since, by the 紅樓夢 book-scale test in detect-language.test.ts)
    rather than asserted here.
