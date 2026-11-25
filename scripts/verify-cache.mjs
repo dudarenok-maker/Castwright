@@ -1977,7 +1977,13 @@ export async function runStepProcess(
 // outside that step's globs printed `test:hooks [cached]` and left a broken
 // citation stale-green locally - #3140's local-wiring gap (#1847 is the same
 // trap shape, one step further out).
-export const UNCONDITIONAL_LOCAL_CHECK_SCRIPTS = Object.freeze(['check:register-citations']);
+//
+// The same reasoning covers `check:plan-numbers` (#4582, scripts/check-plan-numbers.mjs):
+// it scans the WHOLE docs/features tree for duplicate plan numbers.
+export const UNCONDITIONAL_LOCAL_CHECK_SCRIPTS = Object.freeze([
+  'check:register-citations',
+  'check:plan-numbers',
+]);
 
 // Runs each UNCONDITIONAL_LOCAL_CHECK_SCRIPTS entry through the SAME spawn
 // mechanism (`runStepProcess`) the STEPS[] loop uses, and reports the SAME

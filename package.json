@@ -65,6 +65,7 @@
     "test:sidecar": "node scripts/run-sidecar-tests.mjs",
     "test:hooks": "node scripts/run-hooks-tests.mjs",
     "check:budget-poll": "node scripts/check-no-budget-poll.mjs",
+    "check:utf8": "node scripts/check-utf8.mjs",
     "doctor": "node scripts/reap-stale-batteries.mjs",
     "test:e2e": "playwright test --project=chromium --grep-invert=\"visual baselines|@quarantine\"",
     "test:e2e:mobile": "playwright test --project=mobile-chrome --project=tablet-chrome --workers=2 --grep-invert=\"visual baselines\"",
@@ -78,6 +79,7 @@
     "register:build": "node scripts/build-register-live-view.mjs",
     "stamp:publish-token": "node scripts/stamp-publish-token.mjs",
     "check:register-citations": "node scripts/check-register-citations.mjs",
+    "check:plan-numbers": "node scripts/check-plan-numbers.mjs",
     "check:register-row-citations": "node scripts/check-register-row-citations.mjs",
     "check:cycles": "node scripts/check-import-cycles.mjs",
     "capture:marketing": "playwright test --config=playwright.marketing.config.ts --project=desktop",
@@ -169,7 +171,7 @@
     "std-env": "^4.3.0",
     "tailwindcss": "^4.3.0",
     "typescript": "^6.0.0",
-    "typescript-eslint": "^8",
+    "typescript-eslint": "^8.73.0",
     "vite": "^8.3.8",
     "vite-plugin-mkcert": "^2.0.0",
     "vitest": "^5.1.0"
@@ -179,6 +181,9 @@
     "openapi-typescript": {
       "typescript": "$typescript"
     },
-    "browserslist": "^4.28.8"
+    "browserslist": "^4.28.8",
+    "readdir-glob": {
+      "minimatch": "^11.0.9"
+    }
   }
 }
