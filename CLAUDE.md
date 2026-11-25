@@ -1175,8 +1175,8 @@ before a release. `cross-os.yml` (`workflow_dispatch` + twice-weekly cron on
 `main`) stays as the between-releases pulse + ad-hoc cross-OS/mobile run.
 Docs-only PRs still complete `verify.yml` in seconds rather than deadlocking
 the required check — most legs' scope conditions evaluate false for a
-docs-only diff; one step (`check:register-citations`, PR #3134) runs
-unconditionally. Either way, the job completes in seconds and reports green (see
+docs-only diff; three steps (`check:register-citations`, PR #3134,
+`check:plan-numbers`, #4582, and `check:utf8`, #4586) run unconditionally. Either way, the job completes in seconds and reports green (see
 [docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md](docs/superpowers/specs/2026-07-06-verify-ci-rebalance-design.md)
 for why `paths-ignore` was deliberately removed rather than kept).
 See [docs/features/215-ci-label-gated-verify.md](docs/features/215-ci-label-gated-verify.md)

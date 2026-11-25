@@ -1693,6 +1693,67 @@ test('register citation check: must be unconditional (no if: guard) — issue #3
 });
 
 // package.json half of the pin: the script must be exactly this command.
+const CHECK_PLAN_NUMBERS_SCRIPT = /^node scripts\/check-plan-numbers\.mjs$/;
+
+test('plan number check: must be unconditional (no if: guard) — issue #4582', () => {
+  // Same shape as the register citation check above: the checker scans the
+  // WHOLE docs/features tree for duplicate plan numbers, so no diff-scope can
+  // predict whether one broke. The step must run on every PR, docs-only included.
+  const yamlLines = source.split('\n');
+  const stepStartIdx = yamlLines.findIndex((l) => /^\s*- name: Plan number check\s*$/.test(l));
+  assert.ok(
+    stepStartIdx >= 0,
+    'Plan number check step (- name: Plan number check) not found in workflow',
+  );
+  const stepIndent = /^(\s*)/.exec(yamlLines[stepStartIdx])[1].length;
+
+  const stepLines = [yamlLines[stepStartIdx]];
+  for (let i = stepStartIdx + 1; i < yamlLines.length; i += 1) {
+    const line = yamlLines[i];
+    if (line.trim() === '') {
+      stepLines.push(line);
+      continue;
+    }
+    if (/^(\s*)/.exec(line)[1].length <= stepIndent) break;
+    stepLines.push(line);
+  }
+  const stepBlock = stepLines.join('\n');
+
+  assert.ok(
+    !/^\s*if:/m.test(stepBlock),
+    'Plan number check step must be unconditional (must have no `if:` guard, #4582).',
+  );
+  assert.ok(
+    !/^\s*continue-on-error:\s*/im.test(stepBlock),
+    'Plan number check step must not have `continue-on-error:` set, or a duplicate plan number would not fail CI.',
+  );
+  assert.ok(
+    /^\s*run:\s*npm run check:plan-numbers\s*$/m.test(stepBlock),
+    'Plan number check step must execute `npm run check:plan-numbers`, not a neutered or renamed command.',
+  );
+
+  const pkg = JSON.parse(readFileSync(resolve(repoRoot, 'package.json'), 'utf8'));
+  assert.match(
+    pkg.scripts['check:plan-numbers'] ?? '',
+    CHECK_PLAN_NUMBERS_SCRIPT,
+    "package.json's `check:plan-numbers` script must run scripts/check-plan-numbers.mjs.",
+  );
+});
+
+test('Plan number check: the npm script pin rejects a neutered script — issue #4582', () => {
+  assert.match('node scripts/check-plan-numbers.mjs', CHECK_PLAN_NUMBERS_SCRIPT);
+  for (const neutered of [
+    'node -e ""',
+    'node scripts/check-plan-numbers.mjs || true',
+    'node scripts/check-plan-numbers.mjs; true',
+    'node scripts/check-plan-numbers.mjs --help',
+    'echo node scripts/check-plan-numbers.mjs',
+  ]) {
+    assert.doesNotMatch(neutered, CHECK_PLAN_NUMBERS_SCRIPT, neutered);
+  }
+});
+
+// package.json half of the pin: the script must be exactly this command.
 const CHECK_UTF8_SCRIPT = /^node scripts\/check-utf8\.mjs$/;
 
 test('UTF-8 encoding check: must be unconditional, exact command, script wired — issue #4586', () => {

@@ -524,13 +524,16 @@ test('#3018: [fail] line reports attempt count when step crashes all retries', a
 // answers to. Named once, so renaming the npm script fails loudly here instead
 // of silently un-pinning the assertions below.
 const CHECK_SCRIPT = 'check:register-citations';
+// The second unconditional check (#4605 / #4582). The temp repos below must
+// supply this script too, since a full run now spawns both.
+const PLAN_CHECK_SCRIPT = 'check:plan-numbers';
 
 
 test('#3271: check:register-citations is an unconditional local check, not a STEPS[] entry', () => {
   assert.deepEqual(
     [...UNCONDITIONAL_LOCAL_CHECK_SCRIPTS],
-    [CHECK_SCRIPT],
-    'UNCONDITIONAL_LOCAL_CHECK_SCRIPTS must name exactly the register-citation check — ' +
+    [CHECK_SCRIPT, PLAN_CHECK_SCRIPT],
+    'UNCONDITIONAL_LOCAL_CHECK_SCRIPTS must name exactly the register-citation and plan-number checks — ' +
       'removing it here silently restores the #3140 gap (the check then only runs via ' +
       'test:hooks, which is cache-hash-skipped and scope-gated)',
   );
@@ -648,6 +651,7 @@ function writeRegisterCitationFixture(dir, { passing = true } = {}) {
     ? JSON.parse(readFileSync(pkgPath, 'utf8'))
     : { name: 'citations-fixture', private: true, scripts: {} };
   pkg.scripts[CHECK_SCRIPT] = 'node citations-fixture.mjs';
+  pkg.scripts[PLAN_CHECK_SCRIPT] = 'node -e "process.exit(0)"';
   writeFileSync(pkgPath, JSON.stringify(pkg), 'utf8');
   return marker;
 }
@@ -684,6 +688,10 @@ test('#3271: a full run executes the citation check every time, and never report
     assert.ok(
       logs.some((l) => l.startsWith(`[pass] ${CHECK_SCRIPT}`)),
       `run ${run}: expected a [pass] line for ${CHECK_SCRIPT} — got:\n${logs.join('\n')}`,
+    );
+    assert.ok(
+      logs.some((l) => l.startsWith(`[pass] ${PLAN_CHECK_SCRIPT}`)),
+      `run ${run}: expected a [pass] line for ${PLAN_CHECK_SCRIPT} — got:\n${logs.join('\n')}`,
     );
     assert.ok(
       !logs.some((l) => l.includes('[cached]') && l.includes(CHECK_SCRIPT)),
