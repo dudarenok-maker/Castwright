@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState, type ReactNode } from 'react';
-import { IconStar, IconDrag, IconCheck, IconSearch } from '../lib/icons';
+import { IconStar, IconCheck, IconSearch } from '../lib/icons';
 import { VoiceSwatch, Pill } from './primitives';
 import type { Character, TtsModelKey, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
@@ -37,8 +37,7 @@ interface VoiceLibraryPanelProps {
      owns the height envelope. */
   displayMode?: 'aside' | 'sheet';
   /* Plan 81 wave 4 — touch-friendly alternative to drag-and-drop. When
-     set, every voice card renders an "Assign" pill alongside its drag
-     handle; tapping the pill calls onTapAssign(voice) which the cast
+     set, every voice card renders an "Assign" pill; tapping the pill calls onTapAssign(voice) which the cast
      view uses to enter assignment mode (sticky banner + tap-a-character
      to apply). Drag-and-drop on desktop stays intact regardless. */
   onTapAssign?: (voice: Voice) => void;
@@ -560,7 +559,7 @@ export function VoiceCard({
           </div>
         )}
       </div>
-      {onTapAssign ? (
+      {onTapAssign && (
         <button
           type="button"
           onMouseDown={(e) => e.stopPropagation()}
@@ -576,10 +575,6 @@ export function VoiceCard({
         >
           {isAssigningTarget ? 'Cancel' : 'Assign'}
         </button>
-      ) : (
-        <span className="text-ink/30 group-hover:text-ink/60 group-active:text-ink/60 transition-colors mt-1 hidden md:inline">
-          <IconDrag className="w-4 h-4" />
-        </span>
       )}
     </div>
   );
