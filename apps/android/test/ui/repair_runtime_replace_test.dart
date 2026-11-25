@@ -11,6 +11,7 @@ import 'package:castwright/src/data/pairing_store.dart';
 import 'package:castwright/src/demo/demo_audio_engine.dart';
 import 'package:castwright/src/demo/demo_runtime.dart';
 import 'package:castwright/src/domain/paired_server.dart';
+import 'package:flutter/widgets.dart' show Key;
 import 'package:flutter_test/flutter_test.dart';
 
 class _PairedStore implements PairingStore {
@@ -34,6 +35,19 @@ class _RecordingEngine extends DemoAudioEngine {
   bool disposed = false;
   @override
   Future<void> dispose() async => disposed = true;
+}
+
+/// An engine whose position can be moved, and which reports the playback row
+/// the library holds at the moment the runtime disposes it (just before the
+/// database closes), via [onDispose].
+class _MovableEngine extends DemoAudioEngine {
+  Duration _pos = const Duration(minutes: 7, seconds: 12);
+  Future<void> Function()? onDispose;
+  @override
+  Duration get position => _pos;
+  set position(Duration d) => _pos = d;
+  @override
+  Future<void> dispose() async => await onDispose?.call();
 }
 
 void main() {
@@ -144,5 +158,66 @@ void main() {
     expect(find.byType(LibraryHomeScreen), findsOneWidget);
     expect(tester.widget<LibraryHomeScreen>(find.byType(LibraryHomeScreen)).runtime,
         same(runtimes.last));
+  });
+
+  // PR #4635 review pass 3: a re-pair while listening must flush the player's
+  // position BEFORE the old runtime closes its database; the pane's own closing
+  // save lands after the close and is swallowed, losing up to 10 s.
+  testWidgets('a re-pair while listening saves the live position first',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    final engines = <_MovableEngine>[];
+    final runtimes = <CompanionRuntime>[];
+    int? savedAtDispose;
+
+    final service = PairingService(
+      fetchCa: (_) async => 'pem',
+      verifyTag: (_, _) => true,
+      redeem: (_, _, _) async =>
+          const RedeemResult(token: 'new-token', caFingerprint: 'f'),
+    );
+
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _PairedStore(),
+      service: service,
+      deepLinks: links.stream,
+      runtimeFactory: (Connection c,
+          {CompanionAudioHandler? handler,
+          void Function()? onRepairNeeded}) async {
+        final engine = _MovableEngine();
+        final runtime = await buildDemoRuntime(
+            fs: InMemoryFileStore(), root: '/t', engine: engine);
+        engine.onDispose = () async {
+          final id = runtime.player.currentBookId;
+          if (engines.first != engine || id == null) return;
+          savedAtDispose = (await runtime.library.loadPlayback(id))?.positionMs;
+        };
+        engines.add(engine);
+        runtimes.add(runtime);
+        return runtime;
+      },
+    ));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('The Drowning Bell'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.byKey(const Key('player-playpause')));
+    await tester.pumpAndSettle();
+    engines.first.position = const Duration(milliseconds: 440000);
+
+    links.add(Uri.parse(
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pair'));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 500)));
+    await tester.pumpAndSettle();
+
+    expect(engines, hasLength(2));
+    expect(savedAtDispose, 440000,
+        reason: 'the live position must be saved before the old database closes');
   });
 }

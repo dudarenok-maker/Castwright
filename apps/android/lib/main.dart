@@ -368,6 +368,12 @@ class _HomePageState extends State<HomePage> {
         _loading = true;
       });
     }
+    // Flush the live listening position first: dispose() closes the database,
+    // and the player pane's own closing save (after its route's exit
+    // animation, and never on a tablet) would land on a closed one.
+    try {
+      await old.player.saveNow();
+    } catch (_) {}
     await old.dispose();
   }
 
