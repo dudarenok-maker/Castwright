@@ -23,7 +23,7 @@ void main() {
         sentUrl = url;
         return const HttpResult(200, '{"appVersion":"1.6.0"}');
       });
-      final body = await api.info();
+      final body = await api.getJson('/api/info');
       expect(body['appVersion'], '1.6.0');
       expect(sentAuth, 'Bearer tok');
       expect(sentUrl.toString(), 'https://10.0.0.5:8443/api/info');
@@ -32,15 +32,35 @@ void main() {
     test('throws ApiException on 401', () async {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(401, ''));
       await expectLater(
-        api.info(),
+        api.getJson('/api/info'),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 401)),
+      );
+    });
+
+    test('a 401 from getJson keeps the re-pair message', () async {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(401, ''));
+      await expectLater(
+        api.getJson('/api/books/x/cover'),
+        throwsA(isA<ApiException>()
+            .having((e) => e.statusCode, 'status', 401)
+            .having((e) => e.message, 'message', contains('re-pair'))),
+      );
+    });
+
+    test('a 403 from getJson does not advise a re-pair (#898)', () async {
+      final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(403, ''));
+      await expectLater(
+        api.getJson('/api/books/x/cover'),
+        throwsA(isA<ApiException>()
+            .having((e) => e.statusCode, 'status', 403)
+            .having((e) => e.message, 'message', isNot(contains('re-pair')))),
       );
     });
 
     test('throws ApiException on 5xx', () async {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(503, ''));
       await expectLater(
-        api.info(),
+        api.getJson('/api/info'),
         throwsA(isA<ApiException>().having((e) => e.statusCode, 'status', 503)),
       );
     });
@@ -57,22 +77,22 @@ void main() {
         requestTimeout: const Duration(milliseconds: 50),
         send: (_, _, _) => Completer<HttpResult>().future, // never completes
       );
-      await expectLater(api.info(), throwsA(isA<TimeoutException>()));
+      await expectLater(api.getJson('/api/info'), throwsA(isA<TimeoutException>()));
     });
 
     // listenStatsApi is the [_ApiListenStatsApi] adapter wiring [ApiClient] as
     // the [ListenStatsApi] port.  Verify the adapter delegates correctly by
     // exercising it through a fake [ListenStatsApi] implementation — the real
-    // PUT uses a pinned HttpClient that is not injectable, so the transport is
-    // validated at the flush-service level (listen_stats_flush_service_test.dart).
+    // PUT goes through the injectable httpClientFactory, so its transport is pinned
+    // in api_client_writes_test.dart.
     test('listenStatsApi getter returns a ListenStatsApi', () {
       final api = ApiClient(conn(), send: (_, _, _) async => const HttpResult(200, '{}'));
       expect(api.listenStatsApi, isA<ListenStatsApi>());
     });
 
     test('putListenStats serialises the JSON body correctly', () async {
-      // We can't inject a send hook into putListenStats because it creates its
-      // own pinned client.  Instead we verify the JSON shape directly using
+      // putListenStats builds its client from the injectable httpClientFactory
+      // (the real request is pinned in api_client_writes_test.dart).  Here we verify the JSON shape directly using
       // jsonEncode (the same code path the method uses) to confirm the contract
       // matches the server spec: { sessionId, days:[{date,seconds}] }.
       final days = [

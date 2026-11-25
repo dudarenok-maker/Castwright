@@ -423,8 +423,8 @@ class PlayerController {
   /// from an OUTGOING stream being misattributed to the incoming chapter (#1579).
   /// Nulling [_streamingGen] makes it idempotent: a second error for the same
   /// load reads null and no-ops. Reads the proxy's upstream-status side-channel,
-  /// clears the mapping, and either re-pairs (fresh 401/403) or surfaces "download
-  /// to play" (everything else, incl. null). No auto-retry.
+  /// clears the mapping, and either re-pairs (fresh 401 only) or surfaces "download
+  /// to play" (everything else, incl. 403 and null). No auto-retry.
   void _handleStreamFailure(int? gen) {
     final cfg = _streaming;
     if (cfg == null) return;
@@ -432,7 +432,10 @@ class PlayerController {
     _streamingGen = null;
     final status = cfg.proxy.lastUpstreamStatus;
     cfg.proxy.clearMapping();
-    if (status == 401 || status == 403) {
+    // 401 = authentication: a re-pair mints a fresh token and fixes it. 403 =
+    // authorization (#898 scope denial): a re-pair mints the SAME scope, so it
+    // would loop deny -> re-pair -> deny; offer download-to-play instead.
+    if (status == 401) {
       cfg.onRepairNeeded();
     } else {
       _notifyDownloadToPlay();

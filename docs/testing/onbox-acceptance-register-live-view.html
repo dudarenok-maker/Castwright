@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="147" data-publish-id="c42a4620d45f"></div>
+  <div hidden data-published-as="152" data-publish-id="58a71abc02a2"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">92</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">93</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->18<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->19<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1504,7 +1504,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">18 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">19 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1727,6 +1727,23 @@
         <li><strong>A held-back in-app upgrade, and where a refusal is logged.</strong> From an install on an affected Node, use "Upgrade &amp; restart" in the app to move to a release carrying the guard. The new release's restarter checks your Node before it launches, so the app must come back on the PREVIOUS release rather than staying on the "app is restarting" page: <code>.current-version</code> names the previous release again, and the app's upgrade card shows "Upgrade to vX was held back and you are still running vY" with the Node to install. The reason is shown only in the browser tab that was left on the "app is restarting" screen, so keep the upgrading tab open and read it there; a tab you reload (or a new one) just shows the previous version, with no reason. No <code>node-refused.log</code> is expected on this path (the restarter intercepts first; a direct <code>npm run start:prod</code> on the new release still writes <code>logs/node-refused.log</code> in the install root's <code>logs</code> folder, or under <code>APP_LOG_DIR</code> when set). Then install Node v24.16.0 or newer and upgrade again: it switches and starts the new release. To walk the second attempt, with a further release available while the held-back one is still on disk, press Upgrade again on the same Node: it must roll back to the original release, never to the held-back one. Prove the file separately with a manual <code>npm run start:prod</code> on the affected Node, including once with <code>logs/</code> absent.</li>
         </ul>
         <p><em>Needs:</em> a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. Clears when each bullet is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E118</span><span class="iname">Companion handshake 401 opens the pairing screen on a phone with a fully downloaded library</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The handshake probe now routes a 401 from <code>GET /api/info</code> to the pairing screen. The automated tests pin that routing against a fake client. Nothing automated proves the user-visible consequence: the pairing screen opening on a phone whose library is downloaded and which therefore never streams. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR A)</p>
+        <ul>
+        <li><strong>Setup.</strong> Pair a phone, download at least one book fully, and confirm it plays offline. Precondition: in the app&#8217;s settings, &#8220;auto-sync on reconnect&#8221; must be on, and the Wi-Fi must be unmetered (or &#8220;unmetered Wi-Fi only&#8221; off). With either gate closed, auto-sync returns before probing, so no pairing screen opens and steps 4 and 5 would record a false failure.</li>
+        <li><strong>Revoke.</strong> On the desktop, revoke that device so its token now answers 401.</li>
+        <li><strong>Trigger.</strong> Put the phone back on the LAN and let auto-sync fire (toggle Wi-Fi off and on).</li>
+        <li><strong>The pairing screen opens.</strong> Before PR A the app reported the computer unreachable indefinitely, with no prompt.</li>
+        <li><strong>Re-pair.</strong> Pair again: the library, the downloads and the listening positions survive.</li>
+        <li><strong>Negative control.</strong> With the phone off Wi-Fi entirely, the pairing screen must NOT open (an unreachable computer is still just &#8220;unreachable&#8221;).</li>
+        <li><strong>One re-pair, not a loop.</strong> After the re-pair in step 5, toggle Wi-Fi off and on again, twice. The pairing screen must NOT open again: the replaced runtime is disposed on a successful re-pair, so no leftover probe sends the old revoked token.</li>
+        <li><strong>Re-pair from the player, then keep listening.</strong> Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.</li>
+        </ul>
+        <p><em>Needs:</em> a real Android phone with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.</p>
       </div>
     </details>
 

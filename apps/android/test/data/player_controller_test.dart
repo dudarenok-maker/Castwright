@@ -919,6 +919,29 @@ void main() {
       expect(emitted, isEmpty);
     });
 
+    test('errorStream with lastUpstreamStatus 403 -> download prompt, never a re-pair', () async {
+      // #898: a 403 is a scope denial; re-pairing mints a token with the SAME
+      // scope, so re-pairing would loop deny -> re-pair -> deny forever.
+      final engine = FakeAudioEngine();
+      final proxy = FakeProxy()..lastUpstreamStatus = 403;
+      var repaired = 0;
+      final pc = PlayerController(
+        audioEngine: engine,
+        playbackStore: MemPlaybackStore(),
+        playlistLoader: (_) async => list,
+        clock: () => DateTime.utc(2026, 6, 6),
+        streaming: await cfg(proxy, streamOn: true, onLan: true, onRepair: () => repaired++),
+      );
+      await pc.openBook('b1');
+      final emitted = <String>[];
+      pc.needsDownloadStream.listen(emitted.add);
+      await pc.playChapter('u1');
+      engine.emitError('boom');
+      await Future<void>.delayed(Duration.zero);
+      expect(repaired, 0, reason: 'a scope denial must never re-pair');
+      expect(emitted, contains('u1'));
+    });
+
     test(
         'initial-load throw (non-auth) routes to needs-download once, '
         'and a later errorStream for the same load is a no-op (idempotency)',

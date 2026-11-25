@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 18 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**93 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-21 (#1393), 91 → 92.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 54 → 55. `next-id` bumped A134 → A135 in the same change (relative to `main`, whose `next-id` for group A is A134 after #4533 and #4535). Row is owed; not run here.
+> **Last change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
+>
+> **Previous change: 2026-11-21 (#1393), 91 → 92.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 54 → 55. `next-id` bumped A134 → A135 in the same change (relative to `main`, whose `next-id` for group A is A134 after #4533 and #4535). Row is owed; not run here.
 >
 > **Previous change: 2026-11-21 (#4443, PR #4535), 90 → 91.** Row **E117** (the Windows Node loopback-crash guard: the refusal on an affected Node, the Pinokio "run Update again" message, two-Update convergence, and the in-app upgrade's held-back card plus `logs/upgrade-restart.log`) added. Group E 17 → 18. `next-id` bumped E117 → E118 in the same change. Row **E1** amended: the Pinokio pin is now `nodejs>=24.16.0,<25` and the expected Node after the second Update is 24.16.0 or newer below 25. Row is owed; not run here.
 >
@@ -7394,7 +7396,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E118 -->
+<!-- next-id: E119 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -8161,6 +8163,21 @@ The automated tests pin the range list, the message text and the log write again
 - **A held-back in-app upgrade, and where a refusal is logged.** From an install on an affected Node, use "Upgrade & restart" in the app to move to a release carrying the guard. The new release's restarter checks your Node before it launches, so the app must come back on the PREVIOUS release rather than staying on the "app is restarting" page: `.current-version` names the previous release again, and the app's upgrade card shows "Upgrade to vX was held back and you are still running vY" with the Node to install. The reason is shown only in the browser tab that was left on the "app is restarting" screen, so keep the upgrading tab open and read it there; a tab you reload (or a new one) just shows the previous version, with no reason. No `node-refused.log` is expected on this path (the restarter intercepts first; a direct `npm run start:prod` on the new release still writes `logs/node-refused.log` in the install root's `logs` folder, or under `APP_LOG_DIR` when set). Then install Node v24.16.0 or newer and upgrade again: it switches and starts the new release. To walk the second attempt, with a further release available while the held-back one is still on disk, press Upgrade again on the same Node: it must roll back to the original release, never to the held-back one. Prove the file separately with a manual `npm run start:prod` on the affected Node, including once with `logs/` absent.
 
 *Needs:* a Windows box with an affected Node (and, for the second and third bullets, Pinokio with a pre-pin install); no GPU. *Criteria:* the bullets above; plan [`294-node-loopback-crash-guard.md`](../features/294-node-loopback-crash-guard.md), "Manual acceptance walkthrough". Clears when each bullet is recorded.
+
+### E118 · Companion handshake 401 opens the pairing screen on a phone with a fully downloaded library ([#898](https://github.com/dudarenok-maker/Castwright/issues/898), PR A) · **a real Android phone; no GPU needed**
+
+`probeServerReachable` (`companion_runtime.dart`) now routes a 401 from `GET /api/info` to `onRepairNeeded`. The automated tests pin that routing against a fake client. Nothing automated proves the user-visible consequence: the pairing screen opening on a phone whose library is downloaded and which therefore never streams (so it never hits a 401 on the stream path).
+
+1. **Setup.** Pair a phone, download at least one book fully, and confirm it plays offline. Precondition: in the app's settings, "auto-sync on reconnect" must be on, and the Wi-Fi must be unmetered (or "unmetered Wi-Fi only" off). With either gate closed, auto-sync returns before probing, so no pairing screen opens and steps 4 and 5 would record a false failure.
+2. **Revoke.** On the desktop, revoke that device so its token now answers 401.
+3. **Trigger.** Put the phone back on the LAN and let auto-sync fire (toggle Wi-Fi off and on).
+4. **The pairing screen opens.** Before PR A the app reported the computer unreachable indefinitely, with no prompt.
+5. **Re-pair.** Pair again: the library, the downloads and the listening positions survive.
+6. **Negative control.** With the phone off Wi-Fi entirely, the pairing screen must NOT open (an unreachable computer is still just "unreachable").
+7. **One re-pair, not a loop.** After the re-pair in step 5, toggle Wi-Fi off and on again, twice. The pairing screen must NOT open again: the replaced runtime is disposed on a successful re-pair, so no leftover probe sends the old revoked token.
+8. **Re-pair from the player, then keep listening.** Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.
+
+*Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
 
 ## Group G — GitHub Actions itself
 

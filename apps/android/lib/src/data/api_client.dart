@@ -88,8 +88,13 @@ class ApiClient {
     final res = await _send('GET', _u(path), {
       HttpHeaders.authorizationHeader: 'Bearer ${connection.server.token}',
     }).timeout(requestTimeout);
-    if (res.statusCode == 401 || res.statusCode == 403) {
-      throw ApiException(res.statusCode, 'Not authorised — re-pair the device.');
+    if (res.statusCode == 401) {
+      throw ApiException(401, 'Not authorised — re-pair the device.');
+    }
+    if (res.statusCode == 403) {
+      // #898: the token authenticated but its scope does not cover this
+      // endpoint. Re-pairing mints the same scope, so do not suggest it.
+      throw ApiException(403, 'Not permitted for this device.');
     }
     if (res.statusCode >= 400) {
       throw ApiException(res.statusCode, 'Request to $path failed (${res.statusCode}).');
@@ -100,10 +105,6 @@ class ApiClient {
     }
     return decoded;
   }
-
-  /// GET /api/info — the server version / capabilities handshake (used to
-  /// gate features + confirm the server is new enough for the sync manifest).
-  Future<Map<String, dynamic>> info() => getJson('/api/info');
 
   /// GET /api/library/sync-manifest — the srv-32 INDEX (one row per book + the
   /// full active-book set). `?since=` (an ISO timestamp) trims the `books` list,
@@ -187,7 +188,7 @@ class ApiClient {
     required double currentSec,
     required String listenedAt,
   }) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final req = await client.putUrl(_u('/api/books/$bookId/listen-progress'));
       req.headers.set(HttpHeaders.authorizationHeader,
@@ -226,7 +227,7 @@ class ApiClient {
   /// `.catchError((_) {})`.
   Future<void> setShelfStatus(String bookId,
       {bool? finished, bool? hidden}) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final body = shelfStatusBody(finished: finished, hidden: hidden);
       final req = await client.postUrl(
@@ -252,7 +253,7 @@ class ApiClient {
     required String sessionId,
     required List<StatDay> days,
   }) async {
-    final client = _pinnedHttpClient(connection);
+    final client = _makeClient(connection);
     try {
       final req = await client.putUrl(_u('/api/books/$bookId/listen-stats'));
       req.headers.set(
