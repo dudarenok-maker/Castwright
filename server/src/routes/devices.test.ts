@@ -215,7 +215,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
-    const { token } = await deviceTokens.createDevice('Phone', 30);
+    const { token } = await deviceTokens.createDevice('Phone', 30, 'full');
     let passed = false;
     lanAuth.requireLanToken(
       mkReq({ headers: { authorization: `Bearer ${token}` } }),
@@ -228,7 +228,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard rejects a revoked device token (but the shared secret still works)', async () => {
-    const { device, token } = await deviceTokens.createDevice('Phone', 30);
+    const { device, token } = await deviceTokens.createDevice('Phone', 30, 'full');
     await deviceTokens.revokeDevice(device.id);
 
     const revokedRes = mkRes();
@@ -566,7 +566,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('caps an over-long device label at 64 chars', async () => {
-    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
+    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30, 'full');
     expect(device.label.length).toBe(64);
   });
 

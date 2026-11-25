@@ -68,7 +68,7 @@ devicesRouter.post('/devices', async (req: Request, res: Response) => {
   const label = typeof raw === 'string' ? raw : 'Device';
   const ttl = clampTtlDays(configValue('lan.deviceTokenTtlDays'));
   try {
-    const { device, token } = await createDevice(label, ttl);
+    const { device, token } = await createDevice(label, ttl, 'full');
     // The raw token is shown exactly once — only its hash is persisted.
     res.status(201).json({ ...device, token });
   } catch (err) {

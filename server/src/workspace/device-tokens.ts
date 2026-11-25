@@ -17,6 +17,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { deviceTokensJsonPath } from './paths.js';
 import { writeJsonAtomic } from './state-io.js';
 
+/** What a device token may reach. `'full'` is the whole LAN API (a LAN web
+ *  browser running the desktop UI, or the loopback admin mint); `'companion'`
+ *  is the Android companion app's narrow allowlist (enforced in
+ *  `requireLanToken`, #4623). */
+export type DeviceScope = 'full' | 'companion';
+
 export interface DeviceTokenRecord {
   id: string;
   label: string;
@@ -24,6 +30,11 @@ export interface DeviceTokenRecord {
   tokenHash: string;
   createdAt: string;
   expiresAt?: string;        // ISO; absent (legacy schema-1) OR unparseable → rejected (#2144)
+  /** Required. A record whose scope is absent or unrecognised does NOT
+   *  authenticate (`findValidDevice` skips it) — the same fail-closed choice
+   *  as `expiresAt`. It stays listed and revocable: this is deliberately NOT
+   *  checked in `invalidDeviceField`, which would quarantine it at load. */
+  scope: DeviceScope;
   lastSeenAt?: string;
   revoked?: boolean;
   /** True iff this record was minted by "Authorize this browser" (a
@@ -60,6 +71,11 @@ export function findValidDevice(
   const h = Buffer.from(hashToken(rawToken));
   for (const d of devices) {
     if (d.revoked) continue;
+    // Scope guard. This READ-PATH check is the guarantee: a required
+    // parameter on `createDevice` cannot reach a hand-edited
+    // device-tokens.json, a mock, or a merge conflict, so a legacy
+    // (scope-less) or unknown-scope record must be refused here.
+    if (d.scope !== 'full' && d.scope !== 'companion') continue;
     const exp = d.expiresAt === undefined ? NaN : Date.parse(d.expiresAt);
     if (!Number.isFinite(exp) || now > exp) continue;
     // #2149 — defence-in-depth, mirroring the expiresAt guard above.
@@ -502,7 +518,8 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // not be read...") would be actively misleading; only the RETRY RATE
   // needed fixing here, not the error's shape.
   try {
-    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+    // `schema: 3` is documentation, not enforcement — `loadSync` never reads it.
+    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 3, devices: [...devices, ...quarantine] });
   } catch (err) {
     persistDegradedAt = Date.now();
     throw err;
@@ -591,6 +608,9 @@ export function isValidDeviceToken(rawToken: string): boolean {
 /** Mint a new per-device token. Returns the raw token ONCE (only its hash is
  *  stored); callers must surface it to the user immediately.
  *
+ *  `scope` is REQUIRED and positional (third): `'full'` or `'companion'`,
+ *  chosen per mint site, never per credential type.
+ *
  *  `opts.selfBind` marks the new record as the host's self-bind AND, in the
  *  same critical section, revokes any prior non-revoked `selfBind` record —
  *  the marker decides, not the label, so a record renamed away from "This
@@ -602,6 +622,7 @@ export function isValidDeviceToken(rawToken: string): boolean {
 export async function createDevice(
   label: string,
   ttlDays: number,
+  scope: DeviceScope,
   opts?: { selfBind?: boolean },
 ): Promise<{ device: PublicDevice; token: string }> {
   return enqueueWrite(async () => {
@@ -617,6 +638,7 @@ export async function createDevice(
       tokenHash: hashToken(token),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + ttlDays * 86_400_000).toISOString(),
+      scope,
       ...(opts?.selfBind ? { selfBind: true } : {}),
     };
     devices.push(record);

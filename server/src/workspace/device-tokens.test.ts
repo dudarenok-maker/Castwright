@@ -94,9 +94,9 @@ afterEach(async () => {
 
 it('shouldTouchLastSeen is throttled (pure)', async () => {
   const now = 1_000_000_000_000;
-  const fresh = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', lastSeenAt: new Date(now - 1000).toISOString() };
+  const fresh = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', scope: 'companion' as const, lastSeenAt: new Date(now - 1000).toISOString() };
   const stale = { ...fresh, lastSeenAt: new Date(now - 2 * 60 * 60 * 1000).toISOString() };
-  const never = { id: '1', label: 'P', tokenHash: 'h', createdAt: '' };
+  const never = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', scope: 'companion' as const };
   expect(dt.shouldTouchLastSeen(fresh, now)).toBe(false);
   expect(dt.shouldTouchLastSeen(stale, now)).toBe(true);
   expect(dt.shouldTouchLastSeen(never, now)).toBe(true);
@@ -110,22 +110,22 @@ it('shouldTouchLastSeen is throttled (pure)', async () => {
 // already survived load-time validation on the fields that matter for auth.
 it('shouldTouchLastSeen treats a malformed lastSeenAt as absent (touch now), not frozen forever', () => {
   const now = 1_000_000_000_000;
-  const garbage = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', lastSeenAt: 'garbage' };
+  const garbage = { id: '1', label: 'P', tokenHash: 'h', createdAt: '', scope: 'companion' as const, lastSeenAt: 'garbage' };
   expect(dt.shouldTouchLastSeen(garbage, now)).toBe(true);
 });
 
 it('touchLastSeen persists lastSeenAt; isValidDeviceToken triggers it', async () => {
-  const { device } = await dt.createDevice('Phone', 30);
+  const { device } = await dt.createDevice('Phone', 30, 'full');
   await dt.touchLastSeen(device.id, Date.now());      // awaitable → deterministic
   dt._resetDeviceTokenCacheForTests();
   expect(dt.listDevices()[0].lastSeenAt).toBeDefined();
 
-  const { token } = await dt.createDevice('Phone2', 30);
+  const { token } = await dt.createDevice('Phone2', 30, 'full');
   expect(dt.isValidDeviceToken(token)).toBe(true);     // fire-and-forget touch path still returns true
 });
 
 it('_flushPendingWritesForTests waits for an in-flight touchLastSeen write before resolving', async () => {
-  const { token } = await dt.createDevice('Phone', 30);
+  const { token } = await dt.createDevice('Phone', 30, 'full');
 
   let releaseWrite: () => void = () => {};
   const gate = new Promise<void>((resolve) => { releaseWrite = resolve; });
@@ -168,6 +168,7 @@ function goodRecord(id: string, tokenHash: string): Record<string, unknown> {
     tokenHash,
     createdAt: new Date(1_000_000_000_000).toISOString(),
     expiresAt: new Date(Date.now() + 86_400_000).toISOString(),
+    scope: 'companion',
   };
 }
 
@@ -360,7 +361,7 @@ it('revokeDevice throws DeviceStoreDegradedError (not a false "not found") while
 it('createDevice throws DeviceStoreDegradedError (typed, not a generic Error) while the store is degraded', async () => {
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  await expect(dt.createDevice('Phone', 30)).rejects.toThrow(dt.DeviceStoreDegradedError);
+  await expect(dt.createDevice('Phone', 30, 'full')).rejects.toThrow(dt.DeviceStoreDegradedError);
   warn.mockRestore();
 });
 
@@ -466,8 +467,8 @@ it('warns once for a persisting store fault across several real retries, not onc
 // either's persist() lands). Fixed by serialising the whole read-modify-write
 // behind a single promise chain (enqueueWrite), not merely the write.
 it('two concurrent createDevice calls do not lose a write (unsynchronised read-modify-write race, #2182)', async () => {
-  const p1 = dt.createDevice('A', 30);
-  const p2 = dt.createDevice('B', 30);
+  const p1 = dt.createDevice('A', 30, 'full');
+  const p2 = dt.createDevice('B', 30, 'full');
   await Promise.all([p1, p2]);
   await dt._flushPendingWritesForTests();
   const labels = dt.listDevices().map((d) => d.label).sort();
@@ -478,8 +479,8 @@ it('two concurrent createDevice calls do not lose a write (unsynchronised read-m
 // self-bind record, not two. The first record is revoked (not deleted —
 // matching revokeDevice's own semantics), so it's still present in the roster.
 it('two consecutive createDevice(..., { selfBind: true }) calls leave exactly one non-revoked selfBind record (#2257)', async () => {
-  const first = await dt.createDevice('This computer', 365, { selfBind: true });
-  const second = await dt.createDevice('This computer', 365, { selfBind: true });
+  const first = await dt.createDevice('This computer', 365, 'full', { selfBind: true });
+  const second = await dt.createDevice('This computer', 365, 'full', { selfBind: true });
 
   const list = dt.listDevices();
   expect(list.find((d) => d.id === first.device.id)?.revoked).toBe(true);
@@ -492,7 +493,7 @@ it('two consecutive createDevice(..., { selfBind: true }) calls leave exactly on
 // "This computer" but still carrying selfBind:true IS revoked by the next
 // self-bind; a record labelled "This computer" WITHOUT the marker is NOT.
 it('a self-bind is revoked by label rename; a same-labelled non-self-bind record is left alone (#2257)', async () => {
-  const renamed = await dt.createDevice('This computer', 365, { selfBind: true });
+  const renamed = await dt.createDevice('This computer', 365, 'full', { selfBind: true });
   // Simulate an operator rename: label changes, selfBind marker persists.
   const devicesRaw = JSON.parse(
     readFileSync(join(dir, 'device-tokens.json'), 'utf8'),
@@ -502,8 +503,8 @@ it('a self-bind is revoked by label rename; a same-labelled non-self-bind record
   writeFileSync(join(dir, 'device-tokens.json'), JSON.stringify(devicesRaw), 'utf8');
   dt._resetDeviceTokenCacheForTests();
 
-  const decoy = await dt.createDevice('This computer', 365); // no selfBind option at all
-  const third = await dt.createDevice('This computer', 365, { selfBind: true });
+  const decoy = await dt.createDevice('This computer', 365, 'full'); // no selfBind option at all
+  const third = await dt.createDevice('This computer', 365, 'full', { selfBind: true });
 
   const list = dt.listDevices();
   // The renamed-but-still-marked record IS revoked.
@@ -514,8 +515,8 @@ it('a self-bind is revoked by label rename; a same-labelled non-self-bind record
 });
 
 it('createDevice without the selfBind option revokes nothing', async () => {
-  const first = await dt.createDevice('This computer', 365, { selfBind: true });
-  const second = await dt.createDevice('Some other device', 365);
+  const first = await dt.createDevice('This computer', 365, 'full', { selfBind: true });
+  const second = await dt.createDevice('Some other device', 365, 'full');
 
   const list = dt.listDevices();
   expect(list.find((d) => d.id === first.device.id)?.revoked).toBe(false);
@@ -526,8 +527,8 @@ it('createDevice without the selfBind option revokes nothing', async () => {
 // evidence every entry point actually uses it; each write path gets its own
 // deterministic lost-update regression test, mirroring createDevice's.
 it('two concurrent revokeDevice calls (different devices) do not lose an update (unsynchronised read-modify-write race, #2182)', async () => {
-  const { device: d1 } = await dt.createDevice('A', 30);
-  const { device: d2 } = await dt.createDevice('B', 30);
+  const { device: d1 } = await dt.createDevice('A', 30, 'full');
+  const { device: d2 } = await dt.createDevice('B', 30, 'full');
   const p1 = dt.revokeDevice(d1.id);
   const p2 = dt.revokeDevice(d2.id);
   await Promise.all([p1, p2]);
@@ -537,8 +538,8 @@ it('two concurrent revokeDevice calls (different devices) do not lose an update 
 });
 
 it('two concurrent touchLastSeen calls (different devices) do not lose an update (unsynchronised read-modify-write race, #2182)', async () => {
-  const { device: d1 } = await dt.createDevice('A', 30);
-  const { device: d2 } = await dt.createDevice('B', 30);
+  const { device: d1 } = await dt.createDevice('A', 30, 'full');
+  const { device: d2 } = await dt.createDevice('B', 30, 'full');
   const now = Date.now();
   const p1 = dt.touchLastSeen(d1.id, now);
   const p2 = dt.touchLastSeen(d2.id, now + 1);
@@ -656,7 +657,7 @@ it('refuses to write while the last load was degraded (corrupt store); the corru
   writeFileSync(join(dir, 'device-tokens.json'), corrupt, 'utf8');
 
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-  await expect(dt.createDevice('Phone', 30)).rejects.toThrow(dt.DeviceStoreDegradedError);
+  await expect(dt.createDevice('Phone', 30, 'full')).rejects.toThrow(dt.DeviceStoreDegradedError);
   warn.mockRestore();
 
   const onDisk = readFileSync(join(dir, 'device-tokens.json'), 'utf8');
@@ -714,7 +715,7 @@ it('_resetDeviceTokenCacheForTests resets cache, quarantine, and loadDegraded �
   const secondGood = goodRecord('second-good', dt.hashToken('second-token'));
   writeRawStore(dir, [secondGood]);
 
-  const { device } = await dt.createDevice('New', 30); // must NOT refuse as still-degraded
+  const { device } = await dt.createDevice('New', 30, 'full'); // must NOT refuse as still-degraded
   expect(device.id).toBeTruthy();
 
   const onDisk = JSON.parse(readFileSync(join(dir, 'device-tokens.json'), 'utf8')) as {
@@ -874,7 +875,7 @@ it('an operator hand-REPAIR (fixing the bad field in place, not deleting the rec
 // actually blocks the amplification (not just that a retry eventually
 // recovers, which a naive always-retry version would also do).
 it('a persisting fresh-read fault costs at most one disk read per DEGRADED_RETRY_MS, not one per guarded request (#2208 independent review, F2)', async () => {
-  const { token, device } = await dt.createDevice('Phone', 30); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
+  const { token, device } = await dt.createDevice('Phone', 30, 'full'); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
   void device;
 
   vi.useFakeTimers();
@@ -917,7 +918,7 @@ it('a persisting fresh-read fault costs at most one disk read per DEGRADED_RETRY
 // specific metric the independent review measured) and the write count
 // (the fault this scenario is actually about).
 it('a persisting WRITE fault costs at most one READ and one WRITE attempt per DEGRADED_RETRY_MS, not one per guarded request (#2208 independent review, round 2)', async () => {
-  const { token } = await dt.createDevice('Phone', 30); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
+  const { token } = await dt.createDevice('Phone', 30, 'full'); // populates cache; no lastSeenAt yet -> shouldTouchLastSeen is already true
 
   vi.useFakeTimers();
   const start = 1_700_000_000_000;
@@ -945,7 +946,7 @@ it('a persisting WRITE fault costs at most one READ and one WRITE attempt per DE
 // rationale: a writer with no reader net-increases the chance of losing
 // every pairing). This pins the negative: no `.bak.1` is ever produced.
 it('does not opt device-tokens.json into writeJsonAtomic\'s rotate (#2208 independent review, F3 — rotate dropped, not fixed, for this file)', async () => {
-  const { device } = await dt.createDevice('Phone', 30);
+  const { device } = await dt.createDevice('Phone', 30, 'full');
   await dt.touchLastSeen(device.id, Date.now());
   expect(existsSync(join(dir, 'device-tokens.json.bak.1'))).toBe(false);
 });
@@ -1054,10 +1055,10 @@ it('an ordinary write with no hand-edit does not warn (#2208, hunted per indepen
 // find the file in the log. The write path (cache already populated, file corrupted
 // after load) re-reads the disk inside `persist` and used to fail with 0 log lines.
 it.each([
-  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['createDevice', () => dt.createDevice('Second', 30, 'full')],
   ['revokeDevice', (id: string) => dt.revokeDevice(id)],
 ])('%s after the file is corrupted post-load throws DeviceStoreDegradedError AND logs the path (#3702)', async (_n, act) => {
-  const { device } = await dt.createDevice('First', 30); // populates the cache; the next loadSync won't touch the disk
+  const { device } = await dt.createDevice('First', 30, 'full'); // populates the cache; the next loadSync won't touch the disk
   writeFileSync(join(dir, 'device-tokens.json'), '{ this is not json', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 
@@ -1070,10 +1071,10 @@ it.each([
 // #3702 -- the other degraded-read return: the file parses but `devices` is not an
 // array. Same contract: throws, and the log names the path exactly once.
 it.each([
-  ['createDevice', () => dt.createDevice('Second', 30)],
+  ['createDevice', () => dt.createDevice('Second', 30, 'full')],
   ['revokeDevice', (id: string) => dt.revokeDevice(id)],
 ])('%s after the file is rewritten post-load with a non-array "devices" throws AND logs the path once (#3702)', async (_n, act) => {
-  const { device } = await dt.createDevice('First', 30);
+  const { device } = await dt.createDevice('First', 30, 'full');
   writeFileSync(join(dir, 'device-tokens.json'), '{"devices":{}}', 'utf8');
   const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
 

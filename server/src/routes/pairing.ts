@@ -118,7 +118,7 @@ pairRedeemRouter.post('/redeem', redeemLimiter, express.json({ limit: '1kb' }), 
   // named on this machine); otherwise the redeeming device's own label; else 'Device'.
   const label = result.label ?? (typeof body.label === 'string' ? body.label : 'Device');
   try {
-    const { token } = await createDevice(label, ttl());
+    const { token } = await createDevice(label, ttl(), 'companion');
     res.status(201).json({ token });
   } catch (err) {
     // #2204 review (F2/F7, pairing-ordering note) — redeemPairingSession above
@@ -164,7 +164,7 @@ pairRedeemRouter.post(
     }
     const ttlDays = ttl();
     try {
-      const { device, token } = await createDevice(result.label ?? 'Device', ttlDays, {
+      const { device, token } = await createDevice(result.label ?? 'Device', ttlDays, 'full', {
         selfBind: result.selfBind,
       });
       res.cookie('__Host-cw_lan', token, {
