@@ -316,7 +316,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
 
     const after = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
     expect(['done', 'failed', 'cancelled']).toContain(after.body.status);
-  }, 15_000);
+  }, 60_000);
 
   it('DELETE cancels a running job and flips its status to cancelled', async () => {
     const create = await request(app)
@@ -832,7 +832,11 @@ describe('GET /api/books/:bookId/exports (list)', () => {
     expect(ids).toContain(first.body.id);
     expect(ids).toContain(second.body.id);
     expect(ids.indexOf(second.body.id)).toBeLessThan(ids.indexOf(first.body.id)); // newest-first
-  });
+
+    // Drain our own builds so the next test's beforeEach drain (capped by
+    // hookTimeout) never inherits a starved M4B build (#4537).
+    await awaitInFlightJobs();
+  }, 60_000);
 
   it('404s for an unknown book', async () => {
     // #2078 — this request has no shared/leaked state to make it order-
