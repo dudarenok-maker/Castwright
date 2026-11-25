@@ -1545,9 +1545,12 @@ describe('detectManuscriptLanguageFromChapters — Group H real-manuscript CJK f
     const sample = joinSamplesForGates(chapters.map((c) => prepareSample(c.body, {})));
     const hanChars = sample.match(/[一-鿿]/g) ?? [];
     // Measured 2026-11-25 on the gates' actual sample (every chapter wins zh;
-    // no chapter reaches prepareSample's 20,000-char cap): N = 115,515 Han
-    // chars, V = 3,348 distinct Han chars, R = guiraudR = 9.9547 against
-    // LEXICAL_RICHNESS_FLOOR (3). Register row H2 (discharged) cited these numbers.
+    // no chapter reaches prepareSample's 20,000-char cap): the gate's own
+    // figures (guiraudR's tokens, after dedupeProseUnits and digit-token
+    // removal) are N = 112,304 tokens, V = 3,336 distinct, R = 3,336 /
+    // sqrt(112,304) = 9.9547 against LEXICAL_RICHNESS_FLOOR (3). The raw
+    // pre-dedupe Han counts asserted below are 115,515 chars / 3,348 distinct.
+    // Register row H2 (discharged) cited these numbers.
     expect(hanChars.length).toBeGreaterThan(105_000);
     expect(new Set(hanChars).size).toBeGreaterThan(3_000);
     expect(guiraudR(sample)).toBeGreaterThan(LEXICAL_RICHNESS_FLOOR);
