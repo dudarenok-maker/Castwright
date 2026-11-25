@@ -7520,7 +7520,8 @@ request still gets the loopback-only 403 guidance.
 The behavioural touch-flash is confirmed by construction but not by an automated test
 (jsdom cannot compile the variant); a one-time DevTools touch-emulation check is the
 spec's accepted proof. Four controls: continue-listening play badge, "Add book" tile,
-wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
+wizard "Review ›" chip, ~~voice-library drag icon~~ (struck 2026-11-25: control removed,
+see #3268 note below). Minutes, any machine.
 
 > **Wave-4 step 5d, 2026-08-21 — 1 of 4 controls DISCHARGED, shrinks.** Driven
 > via real synthesized touch (CDP `Input.dispatchTouchEvent` on a
@@ -7581,6 +7582,14 @@ wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 > entirely (there being no reachable control left to smoke-check); if it
 > resolves to "keep, justified," the drag icon returns as a genuine third
 > target and this row should re-widen to 3.
+>
+> **2026-11-25 — #3268 resolved to "remove"; the drag icon is struck from
+> this row.** `VoiceCard`'s drag-icon branch deleted (PR for #3268),
+> including the Voices page, which the 09-19 grep missed (`src/views/voices.tsx`
+> rendered the icon at >=768px, so that note's "no other call site omits
+> `onTapAssign`" premise was wrong). The drag icon is no longer a smoke-check
+> target; E5's remaining owed targets are the continue-listening play badge
+> and the "Add book" tile.
 
 ### E9 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
 
