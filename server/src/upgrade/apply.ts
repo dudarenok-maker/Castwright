@@ -104,7 +104,7 @@ const STEP_FAILURE_LAN: Partial<Record<ApplyPhase, string>> = {
 
 /* Fail closed: a phase with no entry above (a step added later) gets this fixed
    sentence rather than its raw message. extract is the one deliberate
-   pass-through — its plain Errors are yauzl/zlib parse messages that name no
+   pass-through â€” its plain Errors are yauzl/zlib parse messages that name no
    host path (an fs error there is still curated by requestFailureMessageFs). */
 const UNMAPPED_STEP_LAN = 'The upgrade failed. See the server log for details.';
 
