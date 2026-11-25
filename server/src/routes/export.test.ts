@@ -185,7 +185,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(create.body.filename).toMatch(/\.zip$/);
 
     const exportId = create.body.id as string;
-    const { body: done } = await waitForDone(exportId);
+    const { body: done } = await waitForDone(exportId, 45_000);
     expect(done.status).toBe('done');
     expect(done.downloadUrl).toMatch(/\/exports\/.+\/download$/);
     expect(typeof done.sizeBytes).toBe('number');
@@ -196,7 +196,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     expect(dl.headers['content-type']).toMatch(/application\/zip/);
     expect(dl.headers['content-disposition']).toMatch(/attachment; filename=/);
     expect(dl.body.length ?? dl.text?.length ?? 0).toBeGreaterThan(0);
-  });
+  }, 60_000);
 
   // #4537 / #2235 — the 45 s waitForDone window (and 60 s timeout) are deliberate: a real
   // ffmpeg M4B build starves past the 5 s default on a loaded box. Do not shrink them.
@@ -387,7 +387,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
         .post(`/api/books/${bookId}/exports`)
         .send({ format: 'aac-m4a-zip', destination: 'download' });
       expect(control.status).toBe(201);
-      await waitForDone(control.body.id as string);
+      await waitForDone(control.body.id as string, 45_000);
       const buildMs = Date.now() - t0;
       /* The artifact name is flat per (book, format), so clear the control's
          artifact: the cancelled job's own must be the only thing checked. */
@@ -458,7 +458,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const exportId = create.body.id as string;
-    await waitForDone(exportId);
+    await waitForDone(exportId, 45_000);
 
     const del = await request(app).delete(`/api/books/${bookId}/exports/${exportId}`);
     expect(del.status).toBe(204);
@@ -467,7 +467,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const after = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);
     expect(after.status).toBe(200);
     expect(after.body.status).toBe('done');
-  });
+  }, 60_000);
 
   it('DELETE on an unknown export id 404s', async () => {
     const res = await request(app).delete(`/api/books/${bookId}/exports/exp_doesnotexist`);
@@ -479,7 +479,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const exportId = create.body.id as string;
-    await waitForDone(exportId);
+    await waitForDone(exportId, 45_000);
 
     /* Drop the in-memory table to simulate a server restart. The manifest
        on disk should let the next GET re-populate. */
@@ -498,7 +498,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
     expect(existsSync(manifestPath)).toBe(true);
     void readFileSync;
-  });
+  }, 60_000);
 
   /* Plan 79 — the user-visible artifact lives at <bookDir>/exports/<slug>.<ext>
      (flat, no exportId, no .audiobook/ jail). Same-format re-exports
@@ -593,7 +593,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       .post(`/api/books/${bookId}/exports`)
       .send({ format: 'mp3-zip', destination: 'download' });
     const exportId = create.body.id as string;
-    const { body: done } = await waitForDone(exportId);
+    const { body: done } = await waitForDone(exportId, 45_000);
     expect(done.status).toBe('done');
 
     /* Simulate the user deleting the artifact from the exports folder. */
@@ -609,7 +609,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
     /* Stale manifest was unlinked on the rehydrate scan. */
     const manifestPath = join(bookDir, '.audiobook', 'export-manifests', `${exportId}.json`);
     expect(existsSync(manifestPath)).toBe(false);
-  });
+  }, 60_000);
 
   it('nests an mp3-folder sync-folder export under a sanitized author subfolder (fs-54)', async () => {
     const { writeUserSettings } = await import('../workspace/user-settings.js');
@@ -623,7 +623,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
         .send({ format: 'mp3-folder', destination: 'sync-folder' });
       expect(create.status).toBe(201);
 
-      const { body: done } = await waitForDone(create.body.id as string);
+      const { body: done } = await waitForDone(create.body.id as string, 45_000);
       expect(done.status).toBe('done');
 
       const expectedDir = join(syncRoot, sanitiseForZip(AUTHOR), sanitiseForZip(TITLE));
@@ -633,7 +633,7 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       rmSync(syncRoot, { recursive: true, force: true });
       await writeUserSettings({ exportSyncFolder: null });
     }
-  });
+  }, 60_000);
 
   it('nests a single-file (M4B) sync-folder export under a sanitized author subfolder (fs-54)', async () => {
     const { writeUserSettings } = await import('../workspace/user-settings.js');
