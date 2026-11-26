@@ -58,8 +58,11 @@ export const repoRoot = resolve(__dirname, '..');
  *  captured, not printed — execFileSync inherits the parent's stderr when
  *  `stdio` is left unspecified, which would otherwise leak `gh`'s stderr to
  *  the console on every failure, including from inside a retry loop that
- *  deliberately swallows the error — #2203 review Finding F6). Pass
- *  `{ stdio: 'inherit' }` to stream output live instead of capturing it
+ *  deliberately swallows the error — #2203 review Finding F6).
+ *  `maxBuffer` defaults to 64 MB (execFileSync's own 1 MB default dies with
+ *  `spawnSync gh ENOBUFS` on a board-sized `gh api graphql` page, #4694); a
+ *  caller may still override it via opts.
+ *  Pass `{ stdio: 'inherit' }` to stream output live instead of capturing it
  *  (still throws on failure — use ghSpawn if the caller needs to inspect the
  *  result instead). `env` unconditionally scrubbed: an `opts.env` REPLACES
  *  `process.env` and is then scrubbed, it is not merged onto it; omit
@@ -72,6 +75,7 @@ export function gh(args, opts = {}) {
     encoding: 'utf8',
     stdio: ['ignore', 'pipe', 'pipe'],
     windowsHide: true,
+    maxBuffer: 64 * 1024 * 1024,
     ...rest,
     env: scrubGitEnv(env),
   });
