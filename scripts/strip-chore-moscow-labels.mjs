@@ -114,7 +114,7 @@ async function main() {
   const finalTracking = needsTracking && !trackingChores.some((i) => i.number === OPS_17_NUMBER)
     ? [...trackingChores, { number: OPS_17_NUMBER, title: byTier['moscow:should'].find((i) => i.number === OPS_17_NUMBER)?.title ?? 'ops-17' }]
     : trackingChores;
-  const findOut = gh(['project', 'item-list', String(config.projectNumber), '--owner', PROJECT_OWNER, '--limit', '500', '--format', 'json']);
+  const findOut = gh(['project', 'item-list', String(config.projectNumber), '--owner', PROJECT_OWNER, '--limit', '5000', '--format', 'json']);
   const boardItems = JSON.parse(findOut).items;
   for (const issue of finalTracking) {
     const item = boardItems.find((i) => i.content?.number === issue.number);
