@@ -14,13 +14,21 @@ import type { ThemePreference } from '../lib/use-theme';
 
 const CYCLE_ORDER: ThemePreference[] = ['system', 'light', 'dark'];
 
-const LABELS: Record<ThemePreference, string> = {
+export const LABELS: Record<ThemePreference, string> = {
   system: 'Theme: System (follows OS) — click to switch to Light',
   light: 'Theme: Light — click to switch to Dark',
   dark: 'Theme: Dark — click to switch to System',
 };
 
-function nextMode(current: ThemePreference): ThemePreference {
+/* Visible text for rows that show the mode as a menu label (the phone nav
+   drawer, #4567); LABELS stays the accessible name / tooltip. */
+export const SHORT_LABELS: Record<ThemePreference, string> = {
+  system: 'Theme: System',
+  light: 'Theme: Light',
+  dark: 'Theme: Dark',
+};
+
+export function nextMode(current: ThemePreference): ThemePreference {
   const idx = CYCLE_ORDER.indexOf(current);
   return CYCLE_ORDER[(idx + 1) % CYCLE_ORDER.length];
 }

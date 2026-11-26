@@ -326,8 +326,14 @@ test.describe('responsive coverage (all views × all viewports)', () => {
        overflowed off-screen) is sufficient — horizontal-scroll is the main
        risk at narrow viewports. */
     await page.goto('/#/');
-    await page.getByTestId('topbar-help').click();
-    await page.getByRole('menuitem', { name: /take the tour/i }).click();
+    if ((page.viewportSize()?.width ?? 0) < 640) {
+      /* Below sm the inline ? menu is hidden (#4567); the drawer carries Help. */
+      await page.getByTestId('topbar-nav-toggle').click();
+      await page.getByTestId('nav-drawer-link-tour').click();
+    } else {
+      await page.getByTestId('topbar-help').click();
+      await page.getByRole('menuitem', { name: /take the tour/i }).click();
+    }
     await page.getByTestId('tour-bubble').waitFor({ state: 'visible', timeout: 12_000 });
     await page.waitForTimeout(300);
     await expectNoHorizontalScroll(page);
