@@ -181,6 +181,24 @@ describe('GET /cert/root.crt 404 probed block, LAN caller (#4572)', () => {
     }
   });
 
+  /* Non-absolute hand-typed values have no root scrubChildOutput recognises. */
+  const nonAbsolute = [
+    ['root-relative', BACKSLASH + ['Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+    ['drive-relative', 'C:' + ['Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+    ['dot-dot-relative', ['..', '..', 'Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+  ] as const;
+  for (const [label, value] of nonAbsolute) {
+    it(`scrubs a ${label} MKCERT_CAROOT for a LAN caller, raw for loopback`, async () => {
+      process.env.MKCERT_CAROOT = value;
+      const lan = await request(makeLanApp()).get('/cert/root.crt');
+      expect(lan.status).toBe(404);
+      expect(lan.body.probed.env).toBe('<path>');
+      expect(JSON.stringify(lan.body)).not.toContain('alice-secret');
+      const lo = await request(makeApp()).get('/cert/root.crt');
+      expect(lo.body.probed.env).toBe(value);
+    });
+  }
+
   it('keeps probed.env null when MKCERT_CAROOT is unset', async () => {
     delete process.env.MKCERT_CAROOT;
     const res = await request(makeLanApp()).get('/cert/root.crt');

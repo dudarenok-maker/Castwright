@@ -23,18 +23,20 @@ import { join, resolve } from 'node:path';
 import { Router } from 'express';
 import type { Request, Response } from '../http.js';
 import { isLoopbackRequest } from '../loopback.js';
-import { scrubChildOutput } from '../tts/ffmpeg-failure.js';
 
 export const certRootRouter = Router();
 
 const CA_FILENAME = 'rootCA.pem';
 
 /* #4572: the 404 `probed` diagnostic is unauthenticated. Loopback callers (the
-   dev box itself) keep the full path; a LAN peer gets scrubChildOutput's
-   `<path>` so no filesystem path, and so no OS username, reaches a phone. */
+   dev box itself) keep the full path; a LAN peer gets the constant `<path>`
+   so no filesystem path, and so no OS username, reaches a phone. Every probe
+   is a path by construction, so this does not pattern-match: scrubChildOutput
+   finds paths by their root and would pass a hand-typed root-relative,
+   drive-relative or `..\` MKCERT_CAROOT through whole. */
 function probeForClient(req: Request, p: string | null): string | null {
   if (p === null) return null;
-  return isLoopbackRequest(req) ? p : scrubChildOutput(p);
+  return isLoopbackRequest(req) ? p : '<path>';
 }
 
 function tryMkcertCaroot(): string | null {
