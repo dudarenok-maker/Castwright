@@ -8419,6 +8419,49 @@ The automated tests pin the range list, the message text and the log write again
 
 *Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4714):** driven on the Android
+> **EMULATOR** (AVD `Pixel_10_Pro`, emulator-5554), **not a real phone**; the APK was a
+> `flutter build apk --debug` from this worktree (`ai.castwright` 1.15.0, versionCode
+> 11500000; a pre-installed 29926722 build and the old
+> `com.audiobookgenerator.audiobook_companion` were uninstalled first), the server was this
+> worktree's `npm run dev` with `LAN_HTTPS=1`, a fixed `LAN_AUTH_TOKEN`, an isolated
+> `APP_RUN_DIR` and the mkcert LAN cert, reached at `https://192.168.86.20:8443`. The
+> emulator started in airplane mode; it was switched off. Pairing used the deep link
+> `https://www.castwright.ai/pair?...` (no camera) and, for the re-pair, the three fields
+> typed by hand. The app pinned the cert by fingerprint tag, so no mkcert CA had to be
+> installed on the emulator. Evidence: `docs/testing/onbox-batch-2-results/E118/`.
+>
+> 1. **Setup — PASS.** Paired (`devices` listed `E118 emulator`, `revoked:false`); *The
+>    Coalfall Commission* downloaded fully ("Downloaded · tap to listen · 3:54"); with Wi-Fi
+>    and mobile data off (`ping 192.168.86.20` → `connect: Network is unreachable`) the
+>    player went to `PLAYING(3)`, position 5817 ms. Gates confirmed open in Settings:
+>    "Auto-sync on reconnect" on, "Only on un-metered Wi-Fi" on (emulated Wi-Fi counts as
+>    unmetered). `step1-offline-play.txt`, `05-settings.png`, `06-offline-play.png`.
+> 2. **Revoke — PASS.** `DELETE /api/devices/0b6323fd660d8ba2` → 200 `{"ok":true}`;
+>    `GET /api/devices` then shows `revoked:true`.
+> 3. **Trigger — PASS.** `adb shell svc wifi enable` after the revoke.
+> 4. **Pairing screen opens — PASS.** About 15 s after Wi-Fi came back the app was on
+>    "Pair a device" with empty fields (`07-after-revoke-wifi-on.png`); the app had been on
+>    the library with nothing streaming.
+> 5. **Re-pair — PASS.** New device `31cac3c0ae912675` minted; the library, the download
+>    and "Continue listening" with the saved progress bar survived (`09-after-repair.png`).
+> 6. **Negative control — PASS** (weaker than the row's wording: Wi-Fi off, mobile data
+>    also off). The app stayed on the library, no pairing screen (`10-offline-no-pairing-screen.png`).
+> 7. **One re-pair, not a loop — PASS, with a caveat.** Two further Wi-Fi off/on cycles
+>    (15 s waits): the app stayed on the library both times (`11-…`, `12-…`). Caveat: the
+>    server's `lastSeenAt` for the new device did not move past pairing time, so the
+>    server side cannot confirm a probe actually reached it during those toggles; step 4
+>    shows the same toggle procedure does trigger the screen when the token is revoked.
+> 8. **Re-pair from the player, then keep listening — STILL OWED.** Needs a human ear for
+>    the last words heard versus the resume position.
+>
+> Notes: the deep link did not prefill the form on the second attempt (the app was already
+> on the pairing screen and the intent went to the running instance) — fields typed by
+> hand; not investigated, may be worth a look if re-pairing from an open pairing screen
+> matters. No defect filed.
+>
+> **Row verdict: KEEP — still owed: bullet 8**
+
 ## Group G — GitHub Actions itself
 
 <!-- next-id: G101 -->
