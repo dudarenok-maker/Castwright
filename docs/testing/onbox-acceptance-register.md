@@ -756,7 +756,9 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-26 (#3270, #4673), 93 → 92.** Row **H2** (the lexical-richness floor on a real Han book) DISCHARGED and removed. Outcome: the fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` (an excerpt: chapters 1-21 of the book's 120, 《紅樓夢》, public domain, from Chinese Wikisource, #4671) ran through `detectManuscriptLanguageFromChapters` in the Group H describe block of `server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf, run 2026-11-25) and gave `{ language: 'zh', supported: true, fallback: false }`, the same reversed. gate figures **N = 112,304** tokens and **V = 3,336** distinct (after `dedupeProseUnits` and digit-token removal; no chapter reaches the 20,000-character cap), **R = 9.9547** (`guiraudR`, = 3,336 / sqrt(112,304)); the raw pre-dedupe Han counts are 115,515 characters and 3,348 distinct, against `LEXICAL_RICHNESS_FLOOR` (3): the uncapped gate clears the floor on this excerpt. The excerpt is 112k gate tokens, below the removed row's own N ≈ 400,000 concern, so what closes the row at book scale is a bound, not the measurement: `dedupeProseUnits` keeps the token set a superset as chapters are added, so V can only grow and any longer sample of this book keeps R ≥ 3,336 / √N, which stays above the floor of 3 for every N below about 1.24M tokens; the whole 120-chapter book projects to about 640k tokens, where the bound is R ≥ 4.2. No length-correction follow-up is owed. The test asserts 21 chapters, a raw Han count > 105,000, a raw distinct count > 3,000, and R above the floor. Group H 2 → 1; the group's heading, intro and glance description now describe H1 alone (H1's own text is unchanged). `next-id` for group H stays H101 (IDs are allocate-once; H2 is simply gone). The automated test is the acceptance because H2 needs no GPU, sidecar or analyzer.
+> **Last change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
+>
+> **Previous change: 2026-11-26 (#3270, #4673), 93 → 92.** Row **H2** (the lexical-richness floor on a real Han book) DISCHARGED and removed. Outcome: the fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` (an excerpt: chapters 1-21 of the book's 120, 《紅樓夢》, public domain, from Chinese Wikisource, #4671) ran through `detectManuscriptLanguageFromChapters` in the Group H describe block of `server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf, run 2026-11-25) and gave `{ language: 'zh', supported: true, fallback: false }`, the same reversed. gate figures **N = 112,304** tokens and **V = 3,336** distinct (after `dedupeProseUnits` and digit-token removal; no chapter reaches the 20,000-character cap), **R = 9.9547** (`guiraudR`, = 3,336 / sqrt(112,304)); the raw pre-dedupe Han counts are 115,515 characters and 3,348 distinct, against `LEXICAL_RICHNESS_FLOOR` (3): the uncapped gate clears the floor on this excerpt. The excerpt is 112k gate tokens, below the removed row's own N ≈ 400,000 concern, so what closes the row at book scale is a bound, not the measurement: `dedupeProseUnits` keeps the token set a superset as chapters are added, so V can only grow and any longer sample of this book keeps R ≥ 3,336 / √N, which stays above the floor of 3 for every N below about 1.24M tokens; the whole 120-chapter book projects to about 640k tokens, where the bound is R ≥ 4.2. No length-correction follow-up is owed. The test asserts 21 chapters, a raw Han count > 105,000, a raw distinct count > 3,000, and R above the floor. Group H 2 → 1; the group's heading, intro and glance description now describe H1 alone (H1's own text is unchanged). `next-id` for group H stays H101 (IDs are allocate-once; H2 is simply gone). The automated test is the acceptance because H2 needs no GPU, sidecar or analyzer.
 >
 > **Previous change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
 >
@@ -7522,7 +7524,8 @@ request still gets the loopback-only 403 guidance.
 The behavioural touch-flash is confirmed by construction but not by an automated test
 (jsdom cannot compile the variant); a one-time DevTools touch-emulation check is the
 spec's accepted proof. Four controls: continue-listening play badge, "Add book" tile,
-wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
+wizard "Review ›" chip, ~~voice-library drag icon~~ (struck 2026-11-25: control removed,
+see #3268 note below). Minutes, any machine.
 
 > **Wave-4 step 5d, 2026-08-21 — 1 of 4 controls DISCHARGED, shrinks.** Driven
 > via real synthesized touch (CDP `Input.dispatchTouchEvent` on a
@@ -7583,6 +7586,15 @@ wizard "Review ›" chip, voice-library drag icon. Minutes, any machine.
 > entirely (there being no reachable control left to smoke-check); if it
 > resolves to "keep, justified," the drag icon returns as a genuine third
 > target and this row should re-widen to 3.
+>
+> **2026-11-25 — #3268 resolved to "remove"; the drag icon is struck from
+> this row.** `VoiceCard`'s drag-icon branch deleted (PR for #3268),
+> including the Voices page, which the 09-19 grep missed (that grep was over
+> `<VoiceLibraryPanel` only, and `src/views/voices.tsx` rendered the icon at
+> >=768px, so that note's claim that "no third (e.g. a global `/#/voices` page)
+> call site exists" was wrong). The drag icon is no longer a smoke-check
+> target; E5's remaining owed targets are the continue-listening play badge
+> and the "Add book" tile.
 
 ### E9 · `measure-attribution.mjs` against the real workspace ([#1984](https://github.com/dudarenok-maker/Castwright/issues/1984) Wave 1, [plan](../superpowers/plans/2026-08-13-attribution-collapse-visibility-wave1.md)) · **real workspace, no GPU needed**
 

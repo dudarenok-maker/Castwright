@@ -332,6 +332,13 @@ describe('LibraryView character-card click', () => {
      legacy LibraryView behavior pre-bug-fix. */
     expect(screen.queryByRole('button', { name: 'Marlow' })).toBeNull();
   });
+
+  it('offers no drag on voice cards — the Voices page has no drop target (#3268)', () => {
+    renderView();
+    const card = screen.getByText('Marlow').closest('div[draggable]')!;
+    expect(card.getAttribute('draggable')).toBe('false');
+    expect(card.className).not.toMatch(/cursor-grab/);
+  });
 });
 
 describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
