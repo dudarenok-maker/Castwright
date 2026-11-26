@@ -3225,6 +3225,37 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > `%TEMP%\oe-run-3300-cline-qwen-cloud-202609201059\jobs\a13-evidence.txt` plus the
 > worktree's `logs/tts.log` / `logs/tts.err.log`.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude (#4711):** single 8 GB card
+> (`CUDA_VISIBLE_DEVICES=0`, 0 MiB used before and after), this worktree's sidecar
+> driven directly on :9050 (sidecar-level; Node server and Coalfall import not used).
+> Evidence: `docs/testing/onbox-batch-2-results/A13/`.
+> - **Bullet 1 (pin) — PASS.** `/health` listed one GPU only (4070, 8585 MB).
+> - **Bullet 2 (reclaim admits the blocked op) — PASS on the admission, forward NOT
+>   observed to completion.** Coqui loaded (reserved 1927 MB, free 5484 MB < the Qwen
+>   op's `neededMb` 6144). *Control:* Qwen op sent <30 s after Coqui load → HTTP 503
+>   `{"noCapacity":true,"neededMb":6144,"deviceKey":"cuda:0"}`, Coqui kept (inside TTL).
+>   *Positive:* 33 s after load, and again at 43 s on a clean restart, the same op logged
+>   `Coqui model freed (idle).` + `admission ladder (qwen): evicted step coqui on cuda:0`
+>   and Qwen Base loaded 11 s later (09:00:57 → 09:01:08). The reclaimed ~1.9 GB was
+>   taken by the Qwen load itself. **Not observed:** the Qwen forward then ran >9 min
+>   with no output and was killed (my synthetic clone voice from a master wav with a
+>   made-up ref text; not proven to be a product fault, not filed). Wording
+>   discrepancy: the idle-admission path logs `Coqui model freed (idle).`; the literal
+>   `Coqui model unloaded.` appears only on the explicit `/unload` path (bullet 4).
+> - **Bullet 3 (mixed multi-chapter evict→reload cadence, `COQUI_IDLE_TTL`) — STILL
+>   OWED.** Needs the real Coalfall mixed Qwen+Coqui render through the app; the Qwen
+>   forward problem above blocked a sidecar-level stand-in. Data so far: cold Coqui
+>   reload on this box = 18.6 / ~20 / ~20 s (not ~90 s), TTL enforced only at admission
+>   (no timer). No tuning recommendation made; default untouched (30 s).
+> - **Bullet 4 (Stop on Coqui mid-chapter) — PASS at sidecar level; UI pill STILL OWED.**
+>   `/unload {"engine":"coqui"}` fired 4 s into a ~17 s Coqui synth (`inflight_synth=1`):
+>   it blocked **13.86 s** (the rest of the forward), returned 200 `{"status":"idle"}`;
+>   the synth returned 200 with 1,059,456 bytes (full audio, 17.8 s), `poisoned=false`,
+>   no `AttributeError`, log `Coqui model unloaded.`. The "Stopping…" disabled pill and
+>   absence of an error banner need the browser and were not observed.
+>
+> **Row verdict: KEEP — still owed: bullet 3 (mixed multi-chapter cadence via the app), bullet 2's Qwen forward completing, bullet 4's UI "Stopping…" pill**
+
 **Run this with A5** (A5 was discharged 2026-09-06 and removed from the register — co-schedule against its run sheet section rather than a live row) — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
