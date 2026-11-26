@@ -368,7 +368,7 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(scroller.className).toMatch(/scrollbar-thin/);
   });
 
-  it('drag icon mirrors group-hover with group-active for touch (fe-39)', () => {
+  it('renders no drag icon when onTapAssign is omitted (Voices page path)', () => {
     render(
       <VoiceLibraryPanel
         library={[makeVoice('v_marlow', 'Marlow')]}
@@ -379,10 +379,52 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
         onPlaySample={vi.fn()}
       />,
     );
-    const dragIcon = document.querySelector('span.group-hover\\:text-ink\\/60');
-    expect(dragIcon).not.toBeNull();
-    expect(dragIcon!.className).toContain('group-hover:text-ink/60');
-    expect(dragIcon!.className).toContain('group-active:text-ink/60');
+    expect(document.querySelector('span.group-hover\\:text-ink\\/60')).toBeNull();
+    expect(document.querySelector('span.hidden.md\\:inline')).toBeNull();
+    expect(screen.queryByRole('button', { name: /assign marlow/i })).toBeNull();
+  });
+
+  it('keeps the card draggable with grab cursors by default (Cast drop-target path)', () => {
+    render(
+      <VoiceCard voice={makeVoice('v_marlow', 'Marlow')} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    const card = screen.getByText('Marlow').closest('div[draggable]')!;
+    expect(card.getAttribute('draggable')).toBe('true');
+    expect(card.className).toMatch(/cursor-grab/);
+  });
+
+  it('is not draggable and shows no grab cursor when draggable={false}', () => {
+    const setDraggingVoiceId = vi.fn();
+    render(
+      <VoiceCard
+        voice={makeVoice('v_marlow', 'Marlow')}
+        draggingVoiceId={null}
+        setDraggingVoiceId={setDraggingVoiceId}
+        draggable={false}
+      />,
+    );
+    const card = screen.getByText('Marlow').closest('div[draggable]')!;
+    expect(card.getAttribute('draggable')).toBe('false');
+    expect(card.className).not.toMatch(/cursor-grab/);
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: 'copy', setData: () => {} } });
+    expect(setDraggingVoiceId).not.toHaveBeenCalled();
+  });
+
+  it('shows the Assign button and still no drag icon when onTapAssign is set', () => {
+    render(
+      <VoiceLibraryPanel
+        library={[makeVoice('v_marlow', 'Marlow')]}
+        characters={[makeCharacter('marlow', 'v_marlow')]}
+        draggingVoiceId={null}
+        setDraggingVoiceId={vi.fn()}
+        onOpenProfile={vi.fn()}
+        onPlaySample={vi.fn()}
+        onTapAssign={vi.fn()}
+      />,
+    );
+    expect(screen.getAllByRole('button', { name: /assign/i }).length).toBeGreaterThan(0);
+    expect(document.querySelector('span.group-hover\\:text-ink\\/60')).toBeNull();
+    expect(document.querySelector('span.hidden.md\\:inline')).toBeNull();
   });
 });
 

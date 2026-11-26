@@ -236,7 +236,7 @@ its state rides the same pairing.
     browser, open DevTools → toggle device emulation with touch enabled
     (Chrome: **Ctrl+Shift+M** device-toolbar toggle, any touch-capable device
     preset — this turns on `:active`/pointer-coarse styling instead of
-    `:hover`-only). Tap-and-hold, then release, each of the four controls
+    `:hover`-only). Tap-and-hold, then release, each of the three controls
     below and **observe** the press state visibly persists briefly on
     tap/release, matching the existing `:hover` treatment (a flash that
     disappears instantly, or no visible change at all, is a fail):
@@ -253,9 +253,6 @@ its state rides the same pairing.
     - Setup Wizard **"Review ›"** chip on an amber/red diagnostics row
       (`src/components/setup/setup-wizard.tsx:465-477`,
       `group-active:text-magenta`).
-    - Voice-library card **drag icon**
-      (`src/components/voice-library-panel.tsx:563-564`, `IconDrag`,
-      `group-active:text-ink/60`).
     `Result:` _(fill in — pass/fail per control)_
     **Correction, 2026-08-21:** wave-4 step 5d discharged the wizard
     "Review ›" chip live (real synthesized touch, `hasTouch:true` Pixel-7
@@ -263,7 +260,7 @@ its state rides the same pairing.
     three controls (continue-listening play badge, "Add another book" tile,
     voice-library drag icon) remain owed — this worktree's own attempt found
     0 books in its isolated workspace, an environment limitation, not
-    evidence the controls are broken.
+    evidence the controls are broken. 2026-11-25: drag icon dropped, see #3268.
 
 ## 5. Procedure — E6 rendered-half (venv-bootstrap progress card) — observation 6 only
 

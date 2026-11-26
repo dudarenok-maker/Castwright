@@ -291,9 +291,11 @@ export const PROSE_UNIT_FLOOR = 20;
    reaches ~250 distinct Han characters while real Chinese prose reaches
    thousands, so any synthetic ">20,000 characters, still accepted" fixture
    would be measuring its own vocabulary rather than the gate. Whether R
-   stays above LEXICAL_RICHNESS_FLOOR for a full-length real Han book is
-   therefore UNVERIFIED, and is recorded as on-box acceptance row H2 rather
-   than asserted here.
+   stays above LEXICAL_RICHNESS_FLOOR for a real Han book was
+   therefore UNVERIFIED, and was recorded as on-box acceptance row H2
+   (discharged since, by the 紅樓夢 excerpt test in detect-language.test.ts;
+   book scale closed by the register's bound)
+   rather than asserted here.
 
    Round 3 also claimed the uncapped join is "mathematically chapter-order-
    invariant, since guiraudR/digitTokenShare reduce to a token SET size and
