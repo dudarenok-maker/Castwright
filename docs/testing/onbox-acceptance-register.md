@@ -5009,6 +5009,35 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > weights; either is fix-agent work, not this batch's. Bullets 1–4 and 6 untouched here
 > (out of scope per the child brief); the still-owed wedged-design bullet 3 remains owed.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude (child #4713):** single RTX 4070 Laptop 8 GB
+> (CUDA 0), 16 GB eGPU not attached; `nvidia-smi` at start 0 MiB used, at end 0 MiB. Real
+> sidecar v1.15.0 from this worktree (`.venv`/`voices` junctioned), `QWEN_DEVICE=cuda:0`, port
+> 9050. Evidence: [`docs/testing/onbox-batch-2-results/A24/`](onbox-batch-2-results/A24/).
+> Only the still-owed **bullet 3 (wedged design)** was driven; bullets 1, 2, 4, 6 are already
+> CONFIRMED by the 2026-09-06/09 note and were not re-run (so no new audition/ffprobe was taken).
+>
+> - **Bullet 3 — PASS (positive + control).** Method: the real sidecar app imported through a
+>   thin harness (`A24/wedge_app.py`, scratch, not repo code) that adds `/_test/wedge` and
+>   `/_test/unwedge` to claim/release the real `QwenEngine._design_in_flight` counter — i.e.
+>   the "design thread hung while `_design_in_flight` stays claimed" state, produced without
+>   a hung forward. Wedged (`/health` → `qwen_design_resident: true`), then
+>   `POST /synthesize {engine:qwen, model:0.6b, voice:a19-exp1-narrator}` →
+>   `HTTP=503 t=150.098040` with body
+>   `{"detail":"Qwen VoiceDesign has been in flight for over 150s — refusing to evict it out from under an active design. Retry the synth shortly.","code":"design_in_flight"}`
+>   — not immediate, not never; the sidecar logged `design contention timeout`. **Control:**
+>   after `/_test/unwedge` (`busy:false`) the same request returned `HTTP=200 t=24.99
+>   bytes=195840` (cold 0.6B load + synth), so the 503 is caused by the claim, not the voice.
+> - **Caveat:** the wedge is an injected claim, not a genuinely hung CUDA forward; it proves
+>   the bounded-wait/typed-error/503 path end to end on the real HTTP route, not that a real
+>   hang would leave the counter claimed.
+> - **Bullet 5 (deviceKey, 2-card boot) — STILL OWED / NOT RUN:** needs the 2-card boot; the
+>   eGPU is not attached.
+> - **Not re-run (already CONFIRMED):** bullets 1, 2, 4, 6. The optional real-mid-design
+>   ffprobe of the audition file was therefore not repeated.
+> - No defect found; no bug filed.
+>
+> **Row verdict: KEEP — still owed: bullet 5 (deviceKey qualification, needs the 2-card boot)**
+
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
 `classifyTranscript`'s new logic is fully pinned in

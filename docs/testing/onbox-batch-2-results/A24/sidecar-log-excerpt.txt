@@ -1,0 +1,4 @@
+2026-11-27 09:27:47.385 [sidecar] Qwen idle watchdog started (design ttl=120s, 1.7B-Base ttl=120s).
+2026-11-27 09:30:43.993 [sidecar] /synthesize: design contention timeout ù engine=qwen voice=a19-exp1-narrator: Qwen 
+VoiceDesign has been in flight for over 150s ù refusing to evict it out from under an active design. Retry the synth 
+INFO:     127.0.0.1:55267 - "POST /synthesize HTTP/1.1" 503 Service Unavailable
