@@ -427,6 +427,28 @@ void main() {
       await pc.dispose();
     });
 
+    test('a failed autosave tick leaks no unhandled error and keeps "played" '
+        'for the next save', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final uncaught = <Object>[];
+      final pc = runZonedGuarded(
+          () => make(engine, store, now: () => t), (e, _) => uncaught.add(e))!;
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      store.failNextSave = true;
+      t = t.add(const Duration(seconds: 10));
+      engine.emit(const Duration(seconds: 10)); // autosave tick, write fails
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(uncaught, isEmpty);
+      await pc.saveNow(); // still marked played, so this stamps
+      expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:10.000Z');
+      await pc.dispose();
+    });
+
     // just_audio pauses itself (headset unplug, Bluetooth / car disconnect,
     // focus loss) without PlayerController.pause(), so nothing saves at the stop.
     test('an out-of-band engine stop, then a much later save, stamps the time '
@@ -496,9 +518,8 @@ void main() {
       final engine = FakeAudioEngine();
       final store = GatedStore();
       var t = DateTime.utc(2026, 6, 6, 12);
-      // The tick's save is fire-and-forget, so its rethrow surfaces as an
-      // unhandled error in the zone the position stream was subscribed in;
-      // build the controller there and collect it rather than fail on it.
+      // Built in a guarded zone so a leaked tick-save error is collected
+      // (and asserted absent) rather than failing the test run.
       final uncaught = <Object>[];
       final pc = runZonedGuarded(
           () => make(engine, store, now: () => t, playlists: {
@@ -521,7 +542,8 @@ void main() {
       hold.complete(); // b1's write now fails
       await Future<void>.delayed(Duration.zero);
       await Future<void>.delayed(Duration.zero);
-      expect(uncaught, isNotEmpty, reason: 'b1\'s write really failed');
+      expect(uncaught, isEmpty);
+      expect(store.writes, isEmpty, reason: 'b1\'s write really failed');
       t = t.add(const Duration(hours: 1));
       await pc.saveNow(); // b2 was never played
       expect(store.map['b2']!.listenedAt, isEmpty);

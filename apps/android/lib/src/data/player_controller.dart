@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
 
 import '../domain/listen_stats_accumulator.dart';
 import '../domain/playback_source.dart';
@@ -622,7 +622,10 @@ class PlayerController {
         _lastSave = now;
         // Fire-and-forget; _persist reaches the store write with no await first,
         // so call order matches the order of the saves.
-        _persist(book, uuid, position.inMilliseconds, now);
+        // A failed write is logged, not leaked: _persist already restored
+        // "played", so the next save retries (#4650). saveNow still rethrows.
+        _persist(book, uuid, position.inMilliseconds, now).catchError(
+            (Object e) => debugPrint('autosave failed (will retry): $e'));
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }
