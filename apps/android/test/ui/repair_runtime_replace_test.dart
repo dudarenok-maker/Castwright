@@ -46,6 +46,11 @@ class _MovableEngine extends DemoAudioEngine {
   @override
   Duration get position => _pos;
   set position(Duration d) => _pos = d;
+  // Paused: DemoAudioEngine reports playing, which would hide an idle-save bug.
+  @override
+  bool get playing => false;
+  @override
+  Stream<bool> get playingStream => Stream<bool>.value(false);
   @override
   Future<void> dispose() async => await onDispose?.call();
 }
@@ -230,6 +235,7 @@ void main() {
     final engines = <_MovableEngine>[];
     String? before;
     String? atDispose;
+    int? posAtDispose;
     CompanionRuntime? firstRuntime;
 
     final service = PairingService(
@@ -252,7 +258,9 @@ void main() {
         engine.onDispose = () async {
           final id = runtime.player.currentBookId;
           if (engines.first != engine || id == null) return;
-          atDispose = (await runtime.library.loadPlayback(id))?.listenedAt;
+          final saved = await runtime.library.loadPlayback(id);
+          atDispose = saved?.listenedAt;
+          posAtDispose = saved?.positionMs;
         };
         firstRuntime ??= runtime;
         engines.add(engine);
@@ -285,5 +293,6 @@ void main() {
 
     expect(atDispose, before,
         reason: 'an idle flush must not re-stamp listenedAt');
+    expect(posAtDispose, 440000, reason: 'the flush still saved the position');
   });
 }
