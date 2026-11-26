@@ -1,0 +1,12 @@
+07:22:08 standalone sidecar launcher pid=3328, SIDECAR_PARENT_PID=''
+07:22:42 sidecar listening, pid=3448
+07:22:42 terminal: 2026-11-27 07:22:10.641 [sidecar] parent watch off (no valid SIDECAR_PARENT_PID); this sidecar outlives any server
+07:22:43 server launcher pid=40524
+07:22:54 server health via proxy: status=reachable
+07:22:54 server: 2026-11-27 07:22:53.291 [sidecar] already listening on :9050 (protocol v1), skipping spawn (current sidecar honoured)
+07:22:54 server: 2026-11-27 07:22:53.292 [sidecar] supervisor: watching adopted sidecar on :9050 (not our child) — will respawn an owned process if it exits or becomes unfit.
+07:22:54 server pid=12396; stopping the server (taskkill /F, plus supervisor tree by launcher pid)
+07:23:25 sidecar pid 3448 alive 30s after server stop: True; port 9050 listening: True
+07:23:25 port 8130 listening: False
+07:23:25 sidecar terminal lines mentioning exiting/server pid: 0
+07:23:28 teardown: port 9050 listening: False
