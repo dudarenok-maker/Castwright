@@ -291,7 +291,9 @@ async function fetchFeatureIssues(config) {
       '-F', `number=${config.projectNumber}`,
     ];
     if (after) args.push('-f', `after=${after}`);
-    const raw = gh(args);
+    // execFileSync's default 1 MB maxBuffer is smaller than one page of the
+    // board now (#4694) — it died with `spawnSync gh ENOBUFS`.
+    const raw = gh(args, { maxBuffer: 64 * 1024 * 1024 });
     const data = JSON.parse(raw).data.user.projectV2.items;
     results.push(...data.nodes);
     if (!data.pageInfo.hasNextPage) break;
