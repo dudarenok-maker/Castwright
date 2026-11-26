@@ -9,13 +9,28 @@
  * temp dir with a fake rootCA.pem. We don't need a real mkcert install
  * — the cert content is opaque bytes to the route. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { certRootRouter, resolveRootCaPath } from './cert-root.js';
+
+/* cert-root.ts shells out via execFileSync from 'node:child_process'. The
+   wrapper delegates to the real one unless a case sets `mkcertStub.caroot`,
+   so every other case in this file still sees the real behaviour. */
+const mkcertStub = vi.hoisted(() => ({ caroot: null as string | null }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFileSync: ((...args: Parameters<typeof actual.execFileSync>) =>
+      mkcertStub.caroot !== null
+        ? `${mkcertStub.caroot}\n`
+        : actual.execFileSync(...args)) as typeof actual.execFileSync,
+  };
+});
 
 function makeApp(): Express {
   const app = express();
@@ -178,6 +193,21 @@ describe('GET /cert/root.crt 404 probed block, LAN caller (#4572)', () => {
       expect(mkcertCli).not.toContain('/');
       expect(mkcertCli).not.toContain(BACKSLASH);
       expect(mkcertCli).not.toMatch(/^[A-Za-z]:/);
+    }
+  });
+
+  it('scrubs the mkcert -CAROOT probe for a LAN caller, raw for loopback', async () => {
+    mkcertStub.caroot = foreignCaroot;
+    try {
+      process.env.MKCERT_CAROOT = join(emptyDir, 'definitely-not-there');
+      const lan = await request(makeLanApp()).get('/cert/root.crt');
+      expect(lan.status).toBe(404);
+      expect(lan.body.probed.mkcertCli).toBe('<path>');
+      expect(JSON.stringify(lan.body)).not.toContain('alice-secret');
+      const lo = await request(makeApp()).get('/cert/root.crt');
+      expect(lo.body.probed.mkcertCli).toBe(foreignCaroot);
+    } finally {
+      mkcertStub.caroot = null;
     }
   });
 
