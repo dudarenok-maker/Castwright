@@ -418,7 +418,10 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   back on reconnect supplying the client **`listenedAt`** (the wall-clock time the user
   actually listened — see `srv-34`), so **last-write-wins reflects listen time, not
   network-delivery time**. Server sanity-bounds `listenedAt`; the app records it at each
-  local autosave. *(Open nuance for the `app-6` plan: position isn't monotonic in time —
+  local autosave. **Idle-save rule (#4650):** `listenedAt` advances only when the engine
+  was playing since the previous save; a save with no playback since (close player, app
+  background, re-pair flush, a seek while paused) keeps the stored `listenedAt`, so it
+  never wins a sync. The position is still saved. *(Open nuance for the `app-6` plan: position isn't monotonic in time —
   consider "furthest position" vs "latest `listenedAt`" when they disagree; LWW-by-listen-
   time is the v1 default.)*
 - **Benefit (user):** in-car progress flows back without clobbering a newer position made

@@ -148,7 +148,7 @@ class MemPlaybackStore implements PlaybackStore {
   final Map<String, PlaybackPoint> map = {};
   @override
   Future<void> savePlayback(String b, String u, int ms, String iso) async =>
-      map[b] = PlaybackPoint(chapterUuid: u, positionMs: ms);
+      map[b] = PlaybackPoint(chapterUuid: u, positionMs: ms, listenedAt: iso);
   @override
   Future<PlaybackPoint?> loadPlayback(String b) async => map[b];
 }
@@ -276,6 +276,57 @@ void main() {
       engine.emit(const Duration(seconds: 14));
       await Future<void>.delayed(Duration.zero);
       expect(store.map['b1']!.positionMs, 14000);
+      await pc.dispose();
+    });
+
+    // #4650: listenedAt is the resume-sync last-write-wins key, so only real
+    // playback may advance it.
+    test('a save after playback advances listenedAt', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u1', positionMs: 0, listenedAt: '2026-06-01T00:00:00Z');
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      engine.emit(const Duration(seconds: 5));
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:00.000Z');
+      expect(store.map['b1']!.positionMs, 5000);
+      await pc.dispose();
+    });
+
+    test('a second save with no playback keeps the previous listenedAt',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore();
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      await pc.pause(); // played since open -> stamps
+      final stamped = store.map['b1']!.listenedAt;
+      expect(stamped, '2026-06-06T12:00:00.000Z');
+
+      t = t.add(const Duration(hours: 3)); // idle: background / close / re-pair
+      engine.emit(const Duration(seconds: 42)); // paused seek moves the position
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, stamped);
+      expect(store.map['b1']!.positionMs, 42000,
+          reason: 'the position is still saved');
+      await pc.dispose();
+    });
+
+    test('an idle save of a never-played book stamps nothing', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore();
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, isEmpty);
       await pc.dispose();
     });
 

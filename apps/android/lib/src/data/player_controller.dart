@@ -227,6 +227,10 @@ class PlayerController {
   double _boostDb = 0;
   DateTime? _lastSave;
 
+  /// True once the engine has been playing since the last persisted save — the
+  /// gate for stamping a fresh `listenedAt` (#4650).
+  bool _playedSinceSave = false;
+
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
@@ -307,7 +311,10 @@ class PlayerController {
     // cannot see a stale prior-book index when opening a different book.
     // The reset to -1 means _loadIndex captures prev=-1, which is excluded by
     // the `prev >= 0` guard — no spurious bookReplayedStream emit on switch.
-    if (_bookId != bookId) _index = -1;
+    if (_bookId != bookId) {
+      _index = -1;
+      _playedSinceSave = false; // the outgoing book's playback isn't this book's
+    }
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
@@ -465,9 +472,24 @@ class PlayerController {
     final book = _bookId;
     final uuid = currentChapterUuid;
     if (book == null || uuid == null) return;
-    await _store.savePlayback(
-        book, uuid, _engine.position.inMilliseconds, _now().toUtc().toIso8601String());
+    await _persist(book, uuid, _engine.position.inMilliseconds, _now());
     _lastSave = _now();
+  }
+
+  /// Write the resume point. `listenedAt` (the resume-sync last-write-wins key)
+  /// advances only when playback actually ran since the previous save (#4650);
+  /// an idle save — close the player, app background, re-pair flush, or a seek
+  /// while paused — keeps the stored value so it can never win a sync it hasn't
+  /// earned. The position is saved either way.
+  Future<void> _persist(
+      String book, String uuid, int positionMs, DateTime now) async {
+    var iso = now.toUtc().toIso8601String();
+    if (_playedSinceSave) {
+      _playedSinceSave = false;
+    } else {
+      iso = (await _store.loadPlayback(book))?.listenedAt ?? '';
+    }
+    await _store.savePlayback(book, uuid, positionMs, iso);
   }
 
   /// Save the active book's position, then restore another book at its own
@@ -508,6 +530,7 @@ class PlayerController {
     // Re-broadcast first so the UI/media session update even when no accumulator
     // is wired (the early-return below is stats-only).
     if (!_playing.isClosed) _playing.add(isPlaying);
+    if (isPlaying) _playedSinceSave = true;
     // Accrual is gated on play/pause intent only. With app-10 LAN streaming
     // (setStreamUrl), a network stall can leave `playing` true while buffering,
     // slightly over-counting listen time — accepted as negligible for brief
@@ -552,8 +575,8 @@ class PlayerController {
       if (book != null && uuid != null) {
         _lastSave = now;
         // Fire-and-forget; ordering preserved by the single-subscription stream.
-        _store.savePlayback(
-            book, uuid, position.inMilliseconds, now.toUtc().toIso8601String());
+        if (_engine.playing) _playedSinceSave = true;
+        _persist(book, uuid, position.inMilliseconds, now);
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }
