@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 20 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**93 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**94 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
+> **Last change: 2026-11-26 (#898, PR B), 93 → 94.** Row **E119** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change (`origin/main`'s `next-id` for group E was also E119). Row is owed; not run here.
+>
+> **Previous change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
 >
 > **Previous change: 2026-11-21 (#1393), 91 → 92.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 54 → 55. `next-id` bumped A134 → A135 in the same change (relative to `main`, whose `next-id` for group A is A134 after #4533 and #4535). Row is owed; not run here.
 >
@@ -7396,7 +7398,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E119 -->
+<!-- next-id: E120 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -8178,6 +8180,22 @@ The automated tests pin the range list, the message text and the log write again
 8. **Re-pair from the player, then keep listening.** Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.
 
 *Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
+
+### E119 · Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair ([#898](https://github.com/dudarenok-maker/Castwright/issues/898), PR B) · **a real Android phone; no GPU needed**
+
+Every companion token is now `scope: 'companion'` and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive `requireLanToken` against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail SILENTLY on the phone (spec §Q2), so a wrong allowlist row is close to invisible there.
+
+1. **Pair a fresh phone (QR).** `device-tokens.json` holds `"scope":"companion"` and `"schema":3` for the new record.
+2. **The library works.** The library populates, **cover art appears** (row 3: a miss shows a placeholder with no error), a book downloads, a chapter plays offline.
+3. **Stream an undownloaded chapter** over LAN (row 5). It plays.
+4. **The waveform renders** (row 4: a miss shows a plain bar).
+5. **Position and status round-trip.** The listening position round-trips to the desktop Listen view (rows 6 and 7), and finishing a book updates its shelf status (row 9).
+6. **Zero denials.** The desktop server log shows ZERO `[lan-auth] scope-denied` lines for the session. Any line is a missing allowlist row.
+7. **The legacy case.** Before upgrading the server, pair a phone and download a book fully. Upgrade to this build (the existing record has no scope, so it answers 401). Open the app on the LAN: it must reach the **pairing screen**, not report the computer offline (PR A's handshake fix, E118).
+8. **Re-pair once.** Steps 2-5 work again after ONE re-pair, not a loop.
+9. **Negative control.** From a LAN browser on `https://castwright.local`, redeem a browser pairing: the full desktop UI still works (`/redeem-browser` mints `full`).
+
+*Needs:* a real Android phone with an APK built from PR A installed, the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set, and for step 7 a `device-tokens.json` written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with PR A's row, E118. No separate run sheet (like E117, this row has none). Clears when each observation is recorded.
 
 ## Group G — GitHub Actions itself
 

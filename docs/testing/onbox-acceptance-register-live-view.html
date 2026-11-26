@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">93</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">94</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->19<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->20<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1504,7 +1504,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">19 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">20 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1744,6 +1744,24 @@
         <li><strong>Re-pair from the player, then keep listening.</strong> Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.</li>
         </ul>
         <p><em>Needs:</em> a real Android phone with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E119</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>Every companion token is now <code>scope: 'companion'</code> and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive <code>requireLanToken</code> against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail SILENTLY on the phone (spec §Q2), so a wrong allowlist row is close to invisible there. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR B)</p>
+        <ul>
+        <li><strong>Pair a fresh phone (QR).</strong> <code>device-tokens.json</code> holds <code>"scope":"companion"</code> and <code>"schema":3</code> for the new record.</li>
+        <li><strong>The library works.</strong> The library populates, <strong>cover art appears</strong> (row 3: a miss shows a placeholder with no error), a book downloads, a chapter plays offline.</li>
+        <li><strong>Stream an undownloaded chapter</strong> over LAN (row 5). It plays.</li>
+        <li><strong>The waveform renders</strong> (row 4: a miss shows a plain bar).</li>
+        <li><strong>Position and status round-trip.</strong> The listening position round-trips to the desktop Listen view (rows 6 and 7), and finishing a book updates its shelf status (row 9).</li>
+        <li><strong>Zero denials.</strong> The desktop server log shows ZERO <code>[lan-auth] scope-denied</code> lines for the session. Any line is a missing allowlist row.</li>
+        <li><strong>The legacy case.</strong> Before upgrading the server, pair a phone and download a book fully. Upgrade to this build (the existing record has no scope, so it answers 401). Open the app on the LAN: it must reach the <strong>pairing screen</strong>, not report the computer offline (PR A&#8217;s handshake fix, E118).</li>
+        <li><strong>Re-pair once.</strong> Steps 2-5 work again after ONE re-pair, not a loop.</li>
+        <li><strong>Negative control.</strong> From a LAN browser on <code>https://castwright.local</code>, redeem a browser pairing: the full desktop UI still works (<code>/redeem-browser</code> mints <code>full</code>).</li>
+        </ul>
+        <p><em>Needs:</em> a real Android phone with an APK built from PR A installed, the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set, and for step 7 a <code>device-tokens.json</code> written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with PR A&#8217;s row, E118. No separate run sheet (like E117, this row has none). Clears when each observation is recorded.</p>
       </div>
     </details>
 
