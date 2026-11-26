@@ -270,7 +270,9 @@ test.describe('visual baselines', () => {
  * page clock to 2026-06-13T12:00:00 so StatsView's `today` default
  * (`new Date().toLocaleDateString('en-CA')`) is deterministic. Without the
  * clock freeze the streak sentence ("On a N-day streak") and the 7-day
- * sparkbar window shift day-to-day, breaking the baseline within 1–2 days. */
+ * sparkbar window shift day-to-day, breaking the baseline within 1–2 days.
+ * The footer build stamp is pinned by VITE_PIN_BUILD_STAMP in .env.e2e
+ * (#4566), so the page is deterministic. */
 test.describe('visual baselines (stats)', () => {
   test.skip(!existsSync(BASELINE_DIR), SKIP_REASON);
 
