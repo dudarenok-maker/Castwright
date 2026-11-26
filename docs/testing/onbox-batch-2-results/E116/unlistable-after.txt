@@ -1,0 +1,2 @@
+179dea53933f6e7b70dea745e7727c36f1e270c06c90b0a561047b59f9acecbb *Dup One/.audiobook/state.json
+e94daaf20b0794756c1a0f860f4e6221aeed9fc8901e3c224da31b94f6774373 *Dup Two/.audiobook/state.json

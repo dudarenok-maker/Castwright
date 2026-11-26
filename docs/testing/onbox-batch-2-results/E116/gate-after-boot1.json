@@ -1,0 +1,17 @@
+{
+  "version": 2,
+  "epoch": "d07e57e4-f23a-47b4-a9c2-be8cbb744c76",
+  "entries": [
+    {
+      "bookId": "castwright__standalones__the-coalfall-commission",
+      "repairedAt": "2026-11-26T11:40:50.389Z"
+    }
+  ],
+  "manuscripts": [
+    {
+      "manuscriptId": "mns_7IWcnMvyKF",
+      "bookId": "castwright__standalones__the-coalfall-commission",
+      "repairedAt": "2026-11-26T11:40:50.389Z"
+    }
+  ]
+}
