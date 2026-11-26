@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -140,11 +140,11 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
 
 ### Result
 
-Auto — Result:
+Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (also 3.7-flash 503, 3.5-flash daily quota); chapter was 19,928 chars.
 
-8192 baseline — Result:
+8192 baseline — Result: NOT RUN — same 503.
 
-Gemma split — Result:
+Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723).
 
 Run by / date / SHA:
 

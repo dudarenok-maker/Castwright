@@ -8087,6 +8087,17 @@ On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Au
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4703):** Run on this worktree's server (`npm --prefix server run dev`, port 8130, real Gemini key, clean settings: `analyzerReasoningByEngine` / `analyzerExtraParamsByEngine` both `{}`), `main` at a3a0ff6e. Chapter: Coalfall fixture text under one heading, "Chapter One — The Knock", **19,928 characters** (manuscript `mns_u4-dsOlJKO`; the fixture alone is 15.6k, so its paragraphs were repeated to reach 20k). Driven with `POST /api/manuscripts/:id/analysis {"model":…,"fresh":true}`. Evidence: [`onbox-batch-2-results/E111/`](onbox-batch-2-results/E111/).
+>
+> - **`gemini-3.6-flash`, Auto — NOT RUN.** Three full attempts over about 12 minutes (19:21, 19:26, 19:34) all ended `503 UNAVAILABLE` ("This model is currently experiencing high demand"; `stream-timing … firstChunkMs=none firstAnswerMs=none`), so the model never returned a chunk. The nearest thinking models also failed: `gemini-3.7-flash` 503 (19:35), `gemini-3.5-flash` `analyzer-daily-quota` ("daily quota exhausted — resets at 2026-11-27T00:00:00.000Z"). No time-to-first-chunk, heartbeat, retry, timeout or request-count figure exists for Auto.
+> - **`gemini-3.6-flash`, 8192 baseline — NOT RUN**, for the same reason (it needs a fresh Auto run to compare against).
+> - **Auto-vs-8192 pass criteria — STILL OWED.** (`analyzer-timeout`-free Auto completion; Auto requests ≤ 8192 requests.)
+> - **`gemma-4-31b-it` at `analyzer.gemini.maxOutputTokens` = 64 — FAIL.** The empty truncation reproduced, twice: `[gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it` (19:28:36 and 19:30:42, `thoughtPartsBeforeAnswer=3`, `firstChunkMs` 19925 / 25110). But neither was followed by a re-split (no `section N/M` line); both runs ended with SSE `analyzer-reasoning-overflow` ("Gemma 4 31B spent its whole output budget reasoning on chapter …"). The row requires a re-split after each `bytes=0` truncation and no `analyzer-reasoning-overflow`, so the Gemma half fails. Filed as bug [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723).
+>
+> The #3084 reporter's stall on a thinking model at Auto remains unproven; the model was unavailable for the whole window and a free-tier daily quota blocked the fallback. Re-run the two Gemini rows when `gemini-3.6-flash` has capacity.
+>
+> **Row verdict: KEEP — still owed: `gemini-3.6-flash` Auto and 8192 runs (503 / daily quota on every thinking model), and the Gemma re-split bullet (FAIL, #4723)**
+
 ### E112 · Gemini `schema` mode on a real key (#3084 PR 3b) · **any machine with a Gemini key; no GPU**
 
 With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one real chapter on `gemma-4-31b-it` and one on `gemini-3.5-flash-lite`. Observe:
