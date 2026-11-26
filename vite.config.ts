@@ -27,7 +27,7 @@ function gitOutput(cmd: string): string | null {
   }
 }
 
-function buildInfoRaw() {
+export function buildInfoRaw() {
   const version = (createRequire(import.meta.url)('./package.json') as { version: string }).version;
   const gitSha = gitOutput('git rev-parse --short HEAD') ?? 'unknown';
   const gitBranch = gitOutput('git rev-parse --abbrev-ref HEAD') ?? 'local';
@@ -42,7 +42,7 @@ function buildInfoRaw() {
 
 // #4566: pinned stamp for the e2e build (VITE_PIN_BUILD_STAMP=1 in .env.e2e), so the
 // stats visual baselines stop embedding version / SHA / branch / clock time.
-const PINNED_BUILD_INFO: ReturnType<typeof buildInfoRaw> = {
+export const PINNED_BUILD_INFO: ReturnType<typeof buildInfoRaw> = {
   version: '0.0.0-e2e',
   gitSha: 'e2e0000',
   gitBranch: 'e2e',
@@ -50,6 +50,12 @@ const PINNED_BUILD_INFO: ReturnType<typeof buildInfoRaw> = {
   buildTime: '00:00',
   buildTimeIso: '1970-01-01T00:00:00.000Z',
 };
+
+// Exported so src/lib/vite-build-info.test.ts can prove an unpinned build carries
+// package.json's version (every e2e run pins, so nothing else exercises that path).
+export function selectBuildInfo(env: Record<string, string | undefined>) {
+  return env.VITE_PIN_BUILD_STAMP === '1' ? PINNED_BUILD_INFO : buildInfoRaw();
+}
 
 function buildInfoConstants(info: ReturnType<typeof buildInfoRaw>) {
   return {
@@ -129,7 +135,7 @@ export default defineConfig(({ mode }) => {
   // ops-20: Tailwind v4 runs through its dedicated Vite plugin rather than the
   // `@tailwindcss/postcss` PostCSS pass (which executed inside vite:css). The
   // Vite plugin hooks the pipeline directly, so postcss.config.js is gone.
-  const buildInfo = env.VITE_PIN_BUILD_STAMP === '1' ? PINNED_BUILD_INFO : buildInfoRaw();
+  const buildInfo = selectBuildInfo(env);
   const plugins: PluginOption[] = [react(), tailwindcss(), buildManifestPlugin(buildInfo)];
   // ops (castwright-local-hostnames) — castwright.dev.local joins the
   // plugin's default localhost + detected-IP SAN list (additive — confirmed
