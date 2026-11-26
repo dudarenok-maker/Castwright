@@ -216,12 +216,12 @@ Run by / date / SHA:
 Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
 
 1. Set `analyzer.gemini.structuredOutput` = `schema`. Analyse chapter one on `gemma-4-31b-it`. Record: HTTP 400 or accepted; the debug "schema adapter dropped" list; first-attempt conformance.
-   Result:
+   Result: not observed — 503 UNAVAILABLE (high demand) on all 9 attempts over 3 runs (2026-11-26 18:41–18:46); no HTTP 400 seen; "schema adapter dropped" list logged and matches the `gemini / stage1Chapter` snapshot (6 minLength keys). Evidence: onbox-batch-2-results/E112/.
 2. Repeat on `gemini-3.5-flash-lite`.
-   Result:
+   Result: accepted, no HTTP 400; dropped list = the 6 snapshot keys exactly; first attempt conformed (5 characters, 0 validation retries). Evidence: onbox-batch-2-results/E112/.
 3. Restore `json`.
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4701) / 2026-11-26 / 035ff80a (base; evidence commit on chore/ops-onbox-batch-2). Step 3: structuredOutput was set via server env only, nothing saved to restore.
 
 ## 6. Live structured output — register row A113
 

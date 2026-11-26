@@ -1,0 +1,148 @@
+:ok
+
+data: {"kind":"log","phaseId":0,"message":"Re-analyzing 1 chapter via Gemma 4 31B."}
+
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 2 — Chapter One — The Knock: detecting cast…"}
+
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":7111,"reason":"tpm"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":1542,"reason":"retry-after"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":38525,"reason":"tpm"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":5911,"reason":"retry-after"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":11730,"reason":"tpm"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 2 cast FAILED — Chapter One — The Knock: got status: UNAVAILABLE. {\"error\":{\"code\":503,\"message\":\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\"status\":\"UNAVAILABLE\"}}"}
+
+data: {"kind":"chapter-failed","chapterId":2,"message":"Gemma 4 31B returned 503 (UNAVAILABLE): This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","code":"analyzer-unreachable","remediation":"Check that Ollama is running (ollama serve), or switch the analyzer to Gemini in Admin → Model Manager with a GEMINI_API_KEY. Then retry the chapter or resume the run.","phase":"cast"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":0.9500000000000001,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":1,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"log","phaseId":0,"message":"Cast retry done. 3 chapters still need a retry before Phase 1 can run."}
+
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 3 chapters still need cast detection (Chapter 1, Chapter Two — The Pour, Chapter One — The Knock). Retry to continue."}
+
