@@ -1,0 +1,17 @@
+2026-11-26 22:35:35.965 [ollama] qwen3.5:4b escalation-ch1-w0 produced no usable response: Ollama http://localhost:11434 returned 500 Internal Server Error: {"error":"health resp: Get \"http://127.0.0.1:57533/health\": dial tcp 127.0.0.1:57533: connectex: No connection could be made because the target machine actively refused it."}
+2026-11-26 22:35:35.965 [analysis:structure] ch=1 aligned=92% confirmed=22 corrected=10 flagged=0 unresolved=18 escalated=1 escalationAccepted=0
+2026-11-26 22:35:35.977 [analysis] failed {
+  manuscriptId: 'mns_VtKg7HE7vb',
+  lastStep: 'phase=1 Chapter 2/12 — Chapter 2 — The Knock, part 2 (3,445 chars, ~2m 8s) via Ollama (qwen3.5:4b)…',
+  model: 'qwen3.5:4b',
+  name: 'Error',
+  status: undefined,
+  upstreamStatus: undefined,
+  upstreamCode: undefined,
+  message: 'Ollama http://localhost:11434 stream error: an error was encountered while running the model: read tcp 127.0.0.1:64396->127.0.0.1:57533: wsarecv: An existing connection was forcibly closed by the remote host.',
+  details: undefined
+}
+2026-11-26 22:35:36.001 [analysis] mns=mns_VtKg7HE7vb phase=1 Chapter 1/12 done — 51 sentences in 1m 16s
+2026-11-26 22:35:36.001 [analysis] mns=mns_VtKg7HE7vb phase=1 Refined pace — 22.1s per 1,000 chars · ~13m 59s remaining over 11 chapters.
+2026-11-26 22:35:36.001 [analysis] main run drained manuscript=mns_VtKg7HE7vb
+2026-11-26 22:36:01.229 [analysis-subset] request received manuscript="mns_VtKg7HE7vb" model="qwen3.5:4b" chapters=1
