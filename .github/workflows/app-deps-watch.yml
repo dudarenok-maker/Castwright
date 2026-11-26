@@ -2,12 +2,8 @@
 name: app-deps-watch
 
 # ops-17 / #790 — monthly pub-dependency watch for the Flutter companion.
-# A1: red when any DIRECT/DEV apps/android dep is behind `latest` (catch-up nudge).
-# A2: a dedicated KGP-migration channel — a ⚠️ banner + an @mention on #790 when
-# audio_session / flutter_foreground_task / mobile_scanner show a newly observed
-# `latest` (ops-17b, #2104: not just the first time — every subsequent genuine
-# version bump re-fires too, so a rejected release can't permanently disarm it),
-# so it is never buried under A1.
+# Red when any DIRECT/DEV apps/android dep is behind `latest` (catch-up nudge).
+# The KGP-migration channel (A2) was retired in #4649 — #790 is tracked by hand.
 # All logic is the unit-tested scripts/deps-watch.mjs; this just runs it.
 on:
   workflow_dispatch:
@@ -40,7 +36,7 @@ jobs:
       - name: Resolve deps
         working-directory: apps/android
         run: flutter pub get
-      - name: Deps watch (A1 nudge + A2 KGP channel)
+      - name: Deps watch
         working-directory: apps/android
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

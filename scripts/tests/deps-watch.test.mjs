@@ -2,20 +2,17 @@
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readNormalized } from '../lib/read-normalized.mjs';
 import {
-  KGP_PLUGINS,
+  STICKY_MARKER,
   compareSemver,
   parseOutdated,
-  parsePins,
+  computeBehind,
+  exitCodeFor,
+  findSticky,
+  stickyRequest,
+  renderSticky,
+  renderSummary,
 } from '../deps-watch.mjs';
-
-test('KGP_PLUGINS is exactly the three tracked plugins', () => {
-  assert.deepEqual(
-    [...KGP_PLUGINS].sort(),
-    ['audio_session', 'flutter_foreground_task', 'mobile_scanner'],
-  );
-});
 
 test('compareSemver orders by numeric component, not string', () => {
   assert.equal(compareSemver('0.2.4', '0.2.3'), 1);
@@ -43,32 +40,6 @@ test('parseOutdated accepts a JSON string too', () => {
   assert.equal(map.get('x').latest, '1.0.1');
 });
 
-test('parsePins strips the caret and reads only requested names', () => {
-  const pubspec = [
-    '  flutter_foreground_task: ^9.2.2',
-    '  audio_session: ^0.2.3',
-    '  connectivity_plus: 6.1.0',
-    '  mobile_scanner: ^7.2.0',
-  ].join('\n');
-  const pins = parsePins(pubspec, KGP_PLUGINS);
-  assert.deepEqual(pins, {
-    audio_session: '0.2.3',
-    flutter_foreground_task: '9.2.2',
-    mobile_scanner: '7.2.0',
-  });
-});
-
-import {
-  computeBehind,
-  computePluginStatus,
-  extractState,
-  buildState,
-  computeTransitions,
-  exitCodeFor,
-  findSticky,
-  stickyRequest,
-} from '../deps-watch.mjs';
-
 const pkgMap = (entries) => new Map(Object.entries(entries));
 
 test('computeBehind: only direct/dev with latest>current', () => {
@@ -87,69 +58,7 @@ test('exitCodeFor: red iff something is behind', () => {
   assert.equal(exitCodeFor([{ name: 'x' }]), 1);
 });
 
-test('computePluginStatus: ahead when latest>pin; absent pkg treated as at-pin', () => {
-  const pins = { audio_session: '0.2.3', flutter_foreground_task: '9.2.2', mobile_scanner: '7.2.0' };
-  const map = pkgMap({
-    audio_session: { kind: 'direct', current: '0.2.3', latest: '0.2.4' }, // newer
-    flutter_foreground_task: { kind: 'direct', current: '9.2.2', latest: '9.2.2' },
-    // mobile_scanner absent -> at pin
-  });
-  const status = computePluginStatus(map, pins);
-  const byName = Object.fromEntries(status.map((s) => [s.name, s]));
-  assert.equal(byName.audio_session.ahead, true);
-  assert.equal(byName.audio_session.latest, '0.2.4');
-  assert.equal(byName.flutter_foreground_task.ahead, false);
-  assert.equal(byName.mobile_scanner.ahead, false);
-  assert.equal(byName.mobile_scanner.latest, '7.2.0'); // falls back to pin
-});
-
-test('extractState parses the embedded JSON; empty/garbage -> {}', () => {
-  const body = `${'<!-- ops-17-deps-watch -->'}\n<!-- state: {"audio_session":{"latest":"0.2.3","ahead":false}} -->\nbody`;
-  assert.deepEqual(extractState(body), { audio_session: { latest: '0.2.3', ahead: false } });
-  assert.deepEqual(extractState(undefined), {});
-  assert.deepEqual(extractState('no marker here'), {});
-});
-
-test('computeTransitions: fires on at-pin -> ahead, and on first run for every currently-ahead plugin', () => {
-  const status = [
-    { name: 'audio_session', ahead: true, latest: '0.2.4' },
-    { name: 'mobile_scanner', ahead: true, latest: '7.3.0' },
-  ];
-  // audio_session was already ahead last run at the SAME latest; mobile_scanner just flipped.
-  const prior = { audio_session: { ahead: true, latest: '0.2.4' }, mobile_scanner: { ahead: false } };
-  assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
-  // empty prior (first run) -> every currently-ahead plugin transitions
-  assert.deepEqual(computeTransitions(status, {}), ['audio_session', 'mobile_scanner']);
-});
-
-test('computeTransitions: ahead->ahead with unchanged latest does NOT re-fire (no cron spam)', () => {
-  // The core no-re-spam guarantee (ops-17b, #2104): reshaped from an edge-detector
-  // on `ahead` to one on `latest` — same prior AND current latest -> [].
-  const status = [{ name: 'audio_session', ahead: true, latest: '0.3.0' }];
-  const prior = { audio_session: { ahead: true, latest: '0.3.0' } };
-  assert.deepEqual(computeTransitions(status, prior), []);
-});
-
-test('computeTransitions: fires on a genuine latest bump even though already ahead (ops-17b repro, #2104)', () => {
-  const status = [{ name: 'flutter_foreground_task', ahead: true, latest: '10.1.0' }];
-  const prior = { flutter_foreground_task: { ahead: true, latest: '10.0.0' } };
-  assert.deepEqual(computeTransitions(status, prior), ['flutter_foreground_task']);
-});
-
-test('computeTransitions: a downgrade (latest moves backwards) does not fire', () => {
-  const status = [{ name: 'mobile_scanner', ahead: true, latest: '10.0.0' }];
-  const prior = { mobile_scanner: { ahead: true, latest: '10.1.0' } };
-  assert.deepEqual(computeTransitions(status, prior), []);
-});
-
-test('computeTransitions: prior ahead:true with no usable latest fails loud (fires)', () => {
-  const status = [{ name: 'mobile_scanner', ahead: true, latest: '7.4.0' }];
-  const prior = { mobile_scanner: { ahead: true } }; // corrupt/legacy state: no `latest` recorded
-  assert.deepEqual(computeTransitions(status, prior), ['mobile_scanner']);
-});
-
 test('computeBehind: empty payload -> [] and exitCodeFor -> 0 (the green baseline)', () => {
-  // parseOutdated is imported in the Task 1 block of this same test file.
   assert.deepEqual(computeBehind(parseOutdated('{}')), []);
   assert.deepEqual(computeBehind(parseOutdated('{"packages":[]}')), []);
   assert.equal(exitCodeFor(computeBehind(parseOutdated('{}'))), 0);
@@ -158,32 +67,6 @@ test('computeBehind: empty payload -> [] and exitCodeFor -> 0 (the green baselin
 test('computeBehind: a direct dep ABSENT from the payload cannot be behind (absent = at latest)', () => {
   const map = pkgMap({ just_audio: { kind: 'direct', current: '0.10.5', latest: '0.10.5' } });
   assert.deepEqual(computeBehind(map), []); // audio_session etc. simply absent -> not behind, not an error
-});
-
-test('computePluginStatus: a MAJOR bump the caret pin blocks still reads as ahead (drives off latest)', () => {
-  // The headline A2 scenario: pin ^7.2.0 caps resolvable, but latest shows 8.0.0.
-  const pins = { mobile_scanner: '7.2.0' };
-  const map = pkgMap({ mobile_scanner: { kind: 'direct', current: '7.2.0', latest: '8.0.0' } });
-  const [s] = computePluginStatus(map, pins, ['mobile_scanner']);
-  assert.equal(s.ahead, true);
-  assert.equal(s.latest, '8.0.0');
-});
-
-test('extractState: marker present but JSON malformed -> {} (no throw)', () => {
-  const body = '<!-- ops-17-deps-watch -->\n<!-- state: {not valid json -->\nbody';
-  assert.deepEqual(extractState(body), {});
-});
-
-test('buildState round-trips through extractState; records ahead:false too', () => {
-  const status = [
-    { name: 'audio_session', pin: '0.2.3', latest: '0.2.4', ahead: true },
-    { name: 'mobile_scanner', pin: '7.2.0', latest: '7.2.0', ahead: false },
-  ];
-  const state = buildState(status);
-  assert.deepEqual(state, {
-    audio_session: { latest: '0.2.4', ahead: true },
-    mobile_scanner: { latest: '7.2.0', ahead: false },
-  });
 });
 
 test('findSticky: locates the marker comment even when a human commented later', () => {
@@ -208,172 +91,24 @@ test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', 
   });
 });
 
-import {
-  STICKY_MARKER,
-  renderSticky,
-  renderSummary,
-  renderTransitionComment,
-  publish,
-} from '../deps-watch.mjs';
-
-const STATUS_CLEAN = [
-  { name: 'audio_session', pin: '0.2.3', latest: '0.2.3', ahead: false },
-  { name: 'flutter_foreground_task', pin: '9.2.2', latest: '9.2.2', ahead: false },
-  { name: 'mobile_scanner', pin: '7.2.0', latest: '7.2.0', ahead: false },
-];
-const STATUS_AHEAD = [
-  { name: 'audio_session', pin: '0.2.3', latest: '0.3.0', ahead: true },
-  { name: 'flutter_foreground_task', pin: '9.2.2', latest: '9.2.2', ahead: false },
-  { name: 'mobile_scanner', pin: '7.2.0', latest: '7.2.0', ahead: false },
-];
-
-test('renderSticky embeds the marker + a parseable state block', () => {
-  const md = renderSticky({ pluginStatus: STATUS_AHEAD, behind: [], today: '2026-07-01' });
+test('renderSticky carries the marker and no KGP wording (#4649)', () => {
+  const md = renderSticky({ behind: [], today: '2026-07-01' });
   assert.ok(md.includes(STICKY_MARKER));
-  assert.match(md, /<!-- state: .*audio_session.*-->/);
-  assert.ok(md.includes('⚠️')); // banner when a plugin is ahead
-  assert.ok(md.includes('verify')); // honest "verify whether it removed KGP" wording
+  assert.ok(!/KGP/i.test(md));
+  assert.ok(!md.includes('state:'));
 });
 
-test('renderSummary (no marker) shows the all-clear line when nothing is ahead', () => {
-  const md = renderSummary({ pluginStatus: STATUS_CLEAN, behind: [], today: '2026-07-01' });
+test('renderSummary (no marker) shows the all-clear line when nothing is behind', () => {
+  const md = renderSummary({ behind: [], today: '2026-07-01' });
   assert.ok(!md.includes(STICKY_MARKER));
-  assert.ok(/still at their pin/i.test(md));
   assert.ok(/None — all direct\/dev deps current/i.test(md));
 });
 
 test('renderSummary lists behind deps in a table', () => {
   const md = renderSummary({
-    pluginStatus: STATUS_CLEAN,
     behind: [{ name: 'build_runner', kind: 'dev', current: '2.15.0', latest: '2.16.0' }],
     today: '2026-07-01',
   });
   assert.ok(md.includes('build_runner'));
   assert.ok(md.includes('2.16.0'));
-});
-
-test('renderTransitionComment: null when no transitions; @mention + recipe otherwise', () => {
-  assert.equal(renderTransitionComment([], STATUS_AHEAD), null);
-  const md = renderTransitionComment(['audio_session'], STATUS_AHEAD);
-  assert.ok(md.includes('@dudarenok-maker'));
-  assert.ok(md.includes('audio_session'));
-  assert.ok(md.includes('0.3.0'));
-  assert.ok(/flutter build apk --release/.test(md));
-});
-
-test('renderTransitionComment: recipe covers BOTH outcomes, and says the pin no longer arms the notification', () => {
-  // ops-17b (#2104): the old copy only told the operator what to do on success
-  // (bump pin / close #790), which trained them to leave the pin alone on a
-  // rejected release — permanently disarming the watchdog for that plugin.
-  const md = renderTransitionComment(['audio_session'], STATUS_AHEAD);
-  // success path intact: bump pin, drop escape-hatch flags + Trip-B assertion, close #790.
-  assert.ok(/bump the pin/i.test(md));
-  assert.ok(/escape-hatch flags/i.test(md));
-  assert.ok(/app\.yml.* Trip-B/i.test(md) || /Trip-B.*app\.yml/i.test(md));
-  assert.ok(/close #790/i.test(md));
-  // rejected-release path is now covered too, and states the pin isn't what re-arms it.
-  assert.ok(/still (there|applies)|warning is still|not gone/i.test(md));
-  assert.ok(/no longer (what arms|arms)|not what arms/i.test(md));
-  // The advice must be bound to the rejected-release condition ON THE SAME LINE,
-  // not merely present somewhere in the body — otherwise a rewrite that attaches
-  // "leave the pin alone" to the WRONG bullet (e.g. the success path) would still
-  // pass every assertion above. `.` doesn't match `\n` by default, so this only
-  // matches if both phrases are on one line with nothing else between them.
-  assert.match(md, /warning is still there.*leave the pin alone/i);
-});
-
-// A fake `gh` that records each call's argv and can be told to throw on the
-// Nth call (1-indexed) — used to drive `publish` (ops-17c, #2113).
-function fakeGh({ throwOnCall } = {}) {
-  const calls = [];
-  const gh = (args) => {
-    calls.push(args);
-    if (throwOnCall && calls.length === throwOnCall) {
-      throw new Error(`gh call ${calls.length} failed (fake)`);
-    }
-    return '';
-  };
-  gh.calls = calls;
-  return gh;
-}
-
-test('publish: transition present, both calls succeed -> transition POST is call 1, sticky write is call 2', () => {
-  const gh = fakeGh();
-  publish({
-    gh,
-    repo: 'o/r',
-    issue: '790',
-    existing: { id: 42 },
-    stickyBody: 'sticky-body',
-    transitionComment: 'transition-body',
-  });
-  assert.equal(gh.calls.length, 2);
-  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
-  assert.deepEqual(gh.calls[1], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
-});
-
-test('publish: #2113 regression — the transition POST throws, and the sticky is NEVER called', () => {
-  const gh = fakeGh({ throwOnCall: 1 });
-  assert.throws(() =>
-    publish({
-      gh,
-      repo: 'o/r',
-      issue: '790',
-      existing: { id: 42 },
-      stickyBody: 'sticky-body',
-      transitionComment: 'transition-body',
-    }),
-  );
-  assert.equal(gh.calls.length, 1); // only the failed call — sticky never reached
-  // Must be the TRANSITION post that failed, not merely "some first call" — a
-  // sticky-first ordering would also stop at 1 call, just the wrong one.
-  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
-});
-
-test('publish: no transition -> exactly one call, and it is the sticky write (no spurious POST)', () => {
-  const gh = fakeGh();
-  publish({
-    gh,
-    repo: 'o/r',
-    issue: '790',
-    // existing is non-null so the sticky write is a PATCH to a comment-id
-    // path — structurally distinct from a transition POST to the issue's
-    // comments collection, not just distinguishable by payload (ops-17c
-    // review, #2115: with existing: null this test's own sticky POST hits
-    // the SAME path a transition POST would, so "it is the sticky write"
-    // was only provable by inspecting the body).
-    existing: { id: 42 },
-    stickyBody: 'sticky-body',
-    transitionComment: null,
-  });
-  assert.equal(gh.calls.length, 1);
-  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=sticky-body']);
-});
-
-test('publish: the sticky write throws -> the transition POST already happened (accepted duplicate-risk trade)', () => {
-  const gh = fakeGh({ throwOnCall: 2 });
-  assert.throws(() =>
-    publish({
-      gh,
-      repo: 'o/r',
-      issue: '790',
-      existing: { id: 42 },
-      stickyBody: 'sticky-body',
-      transitionComment: 'transition-body',
-    }),
-  );
-  assert.equal(gh.calls.length, 2);
-  assert.deepEqual(gh.calls[0], ['api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=transition-body']);
-});
-
-test('the real apps/android pubspec pins the same KGP plugin versions the lock resolves (#790)', () => {
-  const dir = new URL('../../apps/android/', import.meta.url);
-  const pubspec = readNormalized(new URL('pubspec.yaml', dir));
-  const lock = readNormalized(new URL('pubspec.lock', dir));
-  const pins = parsePins(pubspec, KGP_PLUGINS);
-  for (const name of KGP_PLUGINS) {
-    const m = lock.match(new RegExp(`^  ${name}:\n(?:    .*\n)*?    version: "([^"]+)"`, 'm'));
-    assert.ok(m, `${name} missing from pubspec.lock`);
-    assert.equal(pins[name], m[1], `${name}: pubspec pin must equal the lock, or the watch re-pings a verified release`);
-  }
 });
