@@ -456,6 +456,11 @@ test('gh() defaults maxBuffer to >= 16 MB, ahead of ...rest so callers can overr
     m.index < ghSource.search(/^\s*\.\.\.rest,/m),
     'maxBuffer default must precede ...rest, or it would clobber a caller override',
   );
+  assert.equal(
+    (ghSource.match(/\bmaxBuffer\s*:/g) ?? []).length,
+    1,
+    'gh() must set maxBuffer exactly once (a second key after ...rest would override it)',
+  );
 });
 
 test('ghSpawn() applies scrubGitEnv to the env it passes to spawnSync (#2203 review Finding F1)', () => {
