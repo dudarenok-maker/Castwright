@@ -25,12 +25,6 @@ prioritized issue in its tier.
 
 ## Must — the beta → full-product spine (marketability & discoverability)
 
-#### `fs-38` — Voice cloning (your own / family voice) + cloned-vs-designed library split ([#624](https://github.com/dudarenok-maker/Castwright/issues/624))
-
-- _What:_ In-app voice-sample **capture** (record/upload) with quality guidance + re-take. Explicit **consent on the record** (names the person + permitted use); cloning blocked without it. **Clone + cast** via XTTS (zero-shot reference) first, then Qwen design-to-target; held consistent across book + series. **Voice-library split:** cloned voices get their own `#/voices` section with provenance + consent, **excluded** from the cross-book "offer it back" matcher so a person's voice is never reused into a stranger's book. **Local-only**; export explicit.
-- _Benefit:_ the most personal, gift-able feature the product can offer — and the strongest consumer hook.
-_Full detail + acceptance:_ [#624](https://github.com/dudarenok-maker/Castwright/issues/624).
-
 #### `ops-1` — Windows installer (Inno Setup or NSIS) wrapping the release zip ([#432](https://github.com/dudarenok-maker/Castwright/issues/432))
 
 - _What:_ Add an Inno Setup (or NSIS) script that wraps the `castwright-vX.Y.Z.zip` produced by the release-package pipeline (plan 49) into a signed `.exe` installer. Installer extracts to `%LocalAppData%\Castwright`, drops a Start Menu entry, checks the **runtime** prerequisites (Node 20.6+, Python 3.11, ffmpeg on PATH) with download links shown for any missing dep, then launches the app. **Model install + smoke test are NOT the installer\s job** — they are owned by the shared [`fs-21` first-run wizard](https://github.com/dudarenok-maker/Castwright/issues/474) (cross-platform, also used by the macOS `.dmg` [`ops-15`](https://github.com/dudarenok-maker/Castwright/issues/735)), so the Windows and macOS paths stay consistent. Extend `release.yml` with a follow-on job that builds the installer (on a Windows runner) and uploads it as a second release asset.
