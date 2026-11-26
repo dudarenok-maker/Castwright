@@ -3690,6 +3690,43 @@ which already stages a mixed-engine render on this same card.
 > *does* produce the shape organically or the #1976 follow-up lever (the
 > render/unload-completion reclaim), not more of the same negatives.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4712):** re-ran the
+> 2026-09-21 strand-probe harness (`a19_experiment.py all`, ported to this
+> worktree's sidecar on port 9050) on the RTX 4070 Laptop 8 GB (single card,
+> eGPU not attached). Start state: `nvidia-smi` 0 MiB / 8188 MiB, only
+> `steam.exe` listed (`[N/A]`), nothing else resident. Result — **no stranded
+> pool in any shape, the same negative as the 2026-09-21 note; this is a valid
+> outcome, not a pass.** Evidence:
+> [`docs/testing/onbox-batch-2-results/A19/`](onbox-batch-2-results/A19/).
+>
+> - **Bullet 1 (stranded pool after render completes) — NOT REPRODUCED.**
+>   Reserved after explicit `POST /unload` (strand = ≥ 800 MiB with nothing
+>   resident): exp2c forced-load-failure **0.0 MB**, exp2b forced-render-OOM
+>   attempt **46.1 MB**, exp2a bad-voice batch error **23.1 MB**. Nothing near
+>   #1976's ~3.9 GB.
+> - **exp1, `/recycle` mid-render:** in-flight synth drained, then
+>   `sidecar recycle: in-flight synth drained — self-exiting now`, rc **43**,
+>   `nvidia-smi` back to **0 MiB** — the CUDA context dies with the process, so
+>   this trigger cannot strand.
+> - **Load pressure:** XTTS `/load` succeeded (15.1 s) beside the external
+>   filler; the 4.5 GB render batch finished 200 before OOM bit and was retried
+>   under a 5.2 GB filler — again no forced OOM on this WDDM stack. The
+>   bad-voice batch returned **500 `Internal error.`** in 0.49 s (same side
+>   finding as 2026-09-21).
+> - **Bullet 2 (stranded pool, then refused op admitted + nvidia-smi drop) —
+>   NOT RUN:** needs a stranded pool, none existed.
+> - **Bullet 3 (C1 guards: no reclaim mid-render; one reclaim per 30 s) — NOT
+>   RUN:** same precondition; `stranded-cache reclaim` appears **0** times in
+>   all four sidecar boot logs, consistent with there being nothing to reclaim.
+> - **Bullet 4 (`Refs #1976` caveat):** unchanged; discharge here would not
+>   close #1976.
+>
+> Box back to **0 MiB** at the end; harness processes exited. Six
+> unload-survival measurements on four days have never produced the strand, so
+> what stays owed is a box/trigger that does, or the #1976 follow-up lever.
+>
+> **Row verdict: KEEP — still owed: bullets 1–3 (need a genuinely stranded pool to exist)**
+
 ---
 
 ### A20 · Golden-audio bless guards don't rubber-stamp an honest bless, and `_make_kokoro` exercises a real engine (PR [#2032](https://github.com/dudarenok-maker/Castwright/pull/2032), closes [#1995](https://github.com/dudarenok-maker/Castwright/issues/1995), [#2003](https://github.com/dudarenok-maker/Castwright/issues/2003), [#1987](https://github.com/dudarenok-maker/Castwright/issues/1987)) · **Kokoro weights present; single 8 GB card is enough**
