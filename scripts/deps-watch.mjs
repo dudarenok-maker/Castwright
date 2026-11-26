@@ -1,21 +1,20 @@
 // scripts/deps-watch.mjs
-// Pure helpers for the ops-17 deps-watch (#790). NO IO here — `publish` below
-// takes `gh` as an injected dependency and calls it, but never performs IO
-// itself. Unit-tested under scripts/tests/deps-watch.test.mjs (npm run test:hooks).
+// Pure helpers for the ops-17 deps-watch (#790). NO IO here. Unit-tested under
+// scripts/tests/deps-watch.test.mjs (npm run test:hooks). The KGP-plugin
+// signal was retired (#4649): #790 is tracked by hand; only the catch-up nudge
+// (direct/dev deps behind `latest`) remains.
 
-export const KGP_PLUGINS = ['audio_session', 'flutter_foreground_task', 'mobile_scanner'];
 export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
 
 /**
  * -1/0/1 by numeric semver core; prerelease/build metadata ignored.
  * Known limitation: collapses prerelease ordering, so `1.0.0` vs `1.0.0-beta`
- * compares EQUAL (stable-over-prerelease is under-reported). Safe for the three
- * KGP plugins (all pinned at stable). Revisit if a plugin pins a `-beta`/`-dev`.
- * Build metadata is dropped too, so `10.1.0+1` vs `10.1.0` also compares EQUAL.
- * Unlike the prerelease case this IS reachable here: the workflow runs
- * `flutter pub outdated --json --show-all` with no `--prereleases`, so
- * prereleases never reach `latest`, but a `+N`-only republish does — and
- * won't fire a transition even though the observed `latest` string changed.
+ * compares EQUAL (stable-over-prerelease is under-reported). Revisit if a dep
+ * pins a `-beta`/`-dev`. Build metadata is dropped too, so `10.1.0+1` vs
+ * `10.1.0` also compares EQUAL. Unlike the prerelease case this IS reachable
+ * here: the workflow runs `flutter pub outdated --json --show-all` with no
+ * `--prereleases`, so prereleases never reach `latest`, but a `+N`-only
+ * republish does — and won't count as behind even though `latest` changed.
  */
 export function compareSemver(a, b) {
   const core = (v) => String(v).split('+')[0].split('-')[0].split('.').map((n) => parseInt(n, 10) || 0);
@@ -42,17 +41,6 @@ export function parseOutdated(jsonTextOrObj) {
   return map;
 }
 
-/** Read `name: ^x.y.z` (or bare `x.y.z`) pins for the requested names. */
-export function parsePins(pubspecText, names) {
-  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'); // names are a param — never trust them raw in a RegExp
-  const pins = {};
-  for (const name of names) {
-    const m = pubspecText.match(new RegExp(`^\\s*${escape(name)}:\\s*\\^?([0-9][^\\s#]*)`, 'm'));
-    if (m) pins[name] = m[1];
-  }
-  return pins;
-}
-
 /** direct/dev packages whose latest exceeds current. */
 export function computeBehind(pkgMap) {
   const behind = [];
@@ -66,58 +54,6 @@ export function computeBehind(pkgMap) {
 
 export function exitCodeFor(behind) {
   return behind.length ? 1 : 0;
-}
-
-/** Per-plugin {pin, latest, ahead}; an absent package is treated as at-pin. */
-export function computePluginStatus(pkgMap, pins, plugins = KGP_PLUGINS) {
-  return plugins.map((name) => {
-    const pin = pins[name] ?? null;
-    const latest = pkgMap.get(name)?.latest ?? pin;
-    const ahead = !!(pin && latest && compareSemver(latest, pin) > 0);
-    return { name, pin, latest, ahead };
-  });
-}
-
-export function extractState(commentBody) {
-  if (!commentBody) return {};
-  const m = commentBody.match(/<!--\s*state:\s*([\s\S]*?)\s*-->/);
-  if (!m) return {};
-  try {
-    return JSON.parse(m[1]);
-  } catch {
-    return {};
-  }
-}
-
-export function buildState(pluginStatus) {
-  const state = {};
-  for (const s of pluginStatus) state[s.name] = { latest: s.latest, ahead: s.ahead };
-  return state;
-}
-
-/** Plugins whose OBSERVED LATEST changed since the prior state, not merely
- *  whose `ahead` flag flipped (ops-17b, #2104) — an edge detector on `ahead`
- *  alone fires once per plugin ever, then goes permanently silent for every
- *  subsequent release once a plugin is ahead of its pin (the normal case for
- *  an evaluated-and-rejected KGP release, where the pin is deliberately left
- *  alone). Firing rule per prior record for the plugin:
- *   - absent, or `ahead: false` -> fire iff `ahead` now (unchanged edge case).
- *   - `ahead: true` with a usable recorded `latest` -> fire iff the new
- *     `latest` is STRICTLY greater (a downgrade/yank must never fire).
- *   - `ahead: true` with `latest` missing/null/non-string -> fire. A prior
- *     record in that shape is corrupt or pre-ops-17b legacy state, not a
- *     clean "nothing changed" — staying silent there is the exact defect
- *     this issue is about, one level down. */
-export function computeTransitions(pluginStatus, priorState) {
-  return pluginStatus
-    .filter((s) => {
-      if (!s.ahead) return false;
-      const prior = priorState[s.name];
-      if (!prior?.ahead) return true; // absent, or at-pin -> ahead edge
-      if (typeof prior.latest !== 'string' || !prior.latest) return true; // fail loud, don't stay silent
-      return compareSemver(s.latest, prior.latest) > 0;
-    })
-    .map((s) => s.name);
 }
 
 /** The single sticky comment (by marker), or null. Found even if a human
@@ -134,45 +70,15 @@ export function stickyRequest(existing, repo, issue) {
     : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
 }
 
-/** Posts the A2 transition comment (if any) FIRST, then writes the sticky —
- *  never the reverse. The sticky body embeds the new `latest` for every
- *  plugin, so writing it first would let a failed transition POST (rate
- *  limit, transient `gh`/network fault) commit state for a notification that
- *  never went out, permanently suppressing it (ops-17c, #2113). State is
- *  committed only after the notification it implies has been delivered.
- *  `gh` is injected here, so `publish` calls it but does no IO itself. */
-export function publish({ gh, repo, issue, existing, stickyBody, transitionComment }) {
-  if (transitionComment) {
-    // `-f` (not `-F`) — same rationale as the runner's `gh` helper (gh
-    // community #148257): raw field bytes transmit as-is, so a leading
-    // `@mention` isn't mistaken for a file. Do not "fix" this to `-F`.
-    gh(['api', `repos/${repo}/issues/${issue}/comments`, '--method', 'POST', '-f', `body=${transitionComment}`]);
-  }
-  const req = stickyRequest(existing, repo, issue);
-  gh(['api', req.path, '--method', req.method, '-f', `body=${stickyBody}`]);
+/** The exact `gh api` argv that writes the sticky comment (method + body field). */
+export function stickyWriteArgs(req, body) {
+  return ['api', req.path, '--method', req.method, '-f', `body=${body}`];
 }
 
 /** The human-visible markdown (used for both the job summary and sticky body). */
-export function renderBody({ pluginStatus, behind, today }) {
-  const anyAhead = pluginStatus.some((s) => s.ahead);
+export function renderBody({ behind, today }) {
   const lines = [`### ops-17 deps watch — updated ${today}`, ''];
-  if (anyAhead) {
-    const names = pluginStatus
-      .filter((s) => s.ahead)
-      .map((s) => `\`${s.name}\` (pin ${s.pin} → latest ${s.latest})`)
-      .join(', ');
-    lines.push(`> ⚠️ **A KGP plugin has a newer version: ${names}.**`);
-    lines.push('> A newer version is **not** proof it removed KGP — verify: bump locally → `flutter build apk --release` → confirm the KGP warning is gone.');
-    lines.push('');
-  } else {
-    lines.push('_All three KGP plugins are still at their pin — no migrated release yet (blocked upstream, ops-17)._');
-    lines.push('');
-  }
-  lines.push('| KGP plugin | pin | latest | newer? |', '|---|---|---|---|');
-  for (const s of pluginStatus) {
-    lines.push(`| \`${s.name}\` | ${s.pin ?? '?'} | ${s.latest ?? '?'} | ${s.ahead ? '**yes**' : 'no'} |`);
-  }
-  lines.push('', `#### Direct/dev deps behind latest (${behind.length})`);
+  lines.push(`#### Direct/dev deps behind latest (${behind.length})`);
   if (behind.length) {
     lines.push('| package | kind | current | latest |', '|---|---|---|---|');
     for (const b of behind) lines.push(`| \`${b.name}\` | ${b.kind} | ${b.current} | ${b.latest} |`);
@@ -185,23 +91,5 @@ export function renderBody({ pluginStatus, behind, today }) {
 export const renderSummary = renderBody;
 
 export function renderSticky(args) {
-  const state = buildState(args.pluginStatus);
-  return [STICKY_MARKER, `<!-- state: ${JSON.stringify(state)} -->`, '', renderBody(args)].join('\n');
-}
-
-export function renderTransitionComment(transitions, pluginStatus, mention = '@dudarenok-maker') {
-  if (!transitions.length) return null;
-  const items = transitions.map((name) => {
-    const s = pluginStatus.find((x) => x.name === name);
-    return `- \`${name}\`: pin ${s.pin} → latest ${s.latest}`;
-  });
-  return [
-    `${mention} — ops-17: a KGP plugin now has a newer version. Verify whether it removed KGP (built-in Kotlin / AGP 9):`,
-    '',
-    ...items,
-    '',
-    'Recipe: bump locally → `flutter build apk --release`.',
-    '- If the KGP warning is gone: bump the pin, drop the escape-hatch flags + the `app.yml` Trip-B flag assertion, and close #790.',
-    '- If the warning is still there: leave the pin alone — it is no longer what arms this notification, so the next release still pings you regardless.',
-  ].join('\n');
+  return [STICKY_MARKER, '', renderBody(args)].join('\n');
 }
