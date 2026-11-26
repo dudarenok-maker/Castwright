@@ -1,0 +1,2 @@
+START smi: 1951 MiB, 8188 MiB
+before Qwen: coqui resident=True free_mb=5484 reserved=1927.282688

@@ -1,0 +1,14 @@
+2026-11-26 21:49:28.325 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=2159 firstAnswerMs=none thoughtPartsBeforeAnswer=1366
+2026-11-26 21:50:28.426 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=23043 firstAnswerMs=none thoughtPartsBeforeAnswer=1
+2026-11-26 21:50:44.853 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=14930 firstAnswerMs=none thoughtPartsBeforeAnswer=1
+2026-11-26 21:51:06.480 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 21:52:16.559 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=34689 firstAnswerMs=none thoughtPartsBeforeAnswer=2
+2026-11-26 21:52:18.984 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 21:53:26.888 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 21:59:49.371 [gemini] stream-timing model=gemini-2.5-flash firstChunkMs=2867 firstAnswerMs=15137 thoughtPartsBeforeAnswer=11
+2026-11-26 22:00:14.075 [gemini] stream-timing model=gemini-2.5-flash firstChunkMs=2233 firstAnswerMs=none thoughtPartsBeforeAnswer=14
+2026-11-26 22:00:20.784 [gemini] stream-timing model=gemini-2.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 22:00:40.641 [gemini] stream-timing model=gemini-2.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 22:01:59.098 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 22:02:16.028 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 22:02:59.235 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0

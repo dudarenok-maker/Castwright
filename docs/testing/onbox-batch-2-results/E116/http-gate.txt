@@ -1,0 +1,126 @@
+epoch=d07e57e4-f23a-47b4-a9c2-be8cbb744c76
+## DELETE no epoch
+HTTP/1.1 409 Conflict
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 996
+RateLimit-Reset: 28
+Content-Type: application/json; charset=utf-8
+Content-Length: 200
+ETag: W/"c8-rIUaUpXUg1m0ny89DRbI08B0kqk"
+Date: Thu, 26 Nov 2026 11:41:24 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+{"error":"This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.","code":"book_repaired_reload"}
+## DELETE wrong epoch
+HTTP/1.1 409 Conflict
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 995
+RateLimit-Reset: 28
+Content-Type: application/json; charset=utf-8
+Content-Length: 200
+ETag: W/"c8-rIUaUpXUg1m0ny89DRbI08B0kqk"
+Date: Thu, 26 Nov 2026 11:41:24 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+{"error":"This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.","code":"book_repaired_reload"}
+## listen-progress no epoch
+HTTP/1.1 400 Bad Request
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 994
+RateLimit-Reset: 28
+Content-Type: application/json; charset=utf-8
+Content-Length: 46
+ETag: W/"2e-VwpAt3VZ0GXsWTPaz/N7pewYu70"
+Date: Thu, 26 Nov 2026 11:41:24 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+## shelf-status no epoch
+HTTP/1.1 400 Bad Request
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 993
+RateLimit-Reset: 27
+Content-Type: application/json; charset=utf-8
+Content-Length: 67
+ETag: W/"43-ATPxIE6fDFbwnaSrM7CXQ5umuWg"
+Date: Thu, 26 Nov 2026 11:41:25 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+## listen-stats no epoch
+HTTP/1.1 400 Bad Request
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 992
+RateLimit-Reset: 27
+Content-Type: application/json; charset=utf-8
+Content-Length: 48
+ETag: W/"30-ez/1Tn820999aAN2on6JIrBUqIo"
+Date: Thu, 26 Nov 2026 11:41:25 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+
+## GET state
+HTTP/1.1 200 OK
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 991
+RateLimit-Reset: 27
+Content-Type: application/json; charset=utf-8
+Content-Length: 12239
+
+## PUT state cast patch no epoch
+HTTP/1.1 409 Conflict
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 990
+RateLimit-Reset: 26
+Content-Type: application/json; charset=utf-8
+Content-Length: 200
+ETag: W/"c8-rIUaUpXUg1m0ny89DRbI08B0kqk"
+Date: Thu, 26 Nov 2026 11:41:26 GMT
+Connection: keep-alive
+Keep-Alive: timeout=5
+## DELETE throwaway wrong epoch
+HTTP/1.1 409 Conflict
+{"error":"This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.","code":"book_repaired_reload"}
+## DELETE throwaway with right epoch
+HTTP/1.1 204 No Content
+
+
+A Coalfall Twin
+A Throwaway Twin
+The Coalfall Commission
+## gate file after delete
+{"version":2,"epoch":"f90e2f55-2f1c-4bfb-82dc-0c5b1eedb533","entries":[{"bookId":"castwright__standalones__the-coalfall-commission","repairedAt":"2026-11-26T11:40:50.389Z"}],"manuscripts":[{"manuscriptId":"mns_7IWcnMvyKF","bookId":"castwright__standalones__the-coalfall-commission","repairedAt":"2026-11-26T11:40:50.389Z"}]}
+epoch f90e2f55-2f1c-4bfb-82dc-0c5b1eedb533
+## reads that must not end the gate
+GET /api/books/castwright__standalones__the-coalfall-commission/state -> 200
+GET /api/books/castwright__standalones__the-coalfall-commission/cast -> 404
+GET /api/books/castwright__standalones__the-coalfall-commission/voices -> 404
+GET /api/books -> 404
+GET /api/books/castwright__standalones__a-coalfall-twin/state -> 200
+## after restart 4 (no new repair)
+/c/Users/<user>/AppData/Local/Temp/e116/server4.err.log:0
+/c/Users/<user>/AppData/Local/Temp/e116/server4.out.log:0
+epoch f90e2f55-2f1c-4bfb-82dc-0c5b1eedb533 repairs []
+{"error":"This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.","code":"book_repaired_reload"}
+
+## after releasing the file (server still up since unreadable boot)
+HTTP/1.1 409 Conflict
+{"error":"This book was repaired after a duplicate id was found, and this page was opened before the repair. Your change was not saved: reload Castwright and try again.","code":"book_repaired_reload"}epoch f90e2f55-2f1c-4bfb-82dc-0c5b1eedb533
+{"version":2,"epoch":"f90e2f55-2f1c-4bfb-82dc-0c5b1eedb533","entries":[{"bookId":"castwright__standalones__the-coalfall-commission","repairedAt":"2026-11-26T11:40:50.389Z"}],"manuscripts":[{"manuscriptId":"mns_7IWcnMvyKF","bookId":"castwright__standalones__the-coalfall-commission","repairedAt":"2026
+

@@ -1,0 +1,36 @@
+{
+ "gemma-4-31b-it": {
+  "mode": "schema",
+  "dropped": [
+   "properties.assignments.items.properties.characterId.minLength",
+   "properties.chapters.items.properties.title.minLength",
+   "properties.characters.items.properties.color.minLength",
+   "properties.characters.items.properties.id.minLength",
+   "properties.characters.items.properties.name.minLength",
+   "properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength",
+   "properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength",
+   "properties.characters.items.properties.role.minLength",
+   "properties.ops.items.properties.proposed.properties.name.minLength",
+   "properties.sentences.items.properties.characterId.minLength",
+   "properties.sentences.items.properties.text.minLength"
+  ],
+  "label": "schema (partial)"
+ },
+ "gemini-3.5-flash-lite": {
+  "mode": "schema",
+  "dropped": [
+   "properties.assignments.items.properties.characterId.minLength",
+   "properties.chapters.items.properties.title.minLength",
+   "properties.characters.items.properties.color.minLength",
+   "properties.characters.items.properties.id.minLength",
+   "properties.characters.items.properties.name.minLength",
+   "properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength",
+   "properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength",
+   "properties.characters.items.properties.role.minLength",
+   "properties.ops.items.properties.proposed.properties.name.minLength",
+   "properties.sentences.items.properties.characterId.minLength",
+   "properties.sentences.items.properties.text.minLength"
+  ],
+  "label": "schema (partial)"
+ }
+}

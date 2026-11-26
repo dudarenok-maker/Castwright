@@ -1,0 +1,1 @@
+{"ts":"2026-11-26T09:56:15.272Z","url":"/api/chat","model":"qwen3.5:4b","hasFormatKey":true,"format":"json","bodyKeys":["model","messages","stream","format","keep_alive","options","think"]}

@@ -1,0 +1,33 @@
+b2 std render: tts.log lines before=486
+{"asr": {"seed_mb": 400, "learned_mb": 0, "sample_count": 0}, "asr.warm": {"seed_mb": 128, "learned_mb": 0, "sample_count": 0}, "coqui": {"seed_mb": 3584, "learned_mb": 0, "sample_count": 0}, "kokoro": {"seed_mb": 1200, "learned_mb": 0, "sample_count": 0}, "qwen": {"seed_mb": 3072, "learned_mb": 1745, "sample_count": 5}, "qwen.1.7b": {"seed_mb": 6144, "learned_mb": 0, "sample_count": 0}, "qwen.1.7b.design": {"seed_mb": 6144, "learned_mb": 0, "sample_count": 0}, "qwen.1.7b.mint": {"seed_mb": 6144, "learned_mb": 0, "sample_count": 0}, "spk": {"seed_mb": 200, "learned_mb": 0, "sample_count": 0}, "spk.warm": {"seed_mb": 128, "learned_mb": 0, "sample_count": 0}}
+synth-batch: 0  synthesize: 80
+{'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 0}
+pre-Quality health loaded/base17/design: True False False
+quality render: tts.log lines before=657
+synth-batch: 0  synthesize: 80
+qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 0}
+post health loaded/base17/design: True False False
+--- redo after assigning rv1/qwen to cast (first two renders used Kokoro: no Qwen voice on cast) ---
+std render: tts.log lines before=808
+synth-batch: 0  synthesize: 80
+qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 0} kokoro {'seed_mb': 1200, 'learned_mb': 0, 'sample_count': 0}
+--- redo #2 after voice override overrideTtsVoices.qwen=cw_gpu_17b (copied to qwen-cw_gpu_17b.* in workspace voices) ---
+std render: tts.log lines before=921
+synth-batch: 0  synthesize: 8
+qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 0} kokoro {'seed_mb': 1200, 'learned_mb': 0, 'sample_count': 0}
+--- final std render (bullet 2) ---
+std render: tts.log lines before=933
+stopped render after >=27 lines. synth-batch: 0  synthesize: 27
+qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 0}
+pre-Quality health loaded/base17/design: True False False inflight 0
+Quality render: tts.log lines before=1281
+stopped Quality render after >=27 lines. synth-batch: 0  synthesize: 27
+qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 1}
+post health loaded/base17/design: False True False
+Quality render ran to completion server-side: synthesize=80 synth-batch=0
+final qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 5} qwen.1.7b {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 1}
+2026-11-27 08:12:09.475 [sidecar] Loading Qwen 1.7B-Base model=Qwen/Qwen3-TTS-12Hz-1.7B-Base on cuda:0 …
+2026-11-27 08:12:23.670 [sidecar] Qwen model=Qwen/Qwen3-TTS-12Hz-1.7B-Base attn_implementation=sdpa device=cuda:0
+2026-11-27 08:12:23.675 [sidecar] Qwen 1.7B-Base loaded.
+2026-11-27 08:13:58.450 [sidecar] Whisper ASR model unloaded.
+after unload 1.7b: False False False

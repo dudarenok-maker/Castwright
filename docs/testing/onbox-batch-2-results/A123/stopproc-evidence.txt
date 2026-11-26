@@ -1,0 +1,15 @@
+07:17:49 nvidia-smi start: 0 MiB
+07:17:49 tts.err.log lines before: 1640
+07:17:49 start-app.ps1 launcher pid=40184
+07:19:00 health answered=True : {"status":"reachable","url":"http://127.0.0.1:9050","proxy":"sidecar","engines":["coqui","kokoro","qwen"],"modelLoaded":false,"loading":false,"kokoroLoaded":false,"kokoroLoading":false,"qwenLoaded":false,"qwenBase17Loaded":false,"qwenBase17WeightsPresent":true,"qwenLoading":false,"qwenPackageInstalled":true,"qwenWeightsPresent":true,"qwenInstallState":"ready","coquiPackageInstalled":true,"coquiImportOk":true,"kokoroPackageInstalled":true,"whisperPackageInstalled":true,"kokoroImportOk":null,"qwenImportOk":null,"whisperImportOk":null,"coquiVersion":"0.27.5","asrEnabled":true,"asrLoaded":false,"asrDevice":"cpu","device":null,"recyclePending":false,"committedMb":3086.983168,"qwenDesignEverLoaded":false,"qwenDesignResident":false,"qwenDeviceKey":null,"vramReservedMb":0,"vramTotalMb":8585.216,"vramReservedMbByDevice":{"cuda:0":{"reserved_mb":0,"total_mb":8585.216}},"devices":{"kokoro":"cuda","coqui":"cuda","qwen":"cuda"},"devicesState":"ready","cudaVerified":null,"cudaVerificationDetail":null}
+07:19:02 server pid=34976 sidecar pid=22268
+07:19:02 Stop-Process -Force issued
+07:19:17 sidecar pid 22268 gone after 15.1s
+07:19:18 sidecar port 9050 listening after: True
+07:19:18 --- new tts.err.log lines (matching) ---
+07:19:18 2026-11-27 07:18:06.254 [sidecar] parent watch armed: server pid=34976 (start_ms=1795724273484, grace 15s)
+07:19:18 2026-11-27 07:19:02.388 [sidecar] server pid=34976 exited with code 4294967295 = 0xFFFFFFFF (Stop-Process)
+07:19:18 2026-11-27 07:19:17.402 [sidecar] no new server within 15s; sidecar exiting
+07:19:18 frontend pid=
+07:19:20 port 8130 listening: False
+07:19:20 nvidia-smi end: 0 MiB

@@ -1,0 +1,73 @@
+:ok
+
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 2,890 words, 15,554 characters, 3 chapters"}
+
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~1m 33s (refined after stage 1)"}
+
+data: {"kind":"eta","remainingMs":76650}
+
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 3 chapters via Gemini 3.5 Flash Lite…"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":0,"message":"Running 3 chapter cast-detections with up to 2 in parallel."}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/3 cast — Chapter 1 (38 chars) via Gemini 3.5 Flash Lite…"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 2/3 cast — Chapter One — The Knock (3,445 chars) via Gemini 3.5 Flash Lite…"}
+
+data: {"kind":"phase","phaseId":1,"progress":0.02,"label":"Parsing and attribution","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":1,"message":"Attributing 3 chapters with Gemini 3.5 Flash Lite…"}
+
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~1m 18s (pre-flight estimate, refined after stage 1)"}
+
+data: {"kind":"phase","phaseId":1,"progress":0.02,"label":"Parsing and attribution","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":1,"message":"Running 3 chapters with up to 2 in parallel."}
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 1/3 cast FAILED — Chapter 1: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\",\\n    \\\"status\\\": \\\"INVALID_ARGUMENT\\\",\\n    \\\"details\\\": [\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.BadRequest\\\",\\n        \\\"fieldViolations\\\": [\\n          {\\n            \\\"field\\\": \\\"safety_settings[0].category\\\",\\n            \\\"description\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}"}
+
+data: {"kind":"log","phaseId":0,"message":"Continuing without chapter 1 in the cast roster (0s spent). Re-run analysis to retry."}
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 2/3 cast FAILED — Chapter One — The Knock: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\",\\n    \\\"status\\\": \\\"INVALID_ARGUMENT\\\",\\n    \\\"details\\\": [\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.BadRequest\\\",\\n        \\\"fieldViolations\\\": [\\n          {\\n            \\\"field\\\": \\\"safety_settings[0].category\\\",\\n            \\\"description\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}"}
+
+data: {"kind":"log","phaseId":0,"message":"Continuing without chapter 2 in the cast roster (0s spent). Re-run analysis to retry."}
+
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemini 3.5 Flash Lite returned 400 (Bad Request): {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\"\n          }\n        ]\n      }\n    ]\n  }\n}\n","code":"unknown","remediation":"Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full error and report it.","phase":"cast"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.64,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.64,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 3/3 cast — Chapter Two — The Pour (12,067 chars) via Gemini 3.5 Flash Lite…"}
+
+data: {"kind":"chapter-failed","chapterId":2,"message":"Gemini 3.5 Flash Lite returned 400 (Bad Request): {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\"\n          }\n        ]\n      }\n    ]\n  }\n}\n","code":"unknown","remediation":"Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full error and report it.","phase":"cast"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.64,"label":"Detecting characters","model":"gemini-3.5-flash-lite","live":{"totalChapters":3,"chapters":[{"chapterIndex":3,"chapterTitle":"Chapter Two — The Pour","elapsedMs":6,"estMs":36034,"sectionsDone":0,"sectionsTotal":1}]}}
+
+data: {"kind":"phase","phaseId":0,"progress":0.64,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 3/3 cast FAILED — Chapter Two — The Pour: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\",\\n    \\\"status\\\": \\\"INVALID_ARGUMENT\\\",\\n    \\\"details\\\": [\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.BadRequest\\\",\\n        \\\"fieldViolations\\\": [\\n          {\\n            \\\"field\\\": \\\"safety_settings[0].category\\\",\\n            \\\"description\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}"}
+
+data: {"kind":"log","phaseId":0,"message":"Continuing without chapter 3 in the cast roster (0s spent). Re-run analysis to retry."}
+
+data: {"kind":"chapter-failed","chapterId":3,"message":"Gemini 3.5 Flash Lite returned 400 (Bad Request): {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\"\n          }\n        ]\n      }\n    ]\n  }\n}\n","code":"unknown","remediation":"Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full error and report it.","phase":"cast"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.95,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"phase","phaseId":0,"progress":0.95,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping)."}
+
+data: {"kind":"log","phaseId":0,"message":"Phase 0 paused — 3 chapters still need cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis."}
+
+data: {"kind":"phase","phaseId":0,"progress":0.95,"label":"Detecting characters","model":"gemini-3.5-flash-lite"}
+
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping)."}
+
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 3 chapters still need cast detection (Chapter 1, Chapter One — The Knock, Chapter Two — The Pour). Retry to continue."}
+
+

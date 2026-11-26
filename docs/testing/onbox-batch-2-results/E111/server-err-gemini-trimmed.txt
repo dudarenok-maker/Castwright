@@ -1,0 +1,47 @@
+2026-11-26 19:23:37.303 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:23:37.305 [gemini] transient 503 unavailable — retrying in 1595ms (attempt 2/3)
+2026-11-26 19:26:22.007 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:26:22.016 [gemini] transient 503 unavailable — retrying in 1349ms (attempt 2/3)
+2026-11-26 19:26:29.143 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:26:29.144 [gemini] transient 503 unavailable — retrying in 7374ms (attempt 3/3)
+2026-11-26 19:27:08.017 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:27:16.665 [gemini] generate failed {
+2026-11-26 19:27:16.686 [gemini] transient 503 unavailable — retrying in 1875ms (attempt 2/3)
+2026-11-26 19:28:36.830 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it
+  message: 'gemini gemma-4-31b-it used its whole output budget on reasoning and returned no answer — splitting the chunk cannot shrink reasoning.',
+2026-11-26 19:29:17.076 [gemini] generate failed {
+2026-11-26 19:29:17.077 [gemini] transient 503 unavailable — retrying in 1650ms (attempt 2/3)
+2026-11-26 19:30:42.168 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it
+  message: 'gemini gemma-4-31b-it used its whole output budget on reasoning and returned no answer — splitting the chunk cannot shrink reasoning.',
+2026-11-26 19:32:52.494 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:32:52.495 [gemini] transient 503 unavailable — retrying in 1150ms (attempt 2/3)
+2026-11-26 19:34:47.334 [gemini] generate failed {
+  model: 'gemini-3.6-flash',
+2026-11-26 19:34:47.335 [gemini] transient 503 unavailable — retrying in 5974ms (attempt 3/3)
+2026-11-26 19:35:12.650 [gemini] generate failed {
+  model: 'gemini-3.7-flash',
+2026-11-26 19:35:12.651 [gemini] transient 503 unavailable — retrying in 1181ms (attempt 2/3)
+2026-11-26 19:35:16.883 [gemini] generate failed {
+  model: 'gemini-3.7-flash',
+2026-11-26 19:35:16.884 [gemini] transient 503 unavailable — retrying in 6675ms (attempt 3/3)
+2026-11-26 19:35:26.925 [gemini] generate failed {
+  model: 'gemini-3.7-flash',
+2026-11-26 19:37:48.777 [gemini] generate failed {
+  model: 'gemini-3.5-flash',
+2026-11-26 19:37:48.778 [gemini] transient 503 unavailable — retrying in 1868ms (attempt 2/3)
+2026-11-26 19:39:16.425 [gemini] generate failed {
+  model: 'gemini-3.5-flash',
+2026-11-26 19:39:16.426 [gemini] transient 503 unavailable — retrying in 1523ms (attempt 2/3)
+2026-11-26 19:39:46.374 [gemini] generate failed {
+  model: 'gemini-3.5-flash',
+2026-11-26 19:39:46.375 [gemini] transient 503 unavailable — retrying in 7063ms (attempt 3/3)
+2026-11-26 19:42:04.615 [gemini] generate failed {
+  model: 'gemini-3.5-flash',
+  message: '{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 429,\\n    \\"message\\": \\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\\\n* Quota exceeded for metric: generativelanguage.googleapis.
+  model: 'gemini-3.5-flash',
+  message: 'Gemini gemini-3.5-flash daily quota exhausted — resets at 2026-11-27T00:00:00.000Z.',

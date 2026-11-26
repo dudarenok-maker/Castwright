@@ -1,0 +1,5 @@
+bullet3 start smi=0
+coqui load: smi 0 -> 2097 rise=2097
+pre-qwen-load health qwen/b17/design: False False False coqui model_loaded True
+qwen load beside coqui: smi 2097 -> 3835 rise=1738
+footprints.qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 6} coqui footprint {'seed_mb': 3584, 'learned_mb': 0, 'sample_count': 1} engines.coqui {"model_loaded": true}

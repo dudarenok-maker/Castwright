@@ -742,8 +742,8 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 55 |
-| **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 54 |
+| **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
+> **Last change: 2026-11-26 (#4699, #4715), 92 → 90.** Rows **A126** and **B107** DISCHARGED and removed by on-box batch 2 (#4699). **A126** (a cold model load learns its own weights, a warm op learns nothing): all five bullets passed on a real RTX 4070 Laptop 8 GB with a real Qwen sidecar (run 2026-11-27, child #4710): the cold-load counter rose by exactly 1 per cold load to 5 with `learned_mb` 1745 (93% of the first load's `nvidia-smi` rise of 1873 MiB); warm 0.6B and 1.7B-Base renders (`POST /synthesize` only, 0 `/synthesize-batch`) recorded nothing; a Qwen cold load beside resident Coqui did not absorb Coqui's 2097 MiB (`learned_mb` unchanged); a cold reload after a long warm run fitted (rise 1796 MiB against 1745 + reserve, 0 OOM, 0 503); the mint key learned only from cold mints (5 samples, `learned_mb` 5468). Evidence: `docs/testing/onbox-batch-2-results/A126/`. **B107** (Ollama reasoning levels and Test attribution): all four bullets passed against a real Ollama 0.40.5 daemon (run 2026-11-26, child #4705): the non-thinking `llama3.1:8b` recorded `on`/`low`/`medium`/`high` rejected and `off`/`model-default` accepted; the thinking `qwen3.5:4b` recorded `low` accepted and offered only in its own row; a run with a rejected level fails before the first chapter naming the level and the Test date; a re-created tag's `scope:configured` Test dropped the earlier levels (the build change was made by re-creating a throwaway tag, not a remote re-pull). One copy observation is recorded in the batch-2 evidence and is not owed: a rejected level that is also not offered fails with copy that names the level but not the Test date. Evidence: `docs/testing/onbox-batch-2-results/B107/`. Group A 55 → 54, group B 11 → 10; the 13 other batch-2 rows stay owed with their KEEP verdicts unchanged. `next-id` markers untouched (allocate-once).
+>
+> **Previous change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-26 (#3270, #4673), 93 → 92.** Row **H2** (the lexical-richness floor on a real Han book) DISCHARGED and removed. Outcome: the fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` (an excerpt: chapters 1-21 of the book's 120, 《紅樓夢》, public domain, from Chinese Wikisource, #4671) ran through `detectManuscriptLanguageFromChapters` in the Group H describe block of `server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf, run 2026-11-25) and gave `{ language: 'zh', supported: true, fallback: false }`, the same reversed. gate figures **N = 112,304** tokens and **V = 3,336** distinct (after `dedupeProseUnits` and digit-token removal; no chapter reaches the 20,000-character cap), **R = 9.9547** (`guiraudR`, = 3,336 / sqrt(112,304)); the raw pre-dedupe Han counts are 115,515 characters and 3,348 distinct, against `LEXICAL_RICHNESS_FLOOR` (3): the uncapped gate clears the floor on this excerpt. The excerpt is 112k gate tokens, below the removed row's own N ≈ 400,000 concern, so what closes the row at book scale is a bound, not the measurement: `dedupeProseUnits` keeps the token set a superset as chapters are added, so V can only grow and any longer sample of this book keeps R ≥ 3,336 / √N, which stays above the floor of 3 for every N below about 1.24M tokens; the whole 120-chapter book projects to about 640k tokens, where the bound is R ≥ 4.2. No length-correction follow-up is owed. The test asserts 21 chapters, a raw Han count > 105,000, a raw distinct count > 3,000, and R above the floor. Group H 2 → 1; the group's heading, intro and glance description now describe H1 alone (H1's own text is unchanged). `next-id` for group H stays H101 (IDs are allocate-once; H2 is simply gone). The automated test is the acceptance because H2 needs no GPU, sidecar or analyzer.
 >
@@ -3225,6 +3227,37 @@ operation on real hardware, and whether the 30 s TTL is tuned for real chapter g
 > `%TEMP%\oe-run-3300-cline-qwen-cloud-202609201059\jobs\a13-evidence.txt` plus the
 > worktree's `logs/tts.log` / `logs/tts.err.log`.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude (#4711):** single 8 GB card
+> (`CUDA_VISIBLE_DEVICES=0`, 0 MiB used before and after), this worktree's sidecar
+> driven directly on :9050 (sidecar-level; Node server and Coalfall import not used).
+> Evidence: `docs/testing/onbox-batch-2-results/A13/`.
+> - **Bullet 1 (pin) — PASS.** `/health` listed one GPU only (4070, 8585 MB).
+> - **Bullet 2 (reclaim admits the blocked op) — PASS on the admission, forward NOT
+>   observed to completion.** Coqui loaded (reserved 1927 MB, free 5484 MB < the Qwen
+>   op's `neededMb` 6144). *Control:* Qwen op sent <30 s after Coqui load → HTTP 503
+>   `{"noCapacity":true,"neededMb":6144,"deviceKey":"cuda:0"}`, Coqui kept (inside TTL).
+>   *Positive:* 33 s after load, and again at 43 s on a clean restart, the same op logged
+>   `Coqui model freed (idle).` + `admission ladder (qwen): evicted step coqui on cuda:0`
+>   and Qwen Base loaded 11 s later (09:00:57 → 09:01:08). The reclaimed ~1.9 GB was
+>   taken by the Qwen load itself. **Not observed:** the Qwen forward then ran >9 min
+>   with no output and was killed (my synthetic clone voice from a master wav with a
+>   made-up ref text; not proven to be a product fault, not filed). Wording
+>   discrepancy: the idle-admission path logs `Coqui model freed (idle).`; the literal
+>   `Coqui model unloaded.` appears only on the explicit `/unload` path (bullet 4).
+> - **Bullet 3 (mixed multi-chapter evict→reload cadence, `COQUI_IDLE_TTL`) — STILL
+>   OWED.** Needs the real Coalfall mixed Qwen+Coqui render through the app; the Qwen
+>   forward problem above blocked a sidecar-level stand-in. Data so far: cold Coqui
+>   reload on this box = 18.6 / ~20 / ~20 s (not ~90 s), TTL enforced only at admission
+>   (no timer). No tuning recommendation made; default untouched (30 s).
+> - **Bullet 4 (Stop on Coqui mid-chapter) — PASS at sidecar level; UI pill STILL OWED.**
+>   `/unload {"engine":"coqui"}` fired 4 s into a ~17 s Coqui synth (`inflight_synth=1`):
+>   it blocked **13.86 s** (the rest of the forward), returned 200 `{"status":"idle"}`;
+>   the synth returned 200 with 1,059,456 bytes (full audio, 17.8 s), `poisoned=false`,
+>   no `AttributeError`, log `Coqui model unloaded.`. The "Stopping…" disabled pill and
+>   absence of an error banner need the browser and were not observed.
+>
+> **Row verdict: KEEP — still owed: bullet 3 (mixed multi-chapter cadence via the app), bullet 2's Qwen forward completing, bullet 4's UI "Stopping…" pill**
+
 **Run this with A5** (A5 was discharged 2026-09-06 and removed from the register — co-schedule against its run sheet section rather than a live row) — same card, same mixed-cast book, and a mixed Qwen+Coqui
 render already stages the co-residency this row's first bullet needs.
 
@@ -3658,6 +3691,43 @@ which already stages a mixed-engine render on this same card.
 > hardware does not strand; what remains owed for this row is either a box that
 > *does* produce the shape organically or the #1976 follow-up lever (the
 > render/unload-completion reclaim), not more of the same negatives.
+
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4712):** re-ran the
+> 2026-09-21 strand-probe harness (`a19_experiment.py all`, ported to this
+> worktree's sidecar on port 9050) on the RTX 4070 Laptop 8 GB (single card,
+> eGPU not attached). Start state: `nvidia-smi` 0 MiB / 8188 MiB, only
+> `steam.exe` listed (`[N/A]`), nothing else resident. Result — **no stranded
+> pool in any shape, the same negative as the 2026-09-21 note; this is a valid
+> outcome, not a pass.** Evidence:
+> [`docs/testing/onbox-batch-2-results/A19/`](onbox-batch-2-results/A19/).
+>
+> - **Bullet 1 (stranded pool after render completes) — NOT REPRODUCED.**
+>   Reserved after explicit `POST /unload` (strand = ≥ 800 MiB with nothing
+>   resident): exp2c forced-load-failure **0.0 MB**, exp2b forced-render-OOM
+>   attempt **46.1 MB**, exp2a bad-voice batch error **23.1 MB**. Nothing near
+>   #1976's ~3.9 GB.
+> - **exp1, `/recycle` mid-render:** in-flight synth drained, then
+>   `sidecar recycle: in-flight synth drained — self-exiting now`, rc **43**,
+>   `nvidia-smi` back to **0 MiB** — the CUDA context dies with the process, so
+>   this trigger cannot strand.
+> - **Load pressure:** XTTS `/load` succeeded (15.1 s) beside the external
+>   filler; the 4.5 GB render batch finished 200 before OOM bit and was retried
+>   under a 5.2 GB filler — again no forced OOM on this WDDM stack. The
+>   bad-voice batch returned **500 `Internal error.`** in 0.49 s (same side
+>   finding as 2026-09-21).
+> - **Bullet 2 (stranded pool, then refused op admitted + nvidia-smi drop) —
+>   NOT RUN:** needs a stranded pool, none existed.
+> - **Bullet 3 (C1 guards: no reclaim mid-render; one reclaim per 30 s) — NOT
+>   RUN:** same precondition; `stranded-cache reclaim` appears **0** times in
+>   all four sidecar boot logs, consistent with there being nothing to reclaim.
+> - **Bullet 4 (`Refs #1976` caveat):** unchanged; discharge here would not
+>   close #1976.
+>
+> Box back to **0 MiB** at the end; harness processes exited. Six
+> unload-survival measurements on four days have never produced the strand, so
+> what stays owed is a box/trigger that does, or the #1976 follow-up lever.
+>
+> **Row verdict: KEEP — still owed: bullets 1–3 (need a genuinely stranded pool to exist)**
 
 ---
 
@@ -4940,6 +5010,35 @@ above `class QwenEngine`; for the three added bullets, `withCapacityRetry` in
 > the live squeeze requires either a per-tier qwen pin or #3347 fixed plus cached ASR
 > weights; either is fix-agent work, not this batch's. Bullets 1–4 and 6 untouched here
 > (out of scope per the child brief); the still-owed wedged-design bullet 3 remains owed.
+
+> **2026-11-26 — on-box batch 2 (#4699), claude (child #4713):** single RTX 4070 Laptop 8 GB
+> (CUDA 0), 16 GB eGPU not attached; `nvidia-smi` at start 0 MiB used, at end 0 MiB. Real
+> sidecar v1.15.0 from this worktree (`.venv`/`voices` junctioned), `QWEN_DEVICE=cuda:0`, port
+> 9050. Evidence: [`docs/testing/onbox-batch-2-results/A24/`](onbox-batch-2-results/A24/).
+> Only the still-owed **bullet 3 (wedged design)** was driven; bullets 1, 2, 4, 6 are already
+> CONFIRMED by the 2026-09-06/09 note and were not re-run (so no new audition/ffprobe was taken).
+>
+> - **Bullet 3 — PASS (positive + control).** Method: the real sidecar app imported through a
+>   thin harness (`A24/wedge_app.py`, scratch, not repo code) that adds `/_test/wedge` and
+>   `/_test/unwedge` to claim/release the real `QwenEngine._design_in_flight` counter — i.e.
+>   the "design thread hung while `_design_in_flight` stays claimed" state, produced without
+>   a hung forward. Wedged (`/health` → `qwen_design_resident: true`), then
+>   `POST /synthesize {engine:qwen, model:0.6b, voice:a19-exp1-narrator}` →
+>   `HTTP=503 t=150.098040` with body
+>   `{"detail":"Qwen VoiceDesign has been in flight for over 150s — refusing to evict it out from under an active design. Retry the synth shortly.","code":"design_in_flight"}`
+>   — not immediate, not never; the sidecar logged `design contention timeout`. **Control:**
+>   after `/_test/unwedge` (`busy:false`) the same request returned `HTTP=200 t=24.99
+>   bytes=195840` (cold 0.6B load + synth), so the 503 is caused by the claim, not the voice.
+> - **Caveat:** the wedge is an injected claim, not a genuinely hung CUDA forward; it proves
+>   the bounded-wait/typed-error/503 path end to end on the real HTTP route, not that a real
+>   hang would leave the counter claimed.
+> - **Bullet 5 (deviceKey, 2-card boot) — STILL OWED / NOT RUN:** needs the 2-card boot; the
+>   eGPU is not attached.
+> - **Not re-run (already CONFIRMED):** bullets 1, 2, 4, 6. The optional real-mid-design
+>   ffprobe of the audition file was therefore not repeated.
+> - No defect found; no bug filed.
+>
+> **Row verdict: KEEP — still owed: bullet 5 (deviceKey qualification, needs the 2-card boot)**
 
 ### A26 · Catastrophic-WER override actually catches a real Coqui language-collapse ([#2055](https://github.com/dudarenok-maker/Castwright/issues/2055)) · **Coqui/XTTS resident, ASR content-QA on**
 
@@ -6657,17 +6756,17 @@ The automated tests stub the process-handle wait and pin the exit-code wording, 
 
 *Needs:* the GPU box on Windows with the real sidecar. *Criteria:* this row. Clears when each bullet is recorded with the log line it produced.
 
-### A126 · A cold model load learns its own weights, and a warm op learns nothing ([#4163](https://github.com/dudarenok-maker/Castwright/issues/4163)) · **single 8 GB card, real Qwen sidecar with the 1.7B-Base installed**
-
-Child 1's pytest proves the arithmetic and the cold-only predicate with a fake `torch` and stand-in engines. It does not prove that real CUDA counters on a real card behave that way with several engines in one process, that the cold-only gate fires on the real engines (in particular Qwen's four models), that warm ops really leave a key's samples alone, or that the cold-learned bookings still fit a cold reload. Only a real GPU and a real sidecar show these. The observable surface is `GET /debug/memory`, whose `footprints` block has per-key `seed_mb`, `learned_mb` (0 below 5 samples) and `sample_count`; `learned_mb` is the p95 of the last 64 samples. `POST /load` and `POST /unload` take `{"engine": "qwen" | "coqui" | "kokoro"}`; `/unload` also takes `"model":"1.7b"` to drop the 1.7B-Base, and `/unload qwen` without it leaves the 1.7B-Base resident. Before every cold-load step, confirm on `GET /health` that `qwen_loaded`, `qwen_base17_loaded` and `qwen_design_resident` are all false (the one exception is the Quality render in bullet 2, which says so). Run every PowerShell command in this row from the repo root: the log path is relative, and `APP_LOG_DIR` moves the log. Use a book in which no character is set to Quality for the standard renders in bullets 2 and 4: a standard run lifts a Quality-set character to the 1.7B-Base, and that warm load records nothing. The Quality chapter in bullet 2 is made Quality by the render's own tier choice, not by a per-character setting. Setup, once, before bullet 1: put `QWEN_BATCH_SIZE=1` in `server/.env` and restart the server, so every line goes through `/synthesize` (the `batchSize > 1` check in `synthesise-chapter.ts` gates batching for both tiers, so `QWEN_BATCH_SIZE_17B` is not needed). Use the `.env` line as instructed: it wins over any saved value. (Setting `tts.batch.size` in Advanced Settings now also works, since the server reads it at each chapter start, but the `.env` line is the method to follow here.) Remove the `.env` line after the row. With `autoStartSidecar` on, the server restart also restarts the sidecar, and footprints live in the sidecar's memory only: a restart between bullets resets `sample_count` and leaves `learned_mb` at 0. So after this setup nothing in bullets 1 to 4 restarts the server or the sidecar, and bullet 4's `learned_mb` comes from 6 cold samples (5 from bullet 1, 1 from bullet 3) learned in the same sidecar process. Bullet 5 restarts only the sidecar, and learns its own key from scratch.
-
-- **A cold load counts its own weights, and only cold loads record.** Start a fresh sidecar with nothing loaded on the GPU. Note `nvidia-smi` used memory, run `POST /load {"engine":"qwen"}`, and note it again. Run four more `POST /unload {"engine":"qwen"}` / `POST /load {"engine":"qwen"}` cycles, reading `GET /debug/memory` after each one. Observe: `footprints.qwen.sample_count` rises by exactly 1 per cold load and ends at 5; `learned_mb` is at least 75% of the first load's `nvidia-smi` rise (that rise also counts the CUDA context, so somewhat below it is expected) and is not near 0. Record both figures.
-- **Warm ops record nothing.** With the batch size at 1 from the setup, every line goes through `/synthesize`. A multi-line slice goes to `/synthesize-batch`, which takes no reservation and so books and records nothing on this branch and on `main` alike, and it would make this bullet pass without testing anything. Confirm in the sidecar's uvicorn access log, which goes to stdout and so lands in `logs/tts.log` (not `logs/tts.err.log`), that each rendered line shows as a `POST /synthesize` and none as `POST /synthesize-batch`. That file is append-only and its lines carry no timestamps, so older renders (batch size 32) are still in it: before each render, record its line count with `$n = @(Get-Content logs/tts.log).Count`, and after the render read only what was appended, `$new = @(Get-Content logs/tts.log | Select-Object -Skip $n)`. Check `@($new | Select-String 'POST /synthesize-batch').Count` is 0, and, as the positive control, `@($new | Select-String 'POST /synthesize ').Count` is at least 1 (the trailing space excludes `/synthesize-batch`), otherwise you are reading the wrong file and the absence of `/synthesize-batch` proves nothing. If any new line went to the batch route, the bullet has not run. Do this for each of the two renders below. With the 0.6B loaded from bullet 1, render a standard chapter of at least 25 lines. Observe: `footprints.qwen.sample_count` and `learned_mb` are exactly as bullet 1 left them (on `main` `sample_count` would be up by one per line, 25 or more). Before the Quality render, confirm on `GET /health` that `qwen_base17_loaded` and `qwen_design_resident` are false, and run `POST /unload {"engine":"qwen","model":"1.7b"}` if either is not (a resident 1.7B-Base would make the first Quality line warm and the count 0). `qwen_loaded` is expected to be true at this point: this render is the one exception to the all-false rule above, because the server's run-start reconcile drops the 0.6B inside the render. Then render a Quality chapter of at least 25 lines. A pure Quality chapter needs no 0.6B, so before it the server's run-start reconcile unloads the Qwen 0.6B, and the first Quality line is a genuine cold load of the 1.7B-Base. Observe: `footprints["qwen.1.7b"].sample_count` is exactly 1, that one cold load, and stays 1 through the rest of the chapter (on `main` it would be one per line, 25 or more); `footprints.qwen` is untouched. Record both counts. (A mixed chapter would keep both tiers loaded and give 0, but a pure Quality chapter is the simpler setup and still tells the build from `main`.) Finish with `POST /unload {"engine":"qwen","model":"1.7b"}`, because `/unload qwen` without a model leaves the 1.7B-Base resident. After this the 0.6B is already gone (the reconcile unloaded it) and the 1.7B is gone, so nothing Qwen is resident, which is what bullet 3 starts from; its `/unload qwen` is then a no-op.
-- **A cold load beside another engine excludes that engine.** `POST /load {"engine":"coqui"}`, and note the `nvidia-smi` rise. Then `POST /unload {"engine":"qwen"}` (confirm that `GET /health` shows `qwen_loaded`, `qwen_base17_loaded` and `qwen_design_resident` all false) and `POST /load {"engine":"qwen"}`. Confirm on `GET /debug/memory` that `engines.coqui.model_loaded` is still true after the Qwen load; if Coqui was evicted to fit Qwen, nothing was measured, so record that and stop. Observe: `footprints.qwen.sample_count` goes up by 1, and `learned_mb` does not rise by more than 10% over bullet 1's figure. It must not rise by anything near Coqui's rise. Record both figures.
-- **A cold reload after a long warm run still fits.** With the batch size still 1, render another standard chapter of at least 25 lines (the 0.6B is still loaded from bullet 3, so these are warm lines) (check only the `logs/tts.log` lines appended during the render, with the line count and the `POST /synthesize` positive control exactly as in bullet 2; they show `POST /synthesize` only). Then `POST /unload {"engine":"qwen"}` (with the same `/health` check as bullet 3; the book has no Quality-set character, so the 1.7B-Base is not resident and this leaves nothing Qwen loaded, but if `qwen_base17_loaded` is true, also `POST /unload {"engine":"qwen","model":"1.7b"}` first) and render one more standard line, which is the cold reload. Read `footprints.qwen.learned_mb` before the reload (bullet 3 left it learned from 6 cold samples: 5 from bullet 1 plus 1 from bullet 3; bullet 2 added none to `qwen`) and note `nvidia-smi` used memory just before and at its peak during the reload. Observe: the rise is at most `learned_mb` plus the card's reserve (5% of its VRAM, capped by `GPU_RESERVE_MB`, default 500, so about 400 MB on an 8 GB card), with no `CUDA out of memory` in `logs/tts.err.log` and no `noCapacity` answer. A rise above that sum means the booking is under-sized: record both figures and the error.
-- **The mint key learns only from a mint with no Qwen model present (the #4102 interaction).** Restart the sidecar (not the server; the batch-size setting stays), so that no Qwen model is loaded (check `/health` as in bullet 3). Mint one variant of a previously designed voice (`POST /qwen/mint-variant`). Note the `nvidia-smi` rise, then read `footprints["qwen.1.7b.mint"].sample_count` (expect 1). Mint a second variant immediately, with the 1.7B-Base still resident. Observe: `sample_count` is still 1. Then repeat the cold mint four more times, each after `POST /unload {"engine":"qwen"}` and `POST /unload {"engine":"qwen","model":"1.7b"}` and a `/health` check that `qwen_design_resident` is false again (the VoiceDesign model frees itself after `QWEN_DESIGN_IDLE_TTL`, 120 s by default), noting each `nvidia-smi` rise. With 5 samples `learned_mb` is no longer 0. Observe: `footprints["qwen.1.7b.mint"].learned_mb` is at least 75% of the median of those five rises (the same tolerance as bullet 1) and not near 0. The seed it replaces is 6144 MB (the `qwen.1.7b.mint` entry of `SEED_FOOTPRINTS_MB` in `main.py`, sized from a measured on-box mint peak of about 5654 MB). Record the five rises and `learned_mb`.
-
-*Needs:* a single 8 GB card with a real Qwen sidecar and the 1.7B-Base installed, `nvidia-smi`, and a designed voice for the mint. *Criteria:* this row. Clears when each bullet's figures are recorded.
+> **2026-11-27 — on-box batch 2 (#4699), claude lane (#4709):** Run on this worktree's stack (server port 8130, sidecar port 9050, one RTX 4070 Laptop 8 GB; `nvidia-smi` read 3 MiB used before the first start and 0 MiB after the last teardown). Every process was started by the driver scripts and stopped by its recorded pid or port owner. `npm start` is the repo's `scripts/start-app.ps1` (what `npm start` runs on Windows); "dev" is `npm --prefix server run dev` (`tsx watch`, server alone, per the brief), not the full `npm run dev` with the frontend. Readiness was waited on as `/api/sidecar/health` `status:"reachable"` AND port 9050 listening: `/api/sidecar/health` answers `unreachable` for the first ~60 s while the sidecar boots, and two first attempts that killed the server in that window were discarded. Evidence: [`onbox-batch-2-results/A123/`](onbox-batch-2-results/A123/).
+>
+> - **`taskkill /F` — PASS.** Server pid 11804, sidecar pid 35104. `07:17:20.162 [sidecar] server pid=11804 exited with code 1 = 0x00000001 (taskkill, a Node child.kill() (tsx restart, concurrently -k) or process.exit(1))`, then `07:17:35.168 [sidecar] no new server within 15s; sidecar exiting` (15.0 s later). Sidecar pid gone, port 9050 free afterwards. (`taskkill-evidence.txt`)
+> - **`Stop-Process -Force` — PASS.** Server pid 34976. `07:19:02.388 [sidecar] server pid=34976 exited with code 4294967295 = 0xFFFFFFFF (Stop-Process)` at once, `07:19:17.402 … no new server within 15s; sidecar exiting`; sidecar pid 22268 gone after 15.1 s. (`stopproc-evidence.txt`)
+> - **Native-crash stand-in — PASS (one change: 120 s timer, not 180 s).** Stand-in node pid 38436 dying with `-1073740791`, real sidecar under `SIDECAR_PARENT_PID`. Terminal: `parent watch armed: server pid=38436 (start_ms=None, grace 15s)`, then `07:21:34.278 [sidecar] server pid=38436 exited with code 3221226505 = 0xC0000409 (fast-fail / STATUS_STACK_BUFFER_OVERRUN, a native crash)`, `07:21:49.281 … no new server within 15s; sidecar exiting`, and `[supervisor] sidecar exited with code 45.` (the grace-exit code, not 0). I used 120 s because the sidecar armed its watch 5 s after launch, well before the timer. (`native-crash-standin-evidence.txt`)
+> - **A dev reload keeps the sidecar — PASS under both launchers.** Kokoro loaded first so "no reload" is observable. `dev`: sidecar pid 9848 before and after; `07:24:30.990 … server pid=35684 exited with code 1 = 0x00000001 (taskkill, …)`, `07:24:37.439 … parent watch re-armed: server pid=39796 (was pid=35684)`, `a new server took over within 15s; sidecar stays up`; no `sidecar exiting`; `kokoroLoaded` still true. `npm start`: sidecar pid 18388 before and after; the same three lines (old server pid=41464, new pid=35736, re-armed 8.2 s after the exit line); `kokoroLoaded` still true. The reload was triggered by touching the mtime of `server/src/index.ts` (no repo edit). (`reload-dev-evidence.txt`, `reload-start-evidence.txt`)
+> - **A real death exits after the grace (under dev) — PASS.** `taskkill /F /PID 35524` (the `tsx watch` supervisor, no `/T`; its command line was checked) first; the server (pid 39796) then exited by itself with code 0, so my follow-up `taskkill` on it found nothing. `07:24:46.653 [sidecar] server pid=39796 exited with code 0 = 0x00000000 (clean exit)`, `07:25:01.665 … no new server within 15s; sidecar exiting`; sidecar gone 14.4 s after the server kill. No new server started inside the grace, so there was no "stays up" gap to record. (`reload-dev-evidence.txt`)
+> - **A standalone sidecar is untouched — PASS.** With `SIDECAR_PARENT_PID` unset, `npm run tts:sidecar` printed `parent watch off (no valid SIDECAR_PARENT_PID); this sidecar outlives any server` and kept running (pid 3448). A server then started and adopted it (`already listening on :9050 (protocol v1), skipping spawn (current sidecar honoured)`, `supervisor: watching adopted sidecar on :9050 (not our child)`). After the server and its supervisor were killed, the sidecar was still alive and listening 30 s later, with no `sidecar exiting` or `server pid=` line in its terminal. (`standalone-evidence.txt`)
+> - **Ctrl+C in the server's console — STILL OWED.** I attempted it through a spawned console with `AttachConsole` + `GenerateConsoleCtrlEvent(CTRL_C_EVENT)` on `npm --prefix server run dev` (both calls returned true). The npm batch wrapper answered `Terminate batch job (Y/N)?` (no stdin to answer it), the server and sidecar both went down (sidecar logged `server pid=41080 exited with code 1 = 0x00000001 (taskkill, …)` then `Shutting down`), and no `[server] received SIGINT` line was captured. That is not the row's expected path and is not a verdict on it, since the batch prompt, not the server's handler, was probably what ended it. It needs a real interactive console (a human, or driving the `tsx` process directly). (`ctrlc-evidence.txt`)
+>
+> **Row verdict: KEEP — still owed: the Ctrl+C-in-the-server's-console bullet (needs an interactive console)**
 
 ### A124 · The next silent server death leaves its evidence ([#4054](https://github.com/dudarenok-maker/Castwright/issues/4054)) · **the GPU box (Windows), any launcher**
 
@@ -6875,6 +6974,22 @@ Analyse chapter 1 of *The Coalfall Commission* (`server/src/__fixtures__/the-coa
 - Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
 - if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4706):** Current side = this worktree's server (port 8130); base side = `802bab81`, the first parent of PR #3349's merge commit `369b644e`, in a throwaway detached worktree (`wt-onbox-b101-base`, port 8131, own workspace, junctions removed first, worktree removed afterwards). Ollama 0.40.5, `qwen3.5:4b` (digest `2a654d98e6fb`). Book: only "Chapter One — The Knock" of the Coalfall fixture (3,445 chars) imported as a scratch book per side. In the whole fixture the parser's "Chapter 1" is a 38-char title stub, and the 12 k-char third chapter's 4B cast pass had not finished after 4+ min, so the run was paused by hand. Evidence: [`onbox-batch-2-results/B101/`](onbox-batch-2-results/B101/).
+>
+> - **Same character count and attributed-sentence count, current vs base, local — PASS.** Characters: 5 / 5 on current, 5 / 5 on base. Attributed sentences: 55 / 55 on current, 55 / 56 on base (two runs each). The spread is one sentence, in the base side only, which is model non-determinism. Wall time 92-93 s current, 86-101 s base.
+> - **Local per-pass tokens/s populate; `outbox/<id>-stage1-ch1.json` written — PASS.** `analyzer-eval-stats.jsonl` has one record per pass on both sides: stage1 `evalTokS` 62.1 / 62.3 (current), 62.4 / 61.9 (base); stage2 63.8 / 63.8 and 63.7 / 63.6; nonstory 71.4 (current run 1). `server/handoff/outbox/mns_Kwb_apQZn8-stage1-ch1.json` (current) and `mns_ubrRkCDV1R-stage1-ch1.json` (base) were written, together with stage2 and stageescalation files.
+> - **Thinking tag validates on the first attempt — PASS.** `qwen3.5:4b` is the installed thinking tag. No `*attempt1.raw.txt` appeared in either outbox for any of the four local runs.
+> - **Gemini half — NOT RUN to completion (upstream), so STILL OWED.** The key worked (the stream returned chunks), but Gemini would not serve a finished run on either side today:
+>   - `gemma-4-26b-a4b-it`, current: after 695 s, `analyzer-reasoning-overflow` (`thoughtPartsBeforeAnswer=1366`, no answer).
+>   - `gemma-4-31b-it`, current ×3: HTTP 503 "high demand" on cast, plus one 45 s idle stream.
+>   - `gemma-4-31b-it`, base ×1: cast finished (6 characters in 3 m 43 s), then attribution failed with a 503.
+>   - `gemini-2.5-flash` (control), current: cast finished (6 characters), then attribution failed with 503s.
+>   - Because of the 503s, `logs/server.log` carries `[gemini] generate failed … status: 503` lines (11 current, 5 base; all status 503). That is Google capacity, not a regression, so the "no `generate failed` line" criterion could not be assessed. A throttle chip was not observed. Both sides failed the same way, so no behavioural difference between them was seen, but no Gemini characters-and-sentences comparison exists.
+>
+> Cleanup: both servers (and their respawn-looping sidecars) stopped, `ollama stop qwen3.5:4b`, `ollama ps` empty, `nvidia-smi` 0 MiB, base worktree removed.
+>
+> **Row verdict: KEEP — still owed: the Gemini half (identical character count and attributed-sentence count with a `gemma-*` Gemini model, no `[gemini] generate failed` line) — needs a window when Gemini serves `gemma-4-*` without 503s or reasoning overflow**
+
 ### B102 · Capacity recalibration measured before any capacity default changes ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **the 16 GB card, Ollama only**
 
 Wave 2 moved every chunk-budget resolver onto an `EngineCapacity` descriptor, with budgets pinned byte-identical to `main` (`server/src/analyzer/capacity-pinning.test.ts`). This row is therefore not a regression check. It is the measurement the design requires **before** any capacity default changes — `analyzer.ollama.numCtx`, the two `localInputFraction` knobs, or an `/api/show` context clamp.
@@ -6899,6 +7014,14 @@ In both, observe in the server log `[analysis] main run drained manuscript=<id>`
 
 Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 1 and the walkthroughs under it. Clears when both runs are recorded with their drain durations.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4707):** Run on this worktree's server (port 8130, `ANALYZER_PHASE1_MIN_LAG_CHAPTERS=0` so Phase 1 does not wait for a 10-chapter roster lag), Ollama 0.40.5, `qwen3.5:4b` (digest `2a654d98e6fb`) for both phases, RTX 4070 Laptop 8 GB, no TTS engine. Book: Coalfall chapter one repeated under 12 distinct headings, 41,856 bytes / 7,824 words / 12 chapters, imported through `POST /api/import` + `POST /api/books` (an upload through `POST /api/manuscripts` alone leaves no book on disk, and after a Pause every Retry answered `unknown_manuscript`, so that route cannot host this row). Started with `POST /analysis {"phase0Model":…,"phase1Model":…,"fresh":true}`; Phase 1 only begins when Phase 0 finishes (~5 min in). Evidence: [`onbox-batch-2-results/B103/`](onbox-batch-2-results/B103/).
+>
+> - **(a) Pause — drain order and release: PASS. "Still stopping" refusal: NOT OBSERVED (STILL OWED).** `POST /analysis/pause` mid-Phase 1 logged `22:28:07.596 [analysis] aborted …` and `22:28:07.596 [analysis] main run drained manuscript=mns_VtKg7HE7vb`, then the Retry's `[analysis-subset] start` at `22:28:07.756` (`a-pause-drain-log.txt`). **Drain duration: under 1 ms** by the log's timestamps (abort and drained share the same millisecond; the Pause request itself took 216 ms). No `drain deadline exceeded` line anywhere in the server log (0 matches). Control: a Retry that arrived before the Pause took effect was refused `409 main_analysis_running`, `"draining":false`, "The analysis is still running on this book. Pause it first" (`a-retry-before-pause-refusal.txt`) — that is the *running* refusal, not the *still stopping* one. Twelve Retries fired 10 ms apart right behind the Pause all landed after the drain, so the `draining:true` refusal was never seen: against a local model the abort drains in about a millisecond, a window a client cannot hit on this box. After the abort `ollama ps` was empty within 2 s (checked on the subset's own abort, `22:28:51`, not on the main run's, because the Retry had already reloaded the model by then).
+> - **(b) Halt — PASS.** `ollama stop qwen3.5:4b` mid-Phase 1 did **not** throw a chapter on Ollama 0.40.5: the model sat at "Stopping…" for 80+ s while the in-flight requests carried on (`b-ollama-stop-no-throw.txt`), so the halt was forced instead by killing the model runner `llama-server.exe` (pid 15304) at `22:35:35.355`. Chapter 2 failed (`stream error … forcibly closed`), the run halted, and `22:35:36.001 [analysis] main run drained manuscript=mns_VtKg7HE7vb` was logged. **Drain duration: about 0.65 s from the kill, 36 ms from the failure line** (`22:35:35.965`). `ollama ps` showed 0 models from `22:35:38` on and still 0 immediately before the Retry; the Retry's `[analysis-subset] start` followed at `22:36:01.305` and loaded the model afresh (`b-halt-drain-log.txt`, `b-halt-ollama-ps.txt`, `b-retry-sse-head.txt`). No `drain deadline exceeded`. The only main-run line after the failure and before `drained` is "Chapter 1/12 done", i.e. in-flight work finishing; nothing from the main job is logged after the drained line. I read the log for this; I did not diff `analysis-cache`/`manuscript-edits.json` around the drained line, so "no cache or edits write after drained" is log-evidence only.
+> - Cleanup: both runs paused, `ollama stop qwen3.5:4b`, server tree stopped, `ollama ps` empty, `nvidia-smi` 0 MiB.
+>
+> **Row verdict: KEEP — still owed: (a) the Retry refused with the "still stopping" message (draining:true) — the drain finished in under 1 ms, so the window cannot be hit with a local model; it needs a slower-to-abort analyzer or a human on the UI, and the cache/edits-write check needs a file-level diff**
+
 ### B104 · A Resume on a cast-confirmed book with designed voices leaves every designed voice intact ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real book with a confirmed cast and at least one designed voice**
 
 The 2026-07-14 voice-strip incident class (invariant 6). Plan 287 changed what a stopped run persists and what a Resume re-merges, so a real confirmed cast is the only honest test that a Resume does not strip a designed voice. Take a confirmed book with at least one designed voice, note its `cast.json` voice fields (`designModel`, `instruct`, `baseModel`, the `.pt` reference), Pause a Resume part-way, Resume it to the end, then diff `cast.json`. Every designed voice field must be byte-identical.
@@ -6914,6 +7037,19 @@ With `analyzer.ollama.structuredOutput` set to `json`, then `off`, analyse one r
 
 Record the validation-retry count for each mode against the default `schema` run on the same chapter. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §4](3084-openai-analyzer-onbox-acceptance.md).
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4704):** Run on this worktree's server (`npm --prefix server run dev`, port 8130; mode set per run through `ANALYZER_OLLAMA_STRUCTURED_OUTPUT`, server restarted between modes), Ollama 0.40.5, `qwen3.5:4b` (digest `2a654d98e6fb`, 3.4 GB), RTX card 8 GB, no TTS engine resident (the sidecar supervisor respawn-looped on exit code 1 and never loaded a model). Book: the Coalfall fixture, chapter 2 ("Chapter One — The Knock") re-analysed alone via `POST /api/manuscripts/mns_7IWcnMvyKF/analysis/chapters` with `chapterIds:[2],model:"qwen3.5:4b"`. The `server/handoff/inbox/…stage1-ch2.md` file holds the prompt text only, not the HTTP body, so the `format` key was observed on the wire: a logging pass-through proxy on :11500 (`OLLAMA_URL=http://127.0.0.1:11500`) wrote each `/api/chat` body's keys. Evidence: [`onbox-batch-2-results/B105/`](onbox-batch-2-results/B105/).
+>
+> - **`json` request carries `format:"json"` — PASS.** `{"hasFormatKey":true,"format":"json","bodyKeys":["model","messages","stream","format","keep_alive","options","think"]}` (`requests-json.jsonl`). Control, default `schema`: `format` is the schema object (`$schema,type,properties,required,additionalProperties`) (`requests-schema.jsonl`).
+> - **`off` request carries no `format` key — PASS.** `{"hasFormatKey":false,"bodyKeys":["model","messages","stream","keep_alive","options","think"]}` (`requests-off.jsonl`).
+> - **Each chapter validates, never `unknown` — PASS.** All three runs returned the chapter's cast ("6 characters detected" for `schema` and `json`, "5" for `off`) with no `chapter-failed` event and no failure code of any kind; the run then stops with the pre-existing `cast_incomplete` message because chapters 1 and 3 were not part of the subset, which is unrelated to the mode. Every run made exactly one `/api/chat` request.
+> - **Validation-retry count per mode vs the `schema` baseline — PASS (recorded).** `schema` 0, `json` 0, `off` 0: one request each, and no `*.attempt1.raw.txt` appeared in `server/handoff/outbox/` after any run. Mode did not change retry behaviour on this chapter; `off` produced a different cast size (5 vs 6), which is model variance, not a validation difference.
+> - **Rejected (invalid) mode value names `analyzer.ollama.structuredOutput` — PASS, with a behaviour worth knowing.** `ANALYZER_OLLAMA_STRUCTURED_OUTPUT=bogus` logs `[config] ANALYZER_OLLAMA_STRUCTURED_OUTPUT="bogus" is not a valid enum for analyzer.ollama.structuredOutput — ignoring env, falling through to override/default.` (`invalid-mode-config-warning.txt`) and the run then sends the `schema` request. So an invalid value is named but silently downgraded to the default; it is not a failed run.
+> - **A daemon that rejects a mode fails as "analyzer rejected the request" naming the setting — NOT RUN against a real rejecting daemon, PASS against a simulated one.** The real Ollama 0.40.5 accepts all three modes, so no real rejection can be provoked on this box. With the proxy returning HTTP 400 for `format:"json"` (simulated, not a daemon behaviour), the chapter failed as `Ollama (qwen3.5:4b) rejected the request (400): {"error":"invalid format: json (simulated rejection)"}`, code `analyzer-request-rejected`, remediation listing `Ollama structured output (analyzer.ollama.structuredOutput)` first (`sse-simulated-reject-chapter-failed.txt`). This proves the Castwright side of the mapping only; whether any real Ollama build rejects `json` or `off` is not observed.
+>
+> Cleanup: server, proxy and respawn-looping sidecar stopped, `ollama stop qwen3.5:4b` run, `ollama ps` empty, `nvidia-smi` 0 MiB used. Run sheet §4 filled.
+>
+> **Row verdict: KEEP — still owed: the third bullet against a real daemon that rejects a mode (NOT RUN; no Ollama build available here rejects `json` or `off`, only the simulated 400 was exercised)**
+
 ### B106 · The background emotion re-run yields to and is aborted by real work on a real analyzer ([#3435](https://github.com/dudarenok-maker/Castwright/issues/3435), plan [287](../features/287-analysis-failure-phase-markers.md)) · **local Ollama; a real analysed book; a TTS engine only for (c)**
 
 Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-runs emotion detection in the background; the run is meant to stop the moment the user starts real work. Mock mode has no analyzer, so only the box can show the requests actually stop. Take such a book (or set the flag by hand on a copy) and open it:
@@ -6926,17 +7062,6 @@ Opening an analysed book whose `state.json` has `prosodyAnnotated: false` re-run
 - **Reload.** Reload (or close and reopen the app) mid-run, then open the book again. The run starts again, because the run marked the book `false` as it started.
 
 Criteria: [plan 287 "On-box acceptance owed"](../features/287-analysis-failure-phase-markers.md) item 3. Clears when (a), (b), (c), the resume and the reload are recorded with the last prosody log line for each abort.
-
-### B107 · Ollama reasoning levels and Test attribution ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5a) · **local Ollama only; one thinking tag (e.g. `qwen3.5:4b`) and one non-thinking tag**
-
-Ollama accepts a reasoning level only on a model that thinks, so the Test must record each level per model and the editor must offer only what that model's own Test accepted. The automated tests use a fake Ollama. Only a real daemon shows which levels a real tag takes, and whether a re-pulled tag drops the verdicts of its old build.
-
-- **Non-thinking tag.** Test (`scope: all`) records `on`, `low`, `medium` and `high` as `rejected` and `off` and `model-default` as `accepted`.
-- **Thinking tag.** `low` is `accepted`, then appears in that model's own row of Advanced settings' Ollama reasoning list, and not in the non-thinking tag's row.
-- **Refusal.** A run with a `rejected` level fails before the first chapter, with copy naming the level and the date of the Test that recorded that verdict.
-- **A2 — a re-pulled tag.** After a Test (`scope: all`), re-pull the same tag so its build changes (`ollama pull <tag>`; `ollama list` shows a new digest), then Test `scope: configured`. The stored record keeps only the verdict this Test probed; the earlier levels are gone rather than carried onto a different build.
-
-*Needs:* local Ollama with a thinking and a non-thinking tag. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §12. Clears when all four are recorded.
 
 ### B108 · Re-analysis keeps a locked or tuned character's voice whole, and no fresh row inherits a link it was not joined to ([#3920](https://github.com/dudarenok-maker/Castwright/issues/3920), PR [#3934](https://github.com/dudarenok-maker/Castwright/pull/3934)) · **a real local Ollama analyzer; a real two-book series in the workspace**
 
@@ -8087,6 +8212,17 @@ On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Au
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4703):** Run on this worktree's server (`npm --prefix server run dev`, port 8130, real Gemini key, clean settings: `analyzerReasoningByEngine` / `analyzerExtraParamsByEngine` both `{}`), `main` at a3a0ff6e. Chapter: Coalfall fixture text under one heading, "Chapter One — The Knock", **19,928 characters** (manuscript `mns_u4-dsOlJKO`; the fixture alone is 15.6k, so its paragraphs were repeated to reach 20k). Driven with `POST /api/manuscripts/:id/analysis {"model":…,"fresh":true}`. Evidence: [`onbox-batch-2-results/E111/`](onbox-batch-2-results/E111/).
+>
+> - **`gemini-3.6-flash`, Auto — NOT RUN.** Three full attempts over about 12 minutes (19:21, 19:26, 19:34) all ended `503 UNAVAILABLE` ("This model is currently experiencing high demand"; `stream-timing … firstChunkMs=none firstAnswerMs=none`), so the model never returned a chunk. The nearest thinking models also failed: `gemini-3.7-flash` 503 (19:35), `gemini-3.5-flash` `analyzer-daily-quota` ("daily quota exhausted — resets at 2026-11-27T00:00:00.000Z"). No time-to-first-chunk, heartbeat, retry, timeout or request-count figure exists for Auto.
+> - **`gemini-3.6-flash`, 8192 baseline — NOT RUN**, for the same reason (it needs a fresh Auto run to compare against).
+> - **Auto-vs-8192 pass criteria — STILL OWED.** (`analyzer-timeout`-free Auto completion; Auto requests ≤ 8192 requests.)
+> - **`gemma-4-31b-it` at `analyzer.gemini.maxOutputTokens` = 64 — FAIL.** The empty truncation reproduced, twice: `[gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it` (19:28:36 and 19:30:42, `thoughtPartsBeforeAnswer=3`, `firstChunkMs` 19925 / 25110). But neither was followed by a re-split (no `section N/M` line); both runs ended with SSE `analyzer-reasoning-overflow` ("Gemma 4 31B spent its whole output budget reasoning on chapter …"). The row requires a re-split after each `bytes=0` truncation and no `analyzer-reasoning-overflow`, so the Gemma half fails. Filed as bug [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723).
+>
+> The #3084 reporter's stall on a thinking model at Auto remains unproven; the model was unavailable for the whole window and a free-tier daily quota blocked the fallback. Re-run the two Gemini rows when `gemini-3.6-flash` has capacity.
+>
+> **Row verdict: KEEP — still owed: `gemini-3.6-flash` Auto and 8192 runs (503 / daily quota on every thinking model), and the Gemma re-split bullet (FAIL, #4723)**
+
 ### E112 · Gemini `schema` mode on a real key (#3084 PR 3b) · **any machine with a Gemini key; no GPU**
 
 With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one real chapter on `gemma-4-31b-it` and one on `gemini-3.5-flash-lite`. Observe:
@@ -8095,6 +8231,16 @@ With a Gemini key and `analyzer.gemini.structuredOutput` = `schema`, analyse one
 - whether replies conform on the first attempt.
 
 This row does not by itself move Gemini's default: the spec gates that on attribution quality, which PR 3c's Test-action row records. Criteria: [`3084-openai-analyzer-onbox-acceptance.md` §5](3084-openai-analyzer-onbox-acceptance.md).
+
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4701):** Run on this worktree's server (`npm --prefix server run dev`, port 8130, `ANALYZER_GEMINI_STRUCTURED_OUTPUT=schema` in the server environment, real Gemini key), `main` at 035ff80a. Book: the Coalfall fixture, chapter 2 ("Chapter One — The Knock", 3,445 chars) re-analysed alone via `POST /api/manuscripts/mns_7IWcnMvyKF/analysis/chapters` with `chapterIds:[2]`. Both model ids exist on the key (`GET /api/analyzer/models` lists them with `structuredOutput.mode="schema"`, label `schema (partial)`). Evidence: [`onbox-batch-2-results/E112/`](onbox-batch-2-results/E112/).
+>
+> - **Setup finding.** The first run failed with Gemini `400 INVALID_ARGUMENT` on `safety_settings[0].category`: E115's bogus probe value was still saved in this worktree's `analyzerExtraParamsByEngine.gemini` (`gemma-run0-contaminated-by-E115-leftover-sse.txt`). That 400 is the stale custom parameter, not the schema. I cleared it (`PUT /api/user/settings {"analyzerExtraParamsByEngine":{}}`) and every run below is on clean settings.
+> - **`gemini-3.5-flash-lite` — PASS (record).** Schema accepted, no HTTP 400. Debug line: `[gemini] gemini-3.5-flash-lite 1-ch2 schema adapter dropped: properties.characters.items.properties.color.minLength, …id.minLength, …name.minLength, …notLinkedTo.items.properties.bookId.minLength, …notLinkedTo.items.properties.characterId.minLength, …role.minLength` — identical, key for key, to the committed `gemini / stage1Chapter` snapshot (6 keys). First-attempt conformance: yes — 5 characters detected, `stream-timing firstChunkMs=1968`, and none of the stage runner's retry-path warnings (`failed to parse`, `produced no usable response`, `required JSON cleanup`) appear, so validation-retry count = 0 (`flash-sse.txt`, `flash-server-log.txt`).
+> - **`gemma-4-31b-it` — PARTIAL.** The same 6-key dropped list was logged for each of three runs (`gemma-run1-503-sse.txt`, `gemma-sse-2.txt`, `gemma-sse-3.txt`). No HTTP 400 appeared in any of the 9 attempts; every attempt ended `503 UNAVAILABLE` ("This model is currently experiencing high demand"), and the runner's own 3-attempt transient retry exhausted each time. So no reply was ever returned: whether Gemma accepts the adapted schema end to end, and whether its replies conform on the first attempt, were not observed. Not run: a `json`-mode control on `gemma-4-31b-it` to show the 503 is capacity and independent of `schema` mode.
+>
+> The row's criteria are "record", so the numbers above are the deliverable; the Gemma half of the observation is still owed because the model was unavailable for the whole window (about 4 minutes, 18:41–18:46).
+>
+> **Row verdict: KEEP — still owed: `gemma-4-31b-it` accepted-vs-400 and first-attempt conformance (model returned 503 on every attempt; re-run when it has capacity)**
 
 ### E113 · Drifted attribution id resolves correctly on the real Playing with Fire book ([#3440](https://github.com/dudarenok-maker/Castwright/issues/3440)) · **no GPU needed; a real book with a drifted cast id**
 
@@ -8117,6 +8263,18 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 
 *Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §13. Clears when each bullet is recorded.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4702):** Run on this worktree's server (`npm --prefix server run dev`, port 8130, `main` at 035ff80a), real Gemini key. The three models are all exposed to the key (`GET /api/analyzer/models` lists `gemini-3.6-flash`, `gemini-3.8-flash`, `gemma-4-31b-it`), so no substitute model was needed. **The Gemini API was overloaded for most of the run:** Test calls to `gemma-4-31b-it` and `gemini-3.8-flash` returned `503 UNAVAILABLE "This model is currently experiencing high demand"` or hit the 120 s thinking window, on every one of 5 attempts each (`test-attempts.txt`). Evidence: [`onbox-batch-2-results/E114/`](onbox-batch-2-results/E114/). `~/.castwright/user-settings.json` was backed up before the hand edit and restored byte-identical afterwards.
+>
+> - **Test, `gemini-3.6-flash` — PASS.** On the 2nd attempt `scope: all` recorded `reasoning: {model-default, minimal, low, medium, high}` all `accepted` (`test-gemini-3.6-flash-pass.json`; the 3.6 catalog entry offers exactly those five).
+> - **Test, `gemini-3.8-flash` — NOT RUN.** 5 attempts: `503` on the control request (x3), then a 120 s thinking-window stop on the control request and on the `low` step (`test-attempts.txt`). Nothing was recorded by the app. Only the catalog half is observed: its offered levels are `model-default, low, medium, high` with no `minimal` and a test plan of 6 steps (`catalog-offered-levels.txt`). The Advanced settings row was not opened in a browser.
+> - **Test, `gemma-4-31b-it` — NOT RUN.** 5 attempts: `503` on the control request, on the `json` check and on the `on` check (`test-attempts.txt`). Catalog offers `model-default, off, on`.
+> - **A8 — STILL OWED.** The Gemma `on` step never returned a verdict; the only response seen is `503` (inconclusive), which says nothing about `thinkingLevel: HIGH` plus `includeThoughts`.
+> - **Stale `minimal` — PASS (refusal), browser half STILL OWED.** With `analyzerReasoningByEngine.gemini["gemini-3.8-flash"] = "minimal"` hand-set, `POST /api/manuscripts/mns_7IWcnMvyKF/analysis {"model":"gemini-3.8-flash","fresh":true}` answered its first SSE event, before any chapter work: `"code":"analyzer-request-rejected","message":"Analyzer was not started: its saved reasoning level \"minimal\" is not offered for this model. Choose an offered level in Advanced settings → Analyzer request controls.", ... "detail":"setting=reasoning value=minimal engine=gemini when=before-start"` (`stale-minimal-refusal.txt`). Not observed: that the Advanced settings row shows `minimal` selected (browser).
+> - **Thought tokens — NOT RUN.** One single-chapter run on `gemini-3.6-flash` at `model-default` (chapter 3, 12,067 chars) produced no answer: `Gemini 3.6 Flash sent no answer text and stayed silent longer than its thinking window, so the request was stopped after 120 s` (`sub-3.6-flash-default.sse.txt`). No `thoughtsTokenCount` was surfaced, so the `model-default` vs `high` and Gemma `off` vs `on` comparisons have no numbers. The app logs no per-call thought-token count (only `[gemini] stream-timing ... thoughtPartsBeforeAnswer=`), so a clean run would need the usage read from another surface.
+> - **G1 — NOT RUN.** Needs a Gemma `on` run on a cap-exhausting chapter; Gemma returned `503` on every call, so no chapter run was attempted.
+>
+> **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash` and `gemma-4-31b-it`, A8, thought tokens (3.6-flash default vs high; Gemma off vs on), G1, and the Advanced settings row for stale `minimal` (browser); re-run when the Gemini API is not returning 503 for these models**
+
 ### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
 
 The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that it accepts a payload `topK`, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.
@@ -8127,6 +8285,16 @@ The automated tests pin the Gemini `config` merge, the allowlist and the redacti
 - **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
 
 *Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
+
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4700):** Run on this worktree's server (
+pm --prefix server run dev, port 8130, `main` at 035ff80a), real Gemini key, `analysisEngine` set to gemini; the run used `gemini-3.5-flash-lite` (the saved default). Book: the Coalfall fixture, 15,657 bytes, 3 chapters, analysed whole (not a single chapter). Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/). The server ran in dev mode, so its stdout (`server-log-trimmed.txt`) stands in for `logs/server.log`.
+>
+> - **`topK` — PASS.** `{"config":{"topK":40}}` saved (200) and the run completed: 3 chapters, 14 characters, no error event (`case1-topK-sse-trimmed.txt`; log `Chapter 3/3 cast done — 13 characters`). Control: the catalog label for that payload is `"+ custom params"` only.
+> - **Output cap — PASS.** With `{"config":{"maxOutputTokens":2048}}` `GET /api/analyzer/models` gives `requestControlLabelParts=["+ custom params","max output set by custom params"]` for `gemini-3.5-flash-lite`; with `topK` it is `"+ custom params"` alone (`step2-label.txt`). Read from the catalog API, not the browser label.
+> - **Rejected value — FAIL (bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718)).** The redaction part holds: Gemini answered `400 INVALID_ARGUMENT` and the probe value is `[redacted]` in every SSE `chapter-failed` message and every server log line. The string `castwright-onbox-probe-value` appears in neither, nor in `analysis-last-outcome.json`. But all three chapters were classified `"code":"unknown"` (remediation "Click Retry on this chapter…") and the run ended `cast_incomplete`. `analyzer-request-rejected` never appears (`case3-bogus.sse.txt`). The browser view was not opened.
+> - **Protected key — PASS.** Saving `{"config":{"httpOptions":{"baseUrl":"http://127.0.0.1:1"}}}` answered `400`: `Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.` (`step4-save-httpOptions.txt`).
+>
+> **Row verdict: KEEP — still owed: rejected value (the error code is `unknown`, not `analyzer-request-rejected`; #4718)**
 
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 
@@ -8166,6 +8334,22 @@ The automated tests pin the ranking, the repair and the banner against synthetic
 >   - **The loser's queue, backups and exports.**
 >   - **The unlistable directory** (the sweep logging `a directory is unlistable` and changing nothing).
 >   - **The pre-upgrade tab (a browser item) and "nothing a client does ends the gate early"** (see the gate-never-expires bullet above).
+>
+> **2026-11-26 — on-box batch 2 (#4699), Claude Code (`claude` lane, Sonnet 5.5):** Ran the still-owed server-side bullets on a scratch workspace outside the repo (`%TEMP%\e116\ws`, a copy of the Coalfall book plus a twin without `cast.json`), against this worktree's server on port 8130 (app 1.15.0, no GPU; the sidecar crash-looped, which this row does not need). Evidence: [`onbox-batch-2-results/E116/`](onbox-batch-2-results/E116/). No browser was driven.
+>
+> - **PASS: the sweep on a fresh twin, with before and after hashes** (`before-hashes.txt`, `after-hashes.txt`). The winner (the folder with `cast.json`, which sorts LATER than `A Coalfall Twin`) kept `castwright__standalones__the-coalfall-commission`; its `state.json` (`1513f5bc…`) and `cast.json` (`1de3bd6a…`) and its `analysis-state.json` and `dropped-quotes.json` were byte-identical. Only the loser changed: `bookId` → `castwright__standalones__a-coalfall-twin`, `manuscriptId` re-minted `mns_7IWcnMvyKF` → `mns_QJQJjbvqWk`, and its `analysis-state.json` and `dropped-quotes.json` changed (rekeyed). The log carries `[duplicate-bookid] … keeps it (ranked first) … is now "castwright__standalones__a-coalfall-twin"` and `gave 1 book(s) a fresh id on startup`. `server/handoff/cache/` holds both `mns_7IWcnMvyKF.json` and the copy `mns_QJQJjbvqWk.json`. `GET /api/info` listed the repair with relative folders and `reassignedManuscriptId: null` (by design: the shared id was re-minted, not left).
+> - **PASS: DELETE with the correct epoch, on a throwaway pair** (`http-gate.txt`). A second pair (`Throwaway Book` + `A Throwaway Twin`) was repaired at the next boot (new epoch `f90e2f55…`). DELETE with `X-Repair-Epoch: bogus` → `409 book_repaired_reload`; with the real epoch → `204`, the folder gone, and its entry removed from `.repaired-book-gate.json` (the Coalfall entry stayed). Control: the same DELETE with no epoch on the Coalfall id → `409`, no path in the body.
+> - **PASS: the gate's HTTP surface, again with a log:** `PUT …/state` with a cast patch → `409`; `listen-progress`, `shelf-status`, `listen-stats` with no epoch → `400` (past the gate, body validation); `GET …/state` → `200`.
+> - **PASS: the gate survives a restart with no new repair.** After a read of both twins' state, then a restart: no `[duplicate-bookid]` line, `duplicateBookIdRepairs` is `[]`, `repairEpoch` unchanged (`f90e2f55…`), and DELETE with no epoch is still `409`. This also covers the read part of "nothing a client does ends it early". **Not run:** open a series-mate's Voices page (the `/cast` and `/voices` paths I tried under `/api/books/<id>/` are 404, so no read was recorded for them).
+> - **PASS: the unreadable gate file, restore and re-read; NOTE on the window.** With `icacls /deny <user>:(R)` on `.repaired-book-gate.json` and a restart, the log says `[repaired-book-gate] could not read the persisted gate; it will not be overwritten … EPERM`, and the file's hash is unchanged (`e5f167e9…` before and after). After removing the deny, the next gated write picked the entries up: DELETE on the Coalfall id answered `409` and `repairEpoch` was `f90e2f55…` again. **Observation, not a verdict:** during the unreadable boot `repairEpoch` was `null` and a DELETE with no epoch on the repaired Coalfall id was NOT refused — it removed the book (`204`; the folder is gone from the scratch workspace). So an unreadable gate file fails open for the length of that window. The row does not say the gate must hold then, so this is not marked FAIL; a human should decide whether it should. **Not run:** "the file is untouched after a repair in that boot" (no repair happened in that boot).
+> - **PASS: the unlistable directory.** An ACL deny of list-folder on `books/Castwright/Locked Series` (a directory the sweep walks) with a duplicate pair `Dup Three`/`Dup Four` present: the log says `[duplicate-bookid-sweep] a directory is unlistable; skipping the sweep until next startup`, and both `state.json` hashes are unchanged (`b40a5dbf…`, `unlistable2-*.txt`). Control: after the deny was removed, the next boot repaired the pair (`[duplicate-bookid] "castwright__standalones__dup-book-b" …`). An unreadable BOOK folder (deny on `A Throwaway Twin`) is a different case: the sweep still ran and repaired a pair elsewhere in the same workspace (`unlistable-*.txt`); that is not the row's clause.
+> - **PASS: idempotent, with mtimes.** Two consecutive boots after the repair: the second logs no `[duplicate-bookid]` line, `duplicateBookIdRepairs` is `[]`, and every `state.json` mtime is identical (`mtimes-boot10.txt` vs `mtimes-boot11.txt`). The banner half is a browser item (below).
+> - **NOT RUN: Analyse on the loser and on the winner.** No analyzer engine was started; the earlier child rows hit Gemini 503s, and my own unreadable-gate test above deleted the winner from the scratch workspace, so the winner-hash comparison could not be done. Owed.
+> - **STILL OWED (not attempted):** every browser bullet (stale-tab reload and its loop cap, Library Delete, Voices Compare, the series change from a stale page, the banner and its Dismiss, the pre-upgrade tab, the queue from a stale tab); the loser's queue, backups and export under the new id (the scratch twin has no audio, so no export could be made); the days-later gate clause (no clock change); deleting a gated book followed by a fresh import with the same author, series and title; the truncated gate file (already seen on 2026-11-08, not repeated).
+>
+> Everything started was stopped (server pid recorded and killed; port 8130 free) and the ACL denies were removed. The scratch workspace is under `%TEMP%\e116` and is not committed.
+>
+> **Row verdict: KEEP — still owed: Analyse on either twin; every browser bullet (stale-tab reload, reload-loop cap, Library Delete, Voices Compare, series change from a stale page, banner and Dismiss, pre-upgrade tab, queue from a stale tab); the loser's queue, backups and export; the days-later gate clause; delete-then-reimport of a gated book; a series-mate Voices read.**
 
 ### E117 · Windows Node loopback-crash guard: the refusal, the Pinokio "run Update again" message, two-Update convergence and `logs/node-refused.log` ([#4443](https://github.com/dudarenok-maker/Castwright/issues/4443), PR [#4535](https://github.com/dudarenok-maker/Castwright/pull/4535)) · **a Windows box; no GPU needed**
 
@@ -8192,6 +8376,49 @@ The automated tests pin the range list, the message text and the log write again
 8. **Re-pair from the player, then keep listening.** Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.
 
 *Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
+
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4714):** driven on the Android
+> **EMULATOR** (AVD `Pixel_10_Pro`, emulator-5554), **not a real phone**; the APK was a
+> `flutter build apk --debug` from this worktree (`ai.castwright` 1.15.0, versionCode
+> 11500000; a pre-installed 29926722 build and the old
+> `com.audiobookgenerator.audiobook_companion` were uninstalled first), the server was this
+> worktree's `npm run dev` with `LAN_HTTPS=1`, a fixed `LAN_AUTH_TOKEN`, an isolated
+> `APP_RUN_DIR` and the mkcert LAN cert, reached at `https://192.168.86.20:8443`. The
+> emulator started in airplane mode; it was switched off. Pairing used the deep link
+> `https://www.castwright.ai/pair?...` (no camera) and, for the re-pair, the three fields
+> typed by hand. The app pinned the cert by fingerprint tag, so no mkcert CA had to be
+> installed on the emulator. Evidence: `docs/testing/onbox-batch-2-results/E118/`.
+>
+> 1. **Setup — PASS.** Paired (`devices` listed `E118 emulator`, `revoked:false`); *The
+>    Coalfall Commission* downloaded fully ("Downloaded · tap to listen · 3:54"); with Wi-Fi
+>    and mobile data off (`ping 192.168.86.20` → `connect: Network is unreachable`) the
+>    player went to `PLAYING(3)`, position 5817 ms. Gates confirmed open in Settings:
+>    "Auto-sync on reconnect" on, "Only on un-metered Wi-Fi" on (emulated Wi-Fi counts as
+>    unmetered). `step1-offline-play.txt`, `05-settings.png`, `06-offline-play.png`.
+> 2. **Revoke — PASS.** `DELETE /api/devices/0b6323fd660d8ba2` → 200 `{"ok":true}`;
+>    `GET /api/devices` then shows `revoked:true`.
+> 3. **Trigger — PASS.** `adb shell svc wifi enable` after the revoke.
+> 4. **Pairing screen opens — PASS.** About 15 s after Wi-Fi came back the app was on
+>    "Pair a device" with empty fields (`07-after-revoke-wifi-on.png`); the app had been on
+>    the library with nothing streaming.
+> 5. **Re-pair — PASS.** New device `31cac3c0ae912675` minted; the library, the download
+>    and "Continue listening" with the saved progress bar survived (`09-after-repair.png`).
+> 6. **Negative control — PASS** (weaker than the row's wording: Wi-Fi off, mobile data
+>    also off). The app stayed on the library, no pairing screen (`10-offline-no-pairing-screen.png`).
+> 7. **One re-pair, not a loop — PASS, with a caveat.** Two further Wi-Fi off/on cycles
+>    (15 s waits): the app stayed on the library both times (`11-…`, `12-…`). Caveat: the
+>    server's `lastSeenAt` for the new device did not move past pairing time, so the
+>    server side cannot confirm a probe actually reached it during those toggles; step 4
+>    shows the same toggle procedure does trigger the screen when the token is revoked.
+> 8. **Re-pair from the player, then keep listening — STILL OWED.** Needs a human ear for
+>    the last words heard versus the resume position.
+>
+> Notes: the deep link did not prefill the form on the second attempt (the app was already
+> on the pairing screen and the intent went to the running instance) — fields typed by
+> hand; not investigated, may be worth a look if re-pairing from an open pairing screen
+> matters. No defect filed.
+>
+> **Row verdict: KEEP — still owed: bullet 8**
 
 ## Group G — GitHub Actions itself
 

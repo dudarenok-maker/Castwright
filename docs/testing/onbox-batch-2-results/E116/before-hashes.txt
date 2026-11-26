@@ -1,0 +1,8 @@
+The Coalfall Commission: 1513f5bca0419940a93ea232dfb45f7949888e943caa2eac60e51608f131b8cd *state.json
+The Coalfall Commission: 1de3bd6ac1d740362da5a7274e75c6c7fef0bb8303ab92f24fa1536979581ef3 *cast.json
+The Coalfall Commission: 89cdb571324e4bbb32f4cba82bebdcf655861603473acfa80d8925ab4a0f12c6 *analysis-state.json
+The Coalfall Commission: c50807f72c84c6e22d42cb838bd6d1f42c6e6838c48df38f34b548131c2f2d95 *dropped-quotes.json
+A Coalfall Twin: 1513f5bca0419940a93ea232dfb45f7949888e943caa2eac60e51608f131b8cd *state.json
+A Coalfall Twin: sha256sum: cast.json: No such file or directory
+A Coalfall Twin: 89cdb571324e4bbb32f4cba82bebdcf655861603473acfa80d8925ab4a0f12c6 *analysis-state.json
+A Coalfall Twin: c50807f72c84c6e22d42cb838bd6d1f42c6e6838c48df38f34b548131c2f2d95 *dropped-quotes.json

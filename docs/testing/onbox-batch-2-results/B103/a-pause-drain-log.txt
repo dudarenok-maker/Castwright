@@ -1,0 +1,10 @@
+2026-11-26 22:28:07.596 [analysis] aborted mns_VtKg7HE7vb (paused or displaced)
+2026-11-26 22:28:07.596 [analysis] main run drained manuscript=mns_VtKg7HE7vb
+2026-11-26 22:28:07.679 [analysis-subset] request received manuscript="mns_VtKg7HE7vb" model="qwen3.5:4b" chapters=1
+2026-11-26 22:28:07.756 [analysis-subset] start manuscript="mns_VtKg7HE7vb" engine=local model="qwen3.5:4b"
+2026-11-26 22:28:07.810 [analysis-subset] request received manuscript="mns_VtKg7HE7vb" model="qwen3.5:4b" chapters=1
+2026-11-26 22:28:07.811 [analysis-subset] subscribe manuscript="mns_VtKg7HE7vb"
+2026-11-26 22:28:07.943 [analysis-subset] request received manuscript="mns_VtKg7HE7vb" model="qwen3.5:4b" chapters=1
+2026-11-26 22:28:07.943 [analysis-subset] subscribe manuscript="mns_VtKg7HE7vb"
+pause http=200 t=0.215839
+retry 12 http=200 t=25.014255

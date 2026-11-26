@@ -1,0 +1,15 @@
+07:23:49 launcher: npm --prefix server run dev (server alone, per brief) launcher pid=15924
+07:24:21 ready=True status=reachable modelLoaded=False
+07:24:30 before reload: server pid=35684 sidecar pid=9848 kokoroLoaded=True
+07:24:30 touching C:\Claude\Projects\wt-onbox-batch-2\server\src\index.ts
+07:24:42 re-armed seen=True
+07:24:42 2026-11-27 07:24:30.990 [sidecar] server pid=35684 exited with code 1 = 0x00000001 (taskkill, a Node child.kill() (tsx restart, concurrently -k) or process.exit(1))
+07:24:42 2026-11-27 07:24:37.439 [sidecar] a new server took over within 15s; sidecar stays up
+07:24:42 2026-11-27 07:24:37.439 [sidecar] parent watch re-armed: server pid=39796 (was pid=35684)
+07:24:45 after reload: server pid=39796 sidecar pid=9848 (unchanged=True) kokoroLoaded=True status=reachable
+07:24:46 server parent pid=35524 cmd="C:\Program Files\nodejs\node.exe" C:\Claude\Projects\wt-onbox-batch-2\server\node_modules\tsx\dist\cli.mjs watch --include=.env --report-exclude-env --report-e
+07:24:46 taskkill supervisor: SUCCESS: The process with PID 35524 has been terminated.
+07:25:02 sidecar gone 14.4s after server kill
+07:25:02 2026-11-27 07:24:46.653 [sidecar] server pid=39796 exited with code 0 = 0x00000000 (clean exit)
+07:25:02 2026-11-27 07:25:01.665 [sidecar] no new server within 15s; sidecar exiting
+07:25:23 teardown ports checked; nvidia-smi 0 MiB
