@@ -748,15 +748,17 @@ row this register still carries. Keep the table even when it is empty.
 | **D** | Multi-language TTS render + ASR | 1 |
 | **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
-| **H** | No hardware — needs a real CJK manuscript (full-length Han and full-length all-kana ja), not yet in this repo's corpus | 2 |
+| **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**93 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
+> **Last change: 2026-11-26 (#3270, #4673), 93 → 92.** Row **H2** (the lexical-richness floor on a real Han book) DISCHARGED and removed. Outcome: the fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` (an excerpt: chapters 1-21 of the book's 120, 《紅樓夢》, public domain, from Chinese Wikisource, #4671) ran through `detectManuscriptLanguageFromChapters` in the Group H describe block of `server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf, run 2026-11-25) and gave `{ language: 'zh', supported: true, fallback: false }`, the same reversed. gate figures **N = 112,304** tokens and **V = 3,336** distinct (after `dedupeProseUnits` and digit-token removal; no chapter reaches the 20,000-character cap), **R = 9.9547** (`guiraudR`, = 3,336 / sqrt(112,304)); the raw pre-dedupe Han counts are 115,515 characters and 3,348 distinct, against `LEXICAL_RICHNESS_FLOOR` (3): the uncapped gate clears the floor on this excerpt. The excerpt is 112k gate tokens, below the removed row's own N ≈ 400,000 concern, so what closes the row at book scale is a bound, not the measurement: `dedupeProseUnits` keeps the token set a superset as chapters are added, so V can only grow and any longer sample of this book keeps R ≥ 3,336 / √N, which stays above the floor of 3 for every N below about 1.24M tokens; the whole 120-chapter book projects to about 640k tokens, where the bound is R ≥ 4.2. No length-correction follow-up is owed. The test asserts 21 chapters, a raw Han count > 105,000, a raw distinct count > 3,000, and R above the floor. Group H 2 → 1; the group's heading, intro and glance description now describe H1 alone (H1's own text is unchanged). `next-id` for group H stays H101 (IDs are allocate-once; H2 is simply gone). The automated test is the acceptance because H2 needs no GPU, sidecar or analyzer.
+>
+> **Previous change: 2026-11-24 (#898, PR A), 92 → 93.** Row **E118** (the companion handshake 401 opens the pairing screen on a phone with a fully downloaded library, and an off-Wi-Fi phone does not) added. Group E 18 → 19. `next-id` bumped E118 → E119 in the same change (`origin/main`'s `next-id` for group E was also E118). Row is owed; not run here.
 >
 > **Previous change: 2026-11-21 (#1393), 91 → 92.** Row **A134** (the generation path keeps only the Qwen tiers a book's unfinished chapters will use: a pure-1.7B run drops a silent 0.6B character's tier, a mixed-tier book unloads neither early, and the missing-artifact co-residency outcome is recorded) added. Group A 54 → 55. `next-id` bumped A134 → A135 in the same change (relative to `main`, whose `next-id` for group A is A134 after #4533 and #4535). Row is owed; not run here.
 >
@@ -8389,12 +8391,14 @@ and the observations above are recorded here.
 
 ---
 
-## Group H — no hardware, needs a real CJK manuscript this corpus lacks
+## Group H — no hardware, needs a real all-kana Japanese manuscript this corpus lacks
 
 <!-- next-id: H101 -->
 
 Not a hardware prerequisite at all — the blocker is a real-book fixture this
-repo's corpus doesn't currently have. `detectManuscriptLanguageFromChapters`
+repo's corpus doesn't currently have (a full-length all-kana Japanese
+manuscript; the real Han book excerpt H2 needed, chapters 1-21 of 120, is in the
+tree and H2 is discharged). `detectManuscriptLanguageFromChapters`
 needs no GPU, sidecar, or analyzer; it is a pure function over chapter text,
 runnable on any machine (`npx tsx` against a real manuscript's chapters, or a
 dry-run `npm run repair:book-language` pass over a real imported book).
@@ -8472,87 +8476,6 @@ issue is filed with the real numbers that show it isn't.
 > merge: H1 stays owed, narrowed rather than discharged. *Needs* is
 > unchanged: a genuinely full-length (not five-poem-chapter-scale) real
 > all-kana manuscript.
-
-### H2 · Lexical-richness floor still clears on a FULL-LENGTH real Han (Chinese) book (#2256 round 4, finding B3)
-
-`voteLanguage` measures the two lexical gates over the whole joined winning
-sample with **no length cap** — round 2 added one, round 3 removed it
-because the cap made the verdict chapter-order-dependent. Removing it is
-right for that reason, which is measured. What is NOT measured is the thing
-the cap was originally added for: Guiraud's R is `V / sqrt(N)`, and `V`
-saturates while `N` keeps growing, so R decays with book length.
-
-Round 3 recorded a direct measurement of "the corpus's 815k-char worst case
-→ R≈4.4" as the justification for removing the cap. **Round 4 could not
-reproduce that number from anything in this repo, and it has been deleted
-rather than restated.** What this repo could reach before 2026-09-19:
-
-- the two real Coalfall Commission translations (read-only,
-  `C:\AudiobookWorkspace\books\Castwright\Standalones\{煤落的委托,
-  コールフォールの依頼}\manuscript.md`) — R = **12.078** (zh, 4,425 Han
-  characters, 795 distinct) and **27.302** (ja mixed, 7,797 chars);
-- no synthetic substitute: a 30-word-pool zh narrative at 21,711 characters
-  measures R = **1.581** and is *refused*, because a hand-authored pool
-  reaches ~250 distinct Han characters where real Chinese prose reaches
-  thousands. A synthetic large-N fixture measures its own vocabulary, not
-  the gate.
-
-See the 2026-09-19 note below for the real, larger sample this PR added —
-this section is kept as the pre-2026-09-19 baseline, not the current reach.
-
-**What to observe, once a full-length real Chinese manuscript is available:**
-
-1. Import it (or run `detectManuscriptLanguageFromChapters` over its
-   chapters) and record the result — expected
-   `{ language: 'zh', supported: true, fallback: false }`.
-2. Record the **combined character count** of the joined winning sample the
-   gates actually saw (every winning chapter's `prepareSample` output, each
-   capped at 20,000 chars, joined) and the **observed `guiraudR`** on it,
-   against `LEXICAL_RICHNESS_FLOOR` (3).
-3. Record the **distinct-Han-character count** at that scale. That is the
-   `V` in `V / sqrt(N)` and it is the whole question: at N = 400,000, R
-   clears the floor only if V is above ~1,900.
-
-Sourcing a genuine full-length PD Chinese manuscript is tracked as
-[#3270](https://github.com/dudarenok-maker/Castwright/issues/3270); see the
-2026-09-19 note below for the real (narrower) progress made against this row
-already.
-
-*Needs:* one real, legally usable full-length Chinese (Han) manuscript —
-no GPU, sidecar, or analyzer.
-*Cost:* one detection call plus recording three numbers here.
-*Discharges when:* a full-length real Han book has been run through
-detection and its N, V and R are recorded in this row — either confirming
-the uncapped gate clears the floor at book scale, or showing it does not,
-in which case a follow-up issue owns re-introducing a length correction
-that is NOT a chapter-order-dependent prefix.
-
-> **2026-09-19 — NARROWED, not discharged (decomposition pass).** A larger
-> real Han fixture is now in the tree —
-> `server/src/__fixtures__/analects-xueer-zilu.zh.md`, 13 of the
-> Analects' (論語) 20 chapters (學而 through 子路), sourced verbatim from
-> Wikisource (zh.wikisource.org/wiki/論語), public domain (~5th century
-> BCE). `detect-language.test.ts`'s new Group-H describe block runs it
-> through `detectManuscriptLanguageFromChapters` and confirms
-> `{ language: 'zh', supported: true, fallback: false }`, with **9,948
-> combined Han characters, 1,096 distinct** — roughly **2.25x** this row's
-> prior largest real sample (the Coalfall Commission zh translation, 4,425
-> chars / 795 distinct / R=12.078). At this new scale, `guiraudR` measures
-> **~10.97** (raw joined sample; the pipeline's own dedupe runs internally
-> during detection, which is what the `fallback:false` result actually
-> certifies) — still comfortably above `LEXICAL_RICHNESS_FLOOR` (3). Note the
-> two samples being compared (R 12.078→10.97, V 795→1,096 at 4,425→9,948
-> chars) are a modern Chinese translation and a ~5th-century-BCE classical
-> text respectively — different genres with different vocabularies, not two
-> points on one book's growth curve, so this pair doesn't itself establish a
-> length-decay trend; it's cited only as the two largest real samples
-> reachable, not as evidence the decay is gentle.
-> **This is real progress, not a discharge: 9,948 characters is still one to
-> two orders of magnitude short of book scale** (the row's own N=400,000
-> concern, where V needs to clear ~1,900 distinct for R to hold). The
-> question this row exists to answer — does a real 100k+-character novel
-> keep V growing fast enough — remains open. *Needs* is unchanged: a
-> genuinely full-length (not classical-text-scale) real Han manuscript.
 
 ---
 

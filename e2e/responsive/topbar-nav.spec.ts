@@ -4,7 +4,12 @@
  * skip the collapsed assertions on desktop chromium (1280, inline strip), and
  * skip the inline assertion on mobile/tablet. */
 import { test, expect } from '@playwright/test';
-import { waitForListenViewReady } from '../helpers';
+import {
+  goToAnalysing,
+  goToConfirm,
+  waitForConfirmViewReady,
+  waitForListenViewReady,
+} from '../helpers';
 
 test.describe('top-bar nav — responsive collapse', () => {
   test('below xl: inline tabs are hidden and the hamburger drawer reaches Cast', async ({
@@ -57,28 +62,47 @@ test.describe('top-bar nav — responsive collapse', () => {
     await page.goto('/#/');
     const inViewport = async (locator: ReturnType<typeof page.locator>, label: string) => {
       await expect(locator, `${label} present`).toBeVisible();
+      /* The drawer slides in: wait for the box to stop moving before measuring. */
+      let prev = -9999;
+      await expect
+        .poll(async () => {
+          const x = (await locator.boundingBox())?.x ?? -9998;
+          const settled = x === prev;
+          prev = x;
+          return settled;
+        })
+        .toBe(true);
       const box = await locator.boundingBox();
       const vw = page.viewportSize()?.width ?? 0;
       expect(box, `${label} has a box`).not.toBeNull();
       expect(box!.x, `${label} not clipped off the left`).toBeGreaterThanOrEqual(-1);
-      expect(box!.x + box!.width, `${label} not clipped off the right (vw=${vw})`).toBeLessThanOrEqual(
-        vw + 1,
-      );
+      expect(
+        box!.x + box!.width,
+        `${label} not clipped off the right (vw=${vw})`,
+      ).toBeLessThanOrEqual(vw + 1);
     };
 
-    await inViewport(page.getByTestId('topbar-help'), 'Help button');
-    await inViewport(page.getByTestId('theme-toggle'), 'Theme toggle');
-    await inViewport(page.getByRole('button', { name: /account/i }), 'Account avatar');
+    /* #4567 — below sm the inline copies are hidden; Help / Theme / Account
+       are reached through the drawer rows, which must sit inside the viewport. */
+    await expect(page.getByTestId('topbar-help')).toBeHidden();
+    await expect(page.getByTestId('theme-toggle')).toBeHidden();
+    await expect(page.getByRole('button', { name: /^account/i })).toBeHidden();
+
+    await page.getByTestId('topbar-nav-toggle').click();
+    await expect(page.getByTestId('topbar-nav-drawer')).toBeVisible();
+    await inViewport(page.getByTestId('nav-drawer-link-help'), 'Drawer Help row');
+    await inViewport(page.getByTestId('nav-drawer-link-theme'), 'Drawer Theme row');
+    await inViewport(page.getByTestId('nav-drawer-link-account'), 'Drawer Account row');
   });
 
   /* #916 — Admin moves off the inline phone bar into the hamburger drawer (it
-     stays inline at sm+). Confirm it is still reachable on phone via the drawer. */
+     stays inline at sm+, on every stage). Confirm it is still reachable on phone via the drawer. */
   test('phone: Admin is reachable via the hamburger drawer', async ({ page }) => {
     const width = page.viewportSize()?.width ?? 0;
     test.skip(width >= 640, 'phone-only: Admin stays an inline pill at sm+');
 
     await page.goto('/#/');
-    // Inline Admin pill is hidden on a nav stage at phone width.
+    // Inline Admin pill is hidden at phone width.
     await expect(page.getByTestId('topbar-admin-link')).toBeHidden();
 
     await page.getByTestId('topbar-nav-toggle').click();
@@ -86,4 +110,33 @@ test.describe('top-bar nav — responsive collapse', () => {
     await page.getByTestId('nav-drawer-link-admin').click();
     await expect(page).toHaveURL(/#\/admin/);
   });
+
+  /* #4567 — the drawer trigger shifts the right cluster right by ~56px, which
+     used to clip the inline Admin pill ("● Adm") on the no-nav stages. The pill
+     is now hidden below sm on every stage and Admin lives in the drawer. */
+  for (const [name, reach] of [
+    ['analysing', goToAnalysing],
+    [
+      'confirm',
+      async (p: import('@playwright/test').Page) => {
+        await goToConfirm(p);
+        await waitForConfirmViewReady(p);
+      },
+    ],
+  ] as const) {
+    test(`phone: Admin is reachable via the drawer on ${name} (no clipped inline pill)`, async ({
+      page,
+    }) => {
+      const width = page.viewportSize()?.width ?? 0;
+      test.skip(width >= 640, 'phone-only: Admin stays an inline pill at sm+');
+
+      await reach(page);
+      await expect(page.getByTestId('topbar-admin-link')).toBeHidden();
+
+      await page.getByTestId('topbar-nav-toggle').click();
+      await expect(page.getByTestId('topbar-nav-drawer')).toBeVisible();
+      await page.getByTestId('nav-drawer-link-admin').click();
+      await expect(page).toHaveURL(/#\/admin/);
+    });
+  }
 });

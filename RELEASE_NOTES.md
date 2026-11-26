@@ -50,7 +50,9 @@
 - **A repair, Fix-audio run, voice design or emotion take is no longer cut off when another book's render finishes a chapter.** Castwright used to unload the voice models to tidy up the graphics card even while your work was using them. A repair stopped to load its voice again, and a voice design could fail outright with a "voice-design model was unloaded" error, and an emotion take with a "1.7B voice model was unloaded" one. It now leaves the voices alone while other work is running, whether that work is on the everyday voice or the higher-quality one.
 - **A chapter in your queue keeps the voice quality it was queued with.** If you switch between Standard and Quality voice while chapters are waiting, each waiting chapter still renders with the one it was queued under, and it follows the browser that queued it, not the one that happens to pick it up. Castwright now keeps loaded only the voice models your unfinished chapters will use, rather than every model the whole cast could need.
 - **On a phone, the analysing screen's model dropdown no longer spills off the edge.** The model picker now wraps inside its card instead of running past the side of the screen, so the page no longer pans sideways.
+- **On a phone, Help, Theme and Account now live in the menu.** The top bar used to push them off the edge of the screen. They sit in the menu instead, and the analysing screen has a menu button too.
 - **The QA report no longer offers to resume a voice check that is switched off.** It now says Render-integrity QA (voice match) is off, and points you to Advanced settings → Per-sentence QA gates to turn it on.
+- **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
 
 # Castwright 1.15.0
 
