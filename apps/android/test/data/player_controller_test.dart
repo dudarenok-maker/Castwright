@@ -161,6 +161,9 @@ class GatedStore extends MemPlaybackStore {
   Completer<void>? gate;
   final List<String> writes = [];
   bool failNextSave = false;
+
+  /// When set, the NEXT write waits on this, then throws.
+  Completer<void>? holdThenFail;
   @override
   Future<PlaybackPoint?> loadPlayback(String b) async {
     final snap = map[b];
@@ -171,6 +174,12 @@ class GatedStore extends MemPlaybackStore {
 
   @override
   Future<void> savePlayback(String b, String u, int ms, String iso) async {
+    final hold = holdThenFail;
+    if (hold != null) {
+      holdThenFail = null;
+      await hold.future;
+      throw StateError('disk full');
+    }
     if (failNextSave) {
       failNextSave = false;
       throw StateError('disk full');
@@ -411,8 +420,130 @@ void main() {
       store.failNextSave = true;
       await expectLater(pc.saveNow(), throwsStateError);
       t = t.add(const Duration(seconds: 5));
+      engine.emit(const Duration(seconds: 5)); // still playing, as real playback
+      await Future<void>.delayed(Duration.zero);
       await pc.saveNow();
       expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:05.000Z');
+      await pc.dispose();
+    });
+
+    // just_audio pauses itself (headset unplug, Bluetooth / car disconnect,
+    // focus loss) without PlayerController.pause(), so nothing saves at the stop.
+    test('an out-of-band engine stop, then a much later save, stamps the time '
+        'audio stopped — so a sync does not push over a newer remote', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u1', positionMs: 0, listenedAt: '2026-06-01T00:00:00Z');
+      final sync = ResumeSyncService(
+          progressApi: FakeProgressApi(const RemoteProgress(
+              chapterUuid: 'u1',
+              chapterId: 1,
+              currentSec: 3000,
+              updatedAt: '2026-06-06T19:00:00.000Z')),
+          playbackStore: store,
+          chapterIdResolver: (_, _) async => 1);
+      var t = DateTime.utc(2026, 6, 6, 18);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 10));
+      engine.emit(const Duration(seconds: 10)); // autosave 18:00:10
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 5));
+      engine.emit(const Duration(seconds: 15)); // still listening at 18:00:15
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause(); // out-of-band stop at 18:00:15
+      await Future<void>.delayed(Duration.zero);
+      t = DateTime.utc(2026, 6, 6, 19, 30); // app opened + backgrounded later
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, '2026-06-06T18:00:15.000Z');
+      expect(await sync.syncBook('b1'), ResumeAction.pullRemote);
+      await pc.dispose();
+    });
+
+    // just_audio leaves `playing` true after the last chapter ends and the
+    // position stream is distinct(), so no tick arrives after the end.
+    test('a save hours after the book finished stamps the end time', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      var t = DateTime.utc(2026, 6, 6, 18);
+      final pc = make(engine, store,
+          now: () => t,
+          playlists: {
+            'b1': const [PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3')],
+          });
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 10));
+      engine.emit(const Duration(seconds: 10)); // autosave 18:00:10
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 4));
+      engine.emit(const Duration(seconds: 14)); // last tick before the end
+      await Future<void>.delayed(Duration.zero);
+      engine.emitCompletion(); // `playing` stays true, no further ticks
+      await Future<void>.delayed(Duration.zero);
+      t = DateTime.utc(2026, 6, 6, 21);
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, '2026-06-06T18:00:14.000Z');
+      await pc.dispose();
+    });
+
+    test('a failed save of a switched-away book does not mark the new book '
+        'played', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      var t = DateTime.utc(2026, 6, 6, 12);
+      // The tick's save is fire-and-forget, so its rethrow surfaces as an
+      // unhandled error in the zone the position stream was subscribed in;
+      // build the controller there and collect it rather than fail on it.
+      final uncaught = <Object>[];
+      final pc = runZonedGuarded(
+          () => make(engine, store, now: () => t, playlists: {
+                'b1': playlistB1,
+                'b2': const [
+                  PlayableChapter(uuid: 'v1', path: '/b2/v1/audio.mp3')
+                ],
+              }),
+          (e, _) => uncaught.add(e))!;
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      final hold = Completer<void>();
+      store.holdThenFail = hold;
+      t = t.add(const Duration(seconds: 10));
+      engine.emit(const Duration(seconds: 10)); // autosave for b1, held
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause();
+      await pc.openBook('b2'); // car browse: no saveNow on the outgoing book
+      hold.complete(); // b1's write now fails
+      await Future<void>.delayed(Duration.zero);
+      await Future<void>.delayed(Duration.zero);
+      expect(uncaught, isNotEmpty, reason: 'b1\'s write really failed');
+      t = t.add(const Duration(hours: 1));
+      await pc.saveNow(); // b2 was never played
+      expect(store.map['b2']!.listenedAt, isEmpty);
+      await pc.dispose();
+    });
+
+    test('opening another book clears the outgoing book\'s played state',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      final pc = make(engine, store, playlists: {
+        'b1': playlistB1,
+        'b2': const [PlayableChapter(uuid: 'v1', path: '/b2/v1/audio.mp3')],
+      });
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause();
+      await Future<void>.delayed(Duration.zero);
+      await pc.openBook('b2'); // no saveNow on the outgoing book
+      await pc.saveNow();
+      expect(store.map['b2']!.listenedAt, isEmpty);
       await pc.dispose();
     });
 
