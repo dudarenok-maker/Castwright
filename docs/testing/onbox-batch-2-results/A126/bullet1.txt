@@ -1,0 +1,11 @@
+run2 fresh sidecar; baseline smi=0; fp={"seed_mb": 3072, "learned_mb": 0, "sample_count": 0}
+pre-load health qwen_loaded/base17/design: False False False
+cycle 1: smi before=0 after=1873 rise=1873; footprints.qwen={"seed_mb": 3072, "learned_mb": 0, "sample_count": 1}
+pre-load health qwen_loaded/base17/design: False False False
+cycle 2: smi before=113 after=1873 rise=1760; footprints.qwen={"seed_mb": 3072, "learned_mb": 0, "sample_count": 2}
+pre-load health qwen_loaded/base17/design: False False False
+cycle 3: smi before=113 after=1873 rise=1760; footprints.qwen={"seed_mb": 3072, "learned_mb": 0, "sample_count": 3}
+pre-load health qwen_loaded/base17/design: False False False
+cycle 4: smi before=113 after=1873 rise=1760; footprints.qwen={"seed_mb": 3072, "learned_mb": 0, "sample_count": 4}
+pre-load health qwen_loaded/base17/design: False False False
+cycle 5: smi before=113 after=1873 rise=1760; footprints.qwen={"seed_mb": 3072, "learned_mb": 1745, "sample_count": 5}
