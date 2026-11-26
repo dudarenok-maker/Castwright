@@ -231,6 +231,11 @@ class PlayerController {
   /// gate for stamping a fresh `listenedAt` (#4650).
   bool _playedSinceSave = false;
 
+  /// The `listenedAt` last loaded for / persisted by the open book ('' = never
+  /// played). Held here so an idle save keeps the local stamp, not whatever a
+  /// resume-sync pull wrote to the store (#4650).
+  String _lastListenedAt = '';
+
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
@@ -314,12 +319,14 @@ class PlayerController {
     if (_bookId != bookId) {
       _index = -1;
       _playedSinceSave = false; // the outgoing book's playback isn't this book's
+      _lastListenedAt = '';
     }
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
     _playlist = await _loadPlaylist(bookId);
     final saved = await _store.loadPlayback(bookId);
+    _lastListenedAt = saved?.listenedAt ?? '';
     var index = 0;
     if (saved != null) {
       final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
@@ -481,15 +488,31 @@ class PlayerController {
   /// an idle save — close the player, app background, re-pair flush, or a seek
   /// while paused — keeps the stored value so it can never win a sync it hasn't
   /// earned. The position is saved either way.
+  ///
+  /// The idle stamp is the one this controller loaded/last wrote
+  /// ([_lastListenedAt]), never a store read-back: a resume-sync pull may have
+  /// put a remote stamp in the store, and re-stamping the local position with it
+  /// would make the next sync a tie. No await before the write, so call order is
+  /// preserved.
   Future<void> _persist(
       String book, String uuid, int positionMs, DateTime now) async {
-    var iso = now.toUtc().toIso8601String();
-    if (_playedSinceSave) {
+    final played = _playedSinceSave;
+    final prevStamp = _lastListenedAt;
+    final iso = played ? now.toUtc().toIso8601String() : prevStamp;
+    if (played) {
       _playedSinceSave = false;
-    } else {
-      iso = (await _store.loadPlayback(book))?.listenedAt ?? '';
+      _lastListenedAt = iso;
     }
-    await _store.savePlayback(book, uuid, positionMs, iso);
+    try {
+      await _store.savePlayback(book, uuid, positionMs, iso);
+    } catch (_) {
+      // A failed write must not lose "played since the last save".
+      if (played) {
+        _playedSinceSave = true;
+        _lastListenedAt = prevStamp;
+      }
+      rethrow;
+    }
   }
 
   /// Save the active book's position, then restore another book at its own
@@ -566,6 +589,9 @@ class PlayerController {
         }
       }
     }
+    // Listening since the last save, whether or not this tick autosaves — so a
+    // pause/saveNow between autosaves stamps its own time (#4650).
+    if (_engine.playing && book != null) _playedSinceSave = true;
     // ── Autosave-throttle block (unchanged) ──────────────────────────────────
     final last = _lastSave;
     final now = _now();
@@ -574,8 +600,8 @@ class PlayerController {
       final uuid = currentChapterUuid;
       if (book != null && uuid != null) {
         _lastSave = now;
-        // Fire-and-forget; ordering preserved by the single-subscription stream.
-        if (_engine.playing) _playedSinceSave = true;
+        // Fire-and-forget; _persist reaches the store write with no await first,
+        // so call order matches the order of the saves.
         _persist(book, uuid, position.inMilliseconds, now);
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
