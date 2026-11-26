@@ -181,16 +181,3 @@ test('toBacklogIssues skips a project item whose content is a PullRequest or Dra
   assert.equal(featureIssues.length, 1);
   assert.equal(featureIssues[0].id, 'fs-9');
 });
-
-// Regression (#4694): the board's GraphQL page outgrew execFileSync's default
-// 1 MB maxBuffer and `npm run backlog:sync` died with `spawnSync gh ENOBUFS`.
-// fetchFeatureIssues is not exported, so this is a source-level pin (the same
-// shape gh-chokepoint.test.mjs uses): the paging gh() call must pass an
-// explicit maxBuffer well above the 1 MB default.
-test('backlog-sync passes a large maxBuffer on the board GraphQL gh() call (#4694)', async () => {
-  const { readFileSync } = await import('node:fs');
-  const src = readFileSync(new URL('../backlog-sync.mjs', import.meta.url), 'utf8');
-  const m = /const raw = gh\(args,\s*\{[^}]*maxBuffer:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(src);
-  assert.ok(m, 'the paging gh(args, …) call must set maxBuffer');
-  assert.ok(Number(m[1]) >= 16, `maxBuffer ${m[1]} MB is too small`);
-});

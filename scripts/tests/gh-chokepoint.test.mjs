@@ -439,6 +439,25 @@ test('gh() applies scrubGitEnv to the env it passes to execFileSync (#2203 revie
   );
 });
 
+// Regression (#4694): execFileSync's default 1 MB maxBuffer died with
+// `spawnSync gh ENOBUFS` on a board-sized GraphQL page. The default lives in
+// gh() itself (the chokepoint) so every caller gets it; it must sit BEFORE
+// `...rest` so a caller can still override. Comments are stripped first so a
+// commented-out line cannot satisfy the pin.
+test('gh() defaults maxBuffer to >= 16 MB, ahead of ...rest so callers can override (#4694)', () => {
+  const source = readFileSync(ghWrapperPath, 'utf8');
+  const ghSource = extractFunctionSource(source, 'gh')
+    .replace(/\/\*[\s\S]*?\*\//g, '')
+    .replace(/\/\/.*$/gm, '');
+  const m = /maxBuffer:\s*(\d+)\s*\*\s*1024\s*\*\s*1024/.exec(ghSource);
+  assert.ok(m, 'gh() must set a default maxBuffer');
+  assert.ok(Number(m[1]) >= 16, `maxBuffer ${m[1]} MB is too small`);
+  assert.ok(
+    m.index < ghSource.search(/^\s*\.\.\.rest,/m),
+    'maxBuffer default must precede ...rest, or it would clobber a caller override',
+  );
+});
+
 test('ghSpawn() applies scrubGitEnv to the env it passes to spawnSync (#2203 review Finding F1)', () => {
   const source = readFileSync(ghWrapperPath, 'utf8');
   const ghSpawnSource = extractFunctionSource(source, 'ghSpawn');
