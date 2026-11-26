@@ -384,6 +384,32 @@ describe('VoiceLibraryPanel — Cast-view interactions', () => {
     expect(screen.queryByRole('button', { name: /assign marlow/i })).toBeNull();
   });
 
+  it('keeps the card draggable with grab cursors by default (Cast drop-target path)', () => {
+    render(
+      <VoiceCard voice={makeVoice('v_marlow', 'Marlow')} draggingVoiceId={null} setDraggingVoiceId={vi.fn()} />,
+    );
+    const card = screen.getByText('Marlow').closest('div[draggable]')!;
+    expect(card.getAttribute('draggable')).toBe('true');
+    expect(card.className).toMatch(/cursor-grab/);
+  });
+
+  it('is not draggable and shows no grab cursor when draggable={false}', () => {
+    const setDraggingVoiceId = vi.fn();
+    render(
+      <VoiceCard
+        voice={makeVoice('v_marlow', 'Marlow')}
+        draggingVoiceId={null}
+        setDraggingVoiceId={setDraggingVoiceId}
+        draggable={false}
+      />,
+    );
+    const card = screen.getByText('Marlow').closest('div[draggable]')!;
+    expect(card.getAttribute('draggable')).toBe('false');
+    expect(card.className).not.toMatch(/cursor-grab/);
+    fireEvent.dragStart(card, { dataTransfer: { effectAllowed: 'copy', setData: () => {} } });
+    expect(setDraggingVoiceId).not.toHaveBeenCalled();
+  });
+
   it('shows the Assign button and still no drag icon when onTapAssign is set', () => {
     render(
       <VoiceLibraryPanel

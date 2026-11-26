@@ -417,6 +417,9 @@ interface VoiceCardProps {
   isAssigningTarget?: boolean;
   /* Plan 291 (#4031) — read-only cast: not draggable, Assign pill aria-disabled. */
   assignDisabled?: boolean;
+  /* Drag-to-assign (default on). The Voices page has no drop target, so it
+     passes `false` — no draggable attribute, no grab cursor, no dim (#3268). */
+  draggable?: boolean;
   /* Optional status pill rendered beside the character name (plan 117).
      The Qwen "Designed voices" section passes a Designed / Generated badge
      here; preset cards leave it unset. */
@@ -445,9 +448,11 @@ export function VoiceCard({
   onTapAssign,
   isAssigningTarget = false,
   assignDisabled = false,
+  draggable = true,
   badge,
   footer,
 }: VoiceCardProps) {
+  const canDrag = draggable && !assignDisabled;
   const isDragging = draggingVoiceId === (voice.familyKey ?? voice.id);
   const canOpenProfile = !!(character && onOpenProfile);
   const canPlay = !!(character && onPlaySample);
@@ -460,9 +465,9 @@ export function VoiceCard({
       : undefined;
   return (
     <div
-      draggable={!assignDisabled}
+      draggable={canDrag}
       onDragStart={(e) => {
-        if (assignDisabled) return;
+        if (!canDrag) return;
         setDraggingVoiceId(voice.familyKey ?? voice.id);
         e.dataTransfer.effectAllowed = 'copy';
       }}
@@ -480,7 +485,7 @@ export function VoiceCard({
             }
           : undefined
       }
-      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 cursor-grab active:cursor-grabbing transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${selectable && selected ? 'bg-peach/4' : ''}`}
+      className={`group flex items-start gap-3 p-3 rounded-2xl border bg-canvas hover:bg-white border-ink/10 ${canDrag ? 'cursor-grab active:cursor-grabbing' : ''} transition-all ${isDragging ? 'opacity-40 scale-[0.98]' : ''} ${selectable && selected ? 'bg-peach/4' : ''}`}
     >
       {selectable && (
         <span

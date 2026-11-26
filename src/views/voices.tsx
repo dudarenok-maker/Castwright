@@ -1987,6 +1987,7 @@ function VoiceFamilySection({
                         onSelect={onOpenCharacter}
                         selected={selectedVoiceIds.includes(v.familyKey ?? v.id)}
                         onToggleSelect={onToggleSelect}
+                        draggable={false}
                       />
                     ))}
                   </div>
@@ -2144,6 +2145,7 @@ function QwenStatusSection({
                           onSelect={onOpenCharacter}
                           selected={selectedVoiceIds.includes(v.familyKey ?? v.id)}
                           onToggleSelect={onToggleSelect}
+                          draggable={false}
                           badge={
                             group.status === 'designed' ? (
                               <span className="inline-flex items-center gap-1.5">
