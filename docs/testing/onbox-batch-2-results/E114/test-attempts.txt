@@ -1,0 +1,21 @@
+# E114 evidence - Test retries on 2026-11-26 (times local, first lines of each response)
+
+## retry-gemma-4-31b-it.log
+
+19:07:36 attempt 1: {"error":"The json check for gemma-4-31b-it was inconclusive ({\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is currently experiencing  19:08:53 attempt 2: {"error":"The control request to gemma-4-31b-it failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is c 19:10:42 attempt 3: {"error":"The control request to gemma-4-31b-it failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is c 19:12:02 attempt 4: {"error":"The control request to gemma-4-31b-it failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is c GIVEUP 
+
+## retry-gemini-3.8-flash.log
+
+19:04:30 attempt 1: {"error":"The control request to gemini-3.8-flash failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is 19:06:31 attempt 2: {"error":"The control request to gemini-3.8-flash failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is 19:10:19 attempt 3: {"error":"The control request to gemini-3.8-flash failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is 19:15:01 attempt 4: {"error":"The reasoning level \"low\" check for gemini-3.8-flash was inconclusive (gemini gemini-3.8-flash request exceeded its thinking window after 120014 ms.). Nothing was recorded; any earlier tes GIVEUP 
+
+## retry-gemini-3.6-flash.log
+
+19:01:32 attempt 1: {"error":"The control request to gemini-3.6-flash failed, so nothing could be tested: gemini gemini-3.6-flash request exceeded its thinking window after 120021 ms. Nothing was recorded; any earlier te 19:03:53 attempt 2: {"serverUrl":"gemini","testedAt":"2026-11-26T08:02:18.239Z","control":{"ok":true},"structuredOutput":{"schema":{"model-default":"enforced"},"json":{"model-default":"accepted"},"off":{"model-default":" DONE 
+
+## first (un-retried) attempts
+
+test-gemini-3.6-flash.json: {"error":"The control request to gemini-3.6-flash failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\\\",\\n    \\\"status\\\": \\\"UNAVAILABLE\\\"\\n  }\\n}\\n\",\"code\":503,\"status\":\"Service Una
+
+test-gemini-3.8-flash.json: {"error":"The control request to gemini-3.8-flash failed, so nothing could be tested: gemini gemini-3.8-flash request exceeded its thinking window after 120015 ms. Nothing was recorded; any earlier test result is kept.","outcome":"failed"}
+
+test-gemma-4-31b-it.json: {"error":"The control request to gemma-4-31b-it failed, so nothing could be tested: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 503,\\n    \\\"message\\\": \\\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\\\",\\n    \\\"status\\\": \\\"UNAVAILABLE\\\"\\n  }\\n}\\n\",\"code\":503,\"status\":\"Service Unava

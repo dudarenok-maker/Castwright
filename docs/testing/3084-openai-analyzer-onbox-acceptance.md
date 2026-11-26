@@ -458,17 +458,17 @@ a day, and §1 and §2 also use it; run this on a different day.
 - If the Gemma `on` step is `rejected`, record it: the `on` fragment must drop `includeThoughts`, a
   decision to reopen.
 
-Test verdicts: ___ Result:
+Test verdicts: 3.6-flash all five levels accepted; 3.8-flash and gemma-4-31b-it NOT RUN (API 503 / thinking-window stop, 5 attempts each). Result: partial
 
-Thought tokens (`model-default` / `high`; Gemma `off` / `on`): ___ Result:
+Thought tokens (`model-default` / `high`; Gemma `off` / `on`): not measured (3.6-flash chapter run gave no answer inside 120 s). Result: NOT RUN
 
-A8, Gemma `on` step: ___ Result:
+A8, Gemma `on` step: no verdict (503 inconclusive). Result: STILL OWED
 
-G1, `on` vs default: ___ Result:
+G1, `on` vs default: not attempted (Gemma 503). Result: NOT RUN
 
-Stale `minimal` refusal and row: ___ Result:
+Stale `minimal` refusal and row: refusal PASS (analyzer-request-rejected, when=before-start); row display not opened in a browser. Result: partial
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4702) / 2026-11-26 / main 035ff80a; evidence docs/testing/onbox-batch-2-results/E114/
 
 ## 14. Custom payload on real servers — register row A119
 

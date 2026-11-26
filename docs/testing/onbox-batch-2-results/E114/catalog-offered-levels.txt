@@ -1,0 +1,4 @@
+GET /api/analyzer/models (gemini group)
+gemma-4-31b-it offeredReasoningLevels=['model-default', 'off', 'on'] testPlan={'configured': 2, 'all': 5, 'attempts': 3}
+gemini-3.6-flash offeredReasoningLevels=['model-default', 'minimal', 'low', 'medium', 'high'] testPlan={'configured': 2, 'all': 7, 'attempts': 3}
+gemini-3.8-flash offeredReasoningLevels=['model-default', 'low', 'medium', 'high'] testPlan={'configured': 2, 'all': 6, 'attempts': 3}
