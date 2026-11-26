@@ -70,6 +70,11 @@ export function stickyRequest(existing, repo, issue) {
     : { method: 'POST', path: `repos/${repo}/issues/${issue}/comments` };
 }
 
+/** The exact `gh api` argv that writes the sticky comment (method + body field). */
+export function stickyWriteArgs(req, body) {
+  return ['api', req.path, '--method', req.method, '-f', `body=${body}`];
+}
+
 /** The human-visible markdown (used for both the job summary and sticky body). */
 export function renderBody({ behind, today }) {
   const lines = [`### ops-17 deps watch — updated ${today}`, ''];

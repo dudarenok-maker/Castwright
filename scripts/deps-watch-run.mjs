@@ -14,6 +14,7 @@ import {
   renderSummary,
   stickyRequest,
   exitCodeFor,
+  stickyWriteArgs,
 } from './deps-watch.mjs';
 
 // Exit codes are a deliberate, DISJOINT signalling contract (spec):
@@ -57,7 +58,7 @@ try {
 
   // 5. Refresh the sticky comment — edit in place, or create once (decision is pure).
   const req = stickyRequest(existing, repo, issue);
-  gh(['api', req.path, '--method', req.method, '-f', `body=${renderSticky({ behind, today })}`]);
+  gh(stickyWriteArgs(req, renderSticky({ behind, today })));
 
   console.log(`deps-watch: ${behind.length} direct/dev behind`);
   process.exit(exitCodeFor(behind)); // 0 or 1 — the clean path only

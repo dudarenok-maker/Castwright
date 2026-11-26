@@ -10,6 +10,7 @@ import {
   exitCodeFor,
   findSticky,
   stickyRequest,
+  stickyWriteArgs,
   renderSticky,
   renderSummary,
 } from '../deps-watch.mjs';
@@ -89,6 +90,15 @@ test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', 
     method: 'POST',
     path: 'repos/o/r/issues/790/comments',
   });
+});
+
+test('stickyWriteArgs: the exact gh argv for a new (POST) and existing (PATCH) sticky', () => {
+  assert.deepEqual(stickyWriteArgs(stickyRequest(null, 'o/r', '790'), 'B'), [
+    'api', 'repos/o/r/issues/790/comments', '--method', 'POST', '-f', 'body=B',
+  ]);
+  assert.deepEqual(stickyWriteArgs(stickyRequest({ id: 42 }, 'o/r', '790'), 'B'), [
+    'api', 'repos/o/r/issues/comments/42', '--method', 'PATCH', '-f', 'body=B',
+  ]);
 });
 
 test('renderSticky carries the marker and no KGP wording (#4649)', () => {
