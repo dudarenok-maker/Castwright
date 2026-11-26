@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (§12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
+> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
 
 ---
 
@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
+Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 (discharged 2026-11-26 (#4699), removed from the register) result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -387,7 +387,7 @@ Probe at `on`: ___ label: ___ Result:
 
 Run by / date / SHA:
 
-## 12. Ollama reasoning levels and Test attribution — register row B107
+## 12. Ollama reasoning levels and Test attribution — register row B107 (discharged 2026-11-26 (#4699), removed from the register)
 
 **Hardware:** local Ollama only; one thinking tag (for example `qwen3.5:4b`) and one non-thinking tag.
 
