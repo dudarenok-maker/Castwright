@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 11 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 20 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**93 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
+> **Last change: 2026-11-26 (#4650), 92 → 93.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
 >
 > **Previous change: 2026-11-26 (#3270, #4673), 93 → 92.** Row **H2** (the lexical-richness floor on a real Han book) DISCHARGED and removed. Outcome: the fixture `server/src/__fixtures__/hongloumeng-1-21.zh.md` (an excerpt: chapters 1-21 of the book's 120, 《紅樓夢》, public domain, from Chinese Wikisource, #4671) ran through `detectManuscriptLanguageFromChapters` in the Group H describe block of `server/src/tts/detect-language.test.ts` (#4672, commit 15892aaf, run 2026-11-25) and gave `{ language: 'zh', supported: true, fallback: false }`, the same reversed. gate figures **N = 112,304** tokens and **V = 3,336** distinct (after `dedupeProseUnits` and digit-token removal; no chapter reaches the 20,000-character cap), **R = 9.9547** (`guiraudR`, = 3,336 / sqrt(112,304)); the raw pre-dedupe Han counts are 115,515 characters and 3,348 distinct, against `LEXICAL_RICHNESS_FLOOR` (3): the uncapped gate clears the floor on this excerpt. The excerpt is 112k gate tokens, below the removed row's own N ≈ 400,000 concern, so what closes the row at book scale is a bound, not the measurement: `dedupeProseUnits` keeps the token set a superset as chapters are added, so V can only grow and any longer sample of this book keeps R ≥ 3,336 / √N, which stays above the floor of 3 for every N below about 1.24M tokens; the whole 120-chapter book projects to about 640k tokens, where the bound is R ≥ 4.2. No length-correction follow-up is owed. The test asserts 21 chapters, a raw Han count > 105,000, a raw distinct count > 3,000, and R above the floor. Group H 2 → 1; the group's heading, intro and glance description now describe H1 alone (H1's own text is unchanged). `next-id` for group H stays H101 (IDs are allocate-once; H2 is simply gone). The automated test is the acceptance because H2 needs no GPU, sidecar or analyzer.
 >
@@ -7400,7 +7402,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E119 -->
+<!-- next-id: E120 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -8192,6 +8194,16 @@ The automated tests pin the range list, the message text and the log write again
 8. **Re-pair from the player, then keep listening.** Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.
 
 *Needs:* a real Android phone with an APK built from PR A installed (`npm run apk:companion`), and the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.
+
+### E119 · The companion's idle and out-of-band saves never win a resume sync ([#4650](https://github.com/dudarenok-maker/Castwright/issues/4650)) · **a real Android phone; no GPU needed**
+
+`PlayerController` stamps `listenedAt` (the resume-sync last-write-wins key) only when the engine was playing since the previous save, and a played save is stamped with the last time audio was actually playing. The automated tests drive a fake engine. Nothing automated proves the behaviour of the real `JustAudioEngine` (`playing` and the position stream) or of the audio session's own auto-pause on a headset unplug or Bluetooth disconnect.
+
+1. **Setup.** Pair a phone with a server on the LAN and download or stream a book. Have a wired headset or a Bluetooth audio device.
+2. **An idle open does not overwrite a web position.** Listen to the book on the web to a later position than the phone's. On the phone, open the book without pressing play, then background the app (switch to another app). On the server the book's listen position is still the web's, not the phone's older one. Restart the phone app and open the book: it resumes at the web's position.
+3. **An out-of-band stop stamps the stop time.** On the phone, play the book with the headset (or Bluetooth device) connected. Unplug the headset, or disconnect the Bluetooth device, so the player pauses itself without you touching the app. Wait several minutes, then background the app. The stored and server `listenedAt` for the book is the time the audio stopped, not the time you backgrounded the app (read it from the server's listen-progress for the book, or compare against a web listen made in between: listen on the web after the unplug and before backgrounding the phone, and the server must keep the web position).
+
+*Needs:* an Android phone with the companion APK built from this branch's merge (`npm run apk:companion`) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.
 
 ## Group G — GitHub Actions itself
 

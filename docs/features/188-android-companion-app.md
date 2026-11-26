@@ -420,8 +420,13 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   network-delivery time**. Server sanity-bounds `listenedAt`; the app records it at each
   local autosave. **Idle-save rule (#4650):** `listenedAt` advances only when the engine
   was playing since the previous save; a save with no playback since (close player, app
-  background, re-pair flush, a seek while paused) keeps the stored `listenedAt`, so it
-  never wins a sync. The position is still saved. *(Open nuance for the `app-6` plan: position isn't monotonic in time —
+  background, re-pair flush, a seek while paused) writes the stamp the controller holds
+  (loaded when the book opened, updated by played saves — not re-read from the store, so a
+  resume-sync pull cannot turn it into a tie), so it never wins a sync. A played save is
+  stamped with the last time audio was actually playing (set on every position tick while
+  playing and on play/stop edges), not the save's own time, so a save long after an
+  out-of-band stop (headset unplug, Bluetooth, focus loss, a finished book) doesn't claim
+  fresh listening. The position is still saved. *(Open nuance for the `app-6` plan: position isn't monotonic in time —
   consider "furthest position" vs "latest `listenedAt`" when they disagree; LWW-by-listen-
   time is the v1 default.)*
 - **Benefit (user):** in-car progress flows back without clobbering a newer position made
