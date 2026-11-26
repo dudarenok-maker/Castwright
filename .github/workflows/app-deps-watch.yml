@@ -9,7 +9,7 @@ on:
   workflow_dispatch:
   schedule:
     # 1st of the month, 03:00 UTC — off-peak, mirrors cross-os.yml. Monthly
-    # (not weekly): these plugins move on a multi-month cadence.
+    # (not weekly): direct deps rarely fall behind faster than a monthly nudge.
     - cron: '0 3 1 * *'
 
 permissions:
@@ -44,7 +44,7 @@ jobs:
         run: |
           set -uo pipefail
           # Capture pub-outdated's own exit deliberately: 65/69 = tooling fault,
-          # which must surface as exit 2, NOT be conflated with A1's "behind" (1).
+          # which must surface as exit 2, NOT be conflated with the "behind latest" signal (1).
           if ! flutter pub outdated --json --show-all > outdated.json; then
             echo "::error::flutter pub outdated failed (tooling fault, not a deps signal)"
             exit 2

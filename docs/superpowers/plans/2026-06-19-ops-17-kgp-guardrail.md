@@ -395,6 +395,10 @@ export function stickyRequest(existing, repo, issue) {
 superseded by ops-17b (#2104) — see the current doc-comment on `computeTransitions`
 in `scripts/deps-watch.mjs` for what it does now.)
 
+> **Correction (#4649, PR #4697, 2026-11-26):** `computeTransitions` and the whole
+> KGP signal were retired, so that doc-comment no longer exists; #790 is tracked
+> by hand.
+
 - [ ] **Step 4: Run test to verify it passes**
 
 Run: `npm run test:hooks`
