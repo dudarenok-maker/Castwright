@@ -8128,6 +8128,16 @@ The automated tests pin the Gemini `config` merge, the allowlist and the redacti
 
 *Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4700):** Run on this worktree's server (
+pm --prefix server run dev, port 8130, `main` at 035ff80a), real Gemini key, `analysisEngine` set to gemini; the run used `gemini-3.5-flash-lite` (the saved default). Book: the Coalfall fixture, 15,657 bytes, 3 chapters, analysed whole (not a single chapter). Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/). The server ran in dev mode, so its stdout (`server-log-trimmed.txt`) stands in for `logs/server.log`.
+>
+> - **`topK` — PASS.** `{"config":{"topK":40}}` saved (200) and the run completed: 3 chapters, 14 characters, no error event (`case1-topK-sse-trimmed.txt`; log `Chapter 3/3 cast done — 13 characters`). Control: the catalog label for that payload is `"+ custom params"` only.
+> - **Output cap — PASS.** With `{"config":{"maxOutputTokens":2048}}` `GET /api/analyzer/models` gives `requestControlLabelParts=["+ custom params","max output set by custom params"]` for `gemini-3.5-flash-lite`; with `topK` it is `"+ custom params"` alone (`step2-label.txt`). Read from the catalog API, not the browser label.
+> - **Rejected value — FAIL (bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718)).** The redaction part holds: Gemini answered `400 INVALID_ARGUMENT` and the probe value is `[redacted]` in every SSE `chapter-failed` message and every server log line. The string `castwright-onbox-probe-value` appears in neither, nor in `analysis-last-outcome.json`. But all three chapters were classified `"code":"unknown"` (remediation "Click Retry on this chapter…") and the run ended `cast_incomplete`. `analyzer-request-rejected` never appears (`case3-bogus.sse.txt`). The browser view was not opened.
+> - **Protected key — PASS.** Saving `{"config":{"httpOptions":{"baseUrl":"http://127.0.0.1:1"}}}` answered `400`: `Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.` (`step4-save-httpOptions.txt`).
+>
+> **Row verdict: KEEP — still owed: rejected value (the error code is `unknown`, not `analyzer-request-rejected`; #4718)**
+
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 
 The automated tests pin the ranking, the repair and the banner against synthetic books. Only a real library shows that the sweep keeps the id on the right twin, leaves both books intact, and surfaces the notice once. Build the twin by copying a real, rendered book's folder under a second title folder (e.g. `<Author>/<Series>/<Title> copy`) so both `state.json` files carry the same `bookId`; then give one twin the work (rendered audio, a cast) and make the other the emptier one, or leave them equal to exercise the tiebreakers. Start the server (`npm start`) and observe:

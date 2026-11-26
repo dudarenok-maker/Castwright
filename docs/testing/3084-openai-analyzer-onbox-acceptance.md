@@ -542,12 +542,12 @@ Run by / date / SHA:
 - Step 3 returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
 - Step 4 is refused on save, naming `config.httpOptions`.
 
-topK chapter: ___ Result:
+topK chapter: 3 chapters, 14 characters, no error Result: PASS
 
-Label with `maxOutputTokens`: ___ Result:
+Label with `maxOutputTokens`: "+ custom params", "max output set by custom params" Result: PASS
 
-Rejected safetySettings, screen / `server.log`: ___ / ___ Result:
+Rejected safetySettings, screen / `server.log`: value [redacted], code unknown / value [redacted] Result: FAIL (code is unknown, not analyzer-request-rejected; #4718)
 
-`httpOptions` refusal: ___ Result:
+`httpOptions` refusal: 400 naming config.httpOptions Result: PASS
 
-Run by / date / SHA:
+Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main)
