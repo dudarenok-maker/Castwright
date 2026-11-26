@@ -1,0 +1,1 @@
+{"ts":"2026-11-26T09:53:32.170Z","url":"/api/chat","model":"qwen3.5:4b","hasFormatKey":true,"format":"<schema object, keys=$schema,type,properties,required,additionalProperties>","bodyKeys":["model","messages","stream","format","keep_alive","options","think"]}

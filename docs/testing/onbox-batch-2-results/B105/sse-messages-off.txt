@@ -1,0 +1,6 @@
+"message":"Re-analyzing 1 chapter via Ollama (qwen3.5:4b).
+"message":"Chapter 2 — Chapter One — The Knock: detecting cast…
+"message":"Chapter 2 cast — 5 characters detected.
+"message":"Dropped 1 fabricated quote on the-dragon (e.g. \
+"message":"Cast retry done. 2 chapters still need a retry before Phase 1 can run.
+"message":"Phase 0 paused — 2 chapters still need cast detection (Chapter 1, Chapter Two — The Pour). Retry to continue.

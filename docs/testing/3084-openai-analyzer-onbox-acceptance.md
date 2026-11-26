@@ -202,14 +202,14 @@ Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfa
 Prerequisites: a real Ollama daemon with `qwen3.5:4b` pulled; no TTS engine resident.
 
 1. Default (`schema`): analyse chapter one. Note the validation retries (count `*.attempt1.raw.txt` files).
-   Result:
+   Result: chapter validated first attempt, 0 retries (no `*.attempt1.raw.txt`), 6 characters; request `format` was the schema object. Evidence: onbox-batch-2-results/B105/.
 2. Set `analyzer.ollama.structuredOutput` = `json`. Re-analyse chapter one. Confirm the inbox request had `format: "json"`. Note retries and outcome.
-   Result:
+   Result: request body had `format:"json"` (seen on the wire via a logging proxy; the inbox file holds prompt text only); 0 retries, validated, 6 characters.
 3. Set it to `off`. Re-analyse. Confirm the request had no `format` key. Note retries and outcome.
-   Result:
-4. Restore `schema`.
+   Result: request body had no `format` key; 0 retries, validated, 5 characters.
+4. Restore `schema`. Done: mode was set via server env only, nothing saved to restore.
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4704) / 2026-11-26 / fb95fffe (base; evidence commit on chore/ops-onbox-batch-2).
 
 ## 5. Gemini `schema` mode — register row E112
 
