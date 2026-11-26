@@ -1,0 +1,17 @@
+HTTP/1.1 200 OK
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 998
+RateLimit-Reset: 57
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Connection: keep-alive
+X-Accel-Buffering: no
+Date: Thu, 26 Nov 2026 10:21:29 GMT
+Transfer-Encoding: chunked
+
+:ok
+
+data: {"kind":"error","code":"analyzer-request-rejected","message":"Analyzer was not started: its saved reasoning level \"low\" is not offered for this model. Choose an offered level in Advanced settings → Analyzer request controls, or run Test again.","remediation":"Change one of the settings named in the error for this engine or endpoint, then retry. Castwright never retries a rejected request with a setting silently removed.","detail":"setting=reasoning value=low engine=local when=before-start"}
+

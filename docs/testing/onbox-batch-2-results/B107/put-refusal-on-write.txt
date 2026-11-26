@@ -1,0 +1,3 @@
+PUT /api/user/settings {"analyzerReasoningByEngine":{"ollama":{"llama3.1:8b":"low"}},"defaultAnalysisModel":"llama3.1:8b"}
+-> {"error":"Invalid user settings.","issues":[{"code":"custom","path":["analyzerReasoningByEngine","ollama","llama3.1:8b"],"message":"Ollama reasoning \"low\" for llama3.1:8b needs a Test of that model that accepted it (offered now: model-default, off, on)."}]}
+(so the editor/API cannot set a rejected level; the run-time refusal is reached only through a hand-edited or stale settings file, as run sheet 12 step 3 describes)

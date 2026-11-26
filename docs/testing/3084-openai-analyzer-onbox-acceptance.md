@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA: claude lane / 2026-11-26 / main a3a0ff6e
+Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -412,13 +412,13 @@ Run by / date / SHA:
   Test that recorded it.
 - After the re-pull, the record keeps only the verdict this Test probed.
 
-Non-thinking verdicts: ___ Result:
+Non-thinking verdicts: llama3.1:8b — on/low/medium/high rejected, off/model-default accepted. Result: PASS
 
-Thinking-tag verdicts and rows: ___ Result:
+Thinking-tag verdicts and rows: qwen3.5:4b — low accepted; offered in its row, not in llama3.1:8b's. Result: PASS
 
-Refusal copy: ___ Result:
+Refusal copy: level `on`: "Model llama3.1:8b rejected reasoning=on when it was last tested (2026-11-26T10:15:25.431Z)…", before chapter 1. Result: PASS
 
-A2 record after re-pull: ___ Result:
+A2 record after re-pull: tag re-created (new digest) not re-pulled; stored reasoning is only {off: accepted}. Result: PASS
 
 Run by / date / SHA:
 
