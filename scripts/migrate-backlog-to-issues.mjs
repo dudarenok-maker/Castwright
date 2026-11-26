@@ -208,7 +208,7 @@ function parseArgs(argv) {
 
 // Existing issues → { "<prefix>-<n>": number } so re-runs skip already-filed items.
 function listExistingById() {
-  const json = gh(['issue', 'list', '--state', 'all', '--limit', '500', '--json', 'number,title']);
+  const json = gh(['issue', 'list', '--state', 'all', '--limit', '5000', '--json', 'number,title']);
   const byId = new Map();
   const titles = [];
   for (const issue of JSON.parse(json)) {
