@@ -12,6 +12,7 @@ import {
   FEMALE_BUCKET_ID,
   PROTECTED_ROLES_DEFAULT,
 } from './fold-minor-cast.js';
+import { recoverTaggedNarratorLines, taggedSpeakerIds } from './recover-tagged-lines.js';
 import type { CharacterOutput, SentenceOutput } from '../handoff/schemas.js';
 
 function makeChar(id: string, overrides: Partial<CharacterOutput> = {}): CharacterOutput {
@@ -919,6 +920,32 @@ describe('foldMinorCast — keeps a prose-tagged Spanish minor speaker (#1028)',
 
     expect(result.characters.find((c) => c.id === 'berrin')).toBeDefined(); // kept
     expect(result.dropped).not.toContain('Berrin');
+  });
+});
+
+describe('foldMinorCast — a rostered Russian name that is also an oblique pronoun form (#4651)', () => {
+  /* "Ней" (Marshal Ney) is the preposition-only form of она, so it is NOT in RU_STOPWORDS:
+     the shared tag-grammar stoplist also governs narrator-line recovery and this fold. */
+  const roster = [
+    makeChar('narrator'),
+    makeChar('ney', { name: 'Ней', gender: 'male' }), // 0 attributed lines
+  ];
+  const sentences = [
+    { id: 1, chapterId: 1, characterId: 'narrator', text: '«Вперёд, за мной!»' },
+    { id: 2, chapterId: 1, characterId: 'narrator', text: 'Ней сказал это громко.' },
+  ];
+
+  it('taggedSpeakerIds and recoverTaggedNarratorLines still resolve a rostered «Ней»', () => {
+    expect([...taggedSpeakerIds(sentences, roster, 'ru')]).toEqual(['ney']);
+    const rec = recoverTaggedNarratorLines(sentences, roster, 'ru');
+    expect(rec.flipped).toBe(1);
+    expect(rec.byId.get('ney')).toBe(1);
+  });
+
+  it('is NOT folded or dropped by foldMinorCast (language ru)', () => {
+    const result = foldMinorCast(roster, sentences, { minLines: 3, language: 'ru' });
+    expect(result.characters.map((c) => c.id)).toEqual(['narrator', 'ney']);
+    expect(result.dropped).not.toContain('Ней');
   });
 });
 

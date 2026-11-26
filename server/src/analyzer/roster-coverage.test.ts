@@ -325,9 +325,7 @@ describe('roster guard — localized detection (es/ru/fr/de) #1051', () => {
   });
   const RU_OBLIQUE_FORMS = [
     'его', 'ему', 'им', 'ими', 'их',
-    'ним', 'ними', 'них', 'него', 'нему',
-    'нём', 'нем', 'неё', 'нее',
-    'её', 'ее', 'ей', 'ею', 'нею', 'ней',
+    'её', 'ее', 'ей', 'ею',
   ];
   it.each(RU_OBLIQUE_FORMS)('does NOT flag a Russian oblique pronoun "%s" before a speech verb (stopword, #4659)', (form: string) => {
     const w = form[0].toUpperCase() + form.slice(1);

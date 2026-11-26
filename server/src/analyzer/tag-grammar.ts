@@ -50,9 +50,11 @@ const RU_STOPWORDS = [
   'он', 'она', 'оно', 'они', 'это', 'тот', 'та', 'кто', 'что', 'там', 'тут', 'так', 'вот',
   // name-verb openers (finding J)
   'тогда', 'потом', 'затем', 'однако', 'хотя', 'наконец', 'вдруг', 'теперь', 'здесь', 'как',
-  // oblique cases of он/она/оно/они (#4651)
-  'его', 'ему', 'им', 'ими', 'их', 'ним', 'ними', 'них', 'него', 'нему', 'нём', 'нем', 'неё',
-  'нее', 'её', 'ее', 'ей', 'ею', 'нею', 'ней',
+  // oblique cases of он/она/оно/они that can open a sentence (#4651). The н-forms (ним, ними,
+  // них, него, нему, нём, нем, неё, нее, нею, ней) are deliberately omitted: Russian uses them
+  // only after a preposition so they never open a tag, and this list also gates roster
+  // resolution (narrator-line recovery, the minor-cast fold), where «Ней» (Marshal Ney) is a name.
+  'его', 'ему', 'им', 'ими', 'их', 'её', 'ее', 'ей', 'ею',
 ] as const;
 const FR_VERBS = [
   'dit', 'demanda', 'répondit', 'répliqua', 'ajouta', 'cria', 'murmura',
