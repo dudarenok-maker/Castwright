@@ -6875,6 +6875,22 @@ Analyse chapter 1 of *The Coalfall Commission* (`server/src/__fixtures__/the-coa
 - Gemini: no `[gemini] generate failed` line in `logs/server.log`; a throttle chip appears only when the limiter actually waits;
 - if a local thinking tag that emits a leading `<think>` block is installed, its chapter validates on the first attempt (no `attempt1.raw.txt` for that key).
 
+> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4706):** Current side = this worktree's server (port 8130); base side = `802bab81`, the first parent of PR #3349's merge commit `369b644e`, in a throwaway detached worktree (`wt-onbox-b101-base`, port 8131, own workspace, junctions removed first, worktree removed afterwards). Ollama 0.40.5, `qwen3.5:4b` (digest `2a654d98e6fb`). Book: only "Chapter One — The Knock" of the Coalfall fixture (3,445 chars) imported as a scratch book per side. In the whole fixture the parser's "Chapter 1" is a 38-char title stub, and the 12 k-char third chapter's 4B cast pass had not finished after 4+ min, so the run was paused by hand. Evidence: [`onbox-batch-2-results/B101/`](onbox-batch-2-results/B101/).
+>
+> - **Same character count and attributed-sentence count, current vs base, local — PASS.** Characters: 5 / 5 on current, 5 / 5 on base. Attributed sentences: 55 / 55 on current, 55 / 56 on base (two runs each). The spread is one sentence, in the base side only, which is model non-determinism. Wall time 92-93 s current, 86-101 s base.
+> - **Local per-pass tokens/s populate; `outbox/<id>-stage1-ch1.json` written — PASS.** `analyzer-eval-stats.jsonl` has one record per pass on both sides: stage1 `evalTokS` 62.1 / 62.3 (current), 62.4 / 61.9 (base); stage2 63.8 / 63.8 and 63.7 / 63.6; nonstory 71.4 (current run 1). `server/handoff/outbox/mns_Kwb_apQZn8-stage1-ch1.json` (current) and `mns_ubrRkCDV1R-stage1-ch1.json` (base) were written, together with stage2 and stageescalation files.
+> - **Thinking tag validates on the first attempt — PASS.** `qwen3.5:4b` is the installed thinking tag. No `*attempt1.raw.txt` appeared in either outbox for any of the four local runs.
+> - **Gemini half — NOT RUN to completion (upstream), so STILL OWED.** The key worked (the stream returned chunks), but Gemini would not serve a finished run on either side today:
+>   - `gemma-4-26b-a4b-it`, current: after 695 s, `analyzer-reasoning-overflow` (`thoughtPartsBeforeAnswer=1366`, no answer).
+>   - `gemma-4-31b-it`, current ×3: HTTP 503 "high demand" on cast, plus one 45 s idle stream.
+>   - `gemma-4-31b-it`, base ×1: cast finished (6 characters in 3 m 43 s), then attribution failed with a 503.
+>   - `gemini-2.5-flash` (control), current: cast finished (6 characters), then attribution failed with 503s.
+>   - Because of the 503s, `logs/server.log` carries `[gemini] generate failed … status: 503` lines (11 current, 5 base; all status 503). That is Google capacity, not a regression, so the "no `generate failed` line" criterion could not be assessed. A throttle chip was not observed. Both sides failed the same way, so no behavioural difference between them was seen, but no Gemini characters-and-sentences comparison exists.
+>
+> Cleanup: both servers (and their respawn-looping sidecars) stopped, `ollama stop qwen3.5:4b`, `ollama ps` empty, `nvidia-smi` 0 MiB, base worktree removed.
+>
+> **Row verdict: KEEP — still owed: the Gemini half (identical character count and attributed-sentence count with a `gemma-*` Gemini model, no `[gemini] generate failed` line) — needs a window when Gemini serves `gemma-4-*` without 503s or reasoning overflow**
+
 ### B102 · Capacity recalibration measured before any capacity default changes ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 2) · **the 16 GB card, Ollama only**
 
 Wave 2 moved every chunk-budget resolver onto an `EngineCapacity` descriptor, with budgets pinned byte-identical to `main` (`server/src/analyzer/capacity-pinning.test.ts`). This row is therefore not a regression check. It is the measurement the design requires **before** any capacity default changes — `analyzer.ollama.numCtx`, the two `localInputFraction` knobs, or an `/api/show` context clamp.

@@ -1,0 +1,21 @@
+"message":"Discarded cached progress — starting from scratch.
+"message":"Manuscript: 652 words, 3,445 characters, 1 chapter
+"message":"Estimated total time: ~21s (refined after stage 1)
+"message":"Detecting cast chapter-by-chapter across 1 chapter via Ollama (qwen3.5:4b)…
+"message":"Running 1 chapter cast-detection with up to 2 in parallel.
+"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Ollama (qwen3.5:4b)…
+"message":"Attributing 1 chapter with Ollama (qwen3.5:4b)…
+"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)
+"message":"Running 1 chapter with up to 2 in parallel.
+"message":"Chapter 1/1 cast done — 5 characters in 29s
+"message":"Cast detection: peaked at 1 concurrent analyzer call (K=2).
+"message":"Dropped 1 fabricated quote on the-dragon (e.g. \
+"message":"Detected 5 characters: Narrator, Master Oduvan, Maerin the reeve, Wren, The dragon
+"message":"1 chapter identified in 29s
+"message":"Chapter 1/1 — held back 29s to preserve 10-chapter roster lag.
+"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~2m 26s) via Ollama (qwen3.5:4b)…
+"message":"Chapter 1/1 done — 55 sentences in 1m 2s
+"message":"Attribution: peaked at 1 concurrent analyzer call (K=2).
+"message":"Attributed 55 sentences across 1 chapter
+"message":"No library matches yet (voice library matching is not wired up for this slice).
+"message":"Folded 2 background characters (1 → Unknown male, 1 → Unknown female) — names rolled into aliases.

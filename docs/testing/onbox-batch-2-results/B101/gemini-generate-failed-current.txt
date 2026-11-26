@@ -1,0 +1,44 @@
+2026-11-26 21:50:28.416 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 21:50:44.843 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 21:51:06.479 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 21:52:16.558 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 21:52:18.976 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:00:14.066 [gemini] generate failed {
+  model: 'gemini-2.5-flash',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:00:20.775 [gemini] generate failed {
+  model: 'gemini-2.5-flash',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:00:40.632 [gemini] generate failed {
+  model: 'gemini-2.5-flash',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:01:59.088 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:02:16.018 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+2026-11-26 22:02:59.235 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
