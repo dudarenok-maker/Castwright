@@ -240,6 +240,7 @@ class CompanionRuntime {
         }
         return null;
       },
+      onPulled: player.applyPulledResume,
     );
 
     // fs-16: listen-stats flush service — PUTs buffered absolutes to the server.

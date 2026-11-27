@@ -45,6 +45,7 @@ class ResumeSyncService {
     required ListenProgressApi progressApi,
     required PlaybackStore playbackStore,
     required ChapterIdResolver chapterIdResolver,
+    this.onPulled,
   })  : _api = progressApi,
         _store = playbackStore,
         _resolveChapterId = chapterIdResolver;
@@ -52,6 +53,10 @@ class ResumeSyncService {
   final ListenProgressApi _api;
   final PlaybackStore _store;
   final ChapterIdResolver _resolveChapterId;
+
+  /// Awaited after a pull has written the store, so an open player can adopt
+  /// the new resume point.
+  final Future<void> Function(String bookId)? onPulled;
 
   Future<ResumeAction> syncBook(String bookId) async {
     final remote = await _api.getListenProgress(bookId);
@@ -85,6 +90,9 @@ class ResumeSyncService {
             (remote.currentSec * 1000).round(),
             remote.updatedAt,
           );
+          try {
+            await onPulled?.call(bookId);
+          } catch (_) {} // A failed re-seek must not abort syncAll's other books.
         }
       case ResumeAction.noop:
         break;

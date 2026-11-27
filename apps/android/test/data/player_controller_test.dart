@@ -1189,6 +1189,66 @@ void main() {
     });
   });
 
+  // The real service wired to the real controller, as CompanionRuntime does it.
+  group('resume-sync pull reaches the open player (#4722)', () {
+    const local = PlaybackPoint(
+        chapterUuid: 'u1',
+        positionMs: 100000,
+        listenedAt: '2026-06-01T10:00:00.000Z');
+
+    ResumeSyncService syncFor(PlayerController pc, MemPlaybackStore store) =>
+        ResumeSyncService(
+            // Newer than both the saved row and the test clock.
+            progressApi: FakeProgressApi(const RemoteProgress(
+                chapterUuid: 'u1',
+                chapterId: 1,
+                currentSec: 900,
+                updatedAt: '2026-06-07T20:00:00.000Z')),
+            playbackStore: store,
+            chapterIdResolver: (_, _) async => 1,
+            onPulled: pc.applyPulledResume);
+
+    test('paused: re-seeks, and the next play + pause saves from there',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      final sync = syncFor(pc, store);
+      await pc.openBook('b1');
+      expect(engine.position, const Duration(seconds: 100));
+
+      expect(await sync.syncBook('b1'), ResumeAction.pullRemote);
+
+      expect(engine.position, const Duration(seconds: 900));
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      await pc.pause();
+      expect(store.map['b1']!.positionMs, greaterThanOrEqualTo(900000));
+      await pc.dispose();
+    });
+
+    test('playing: the position is left alone, local listening wins', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      final sync = syncFor(pc, store);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      engine.emit(const Duration(seconds: 105));
+      await Future<void>.delayed(Duration.zero);
+      engine.calls.clear();
+
+      expect(await sync.syncBook('b1'), ResumeAction.pullRemote);
+
+      expect(engine.calls, isEmpty, reason: 'no load, no seek');
+      expect(engine.position, const Duration(seconds: 105));
+      await pc.pause();
+      expect(store.map['b1']!.positionMs, 105000);
+      await pc.dispose();
+    });
+  });
+
   group('bookReplayedStream', () {
     test(
         'forward navigation ch0→ch1→ch2 does NOT emit bookReplayedStream',

@@ -34,11 +34,13 @@ class MemPlaybackStore implements PlaybackStore {
 }
 
 ResumeSyncService make(FakeProgressApi api, MemPlaybackStore store,
-        {int? resolvedId = 7}) =>
+        {int? resolvedId = 7,
+        Future<void> Function(String bookId)? onPulled}) =>
     ResumeSyncService(
       progressApi: api,
       playbackStore: store,
       chapterIdResolver: (bookId, uuid) async => resolvedId,
+      onPulled: onPulled,
     );
 
 void main() {
@@ -111,6 +113,83 @@ void main() {
       final action = await make(api, store, resolvedId: null).syncBook('b1');
       expect(action, ResumeAction.pushLocal);
       expect(api.puts, isEmpty); // unresolved -> no PUT
+    });
+  });
+
+  group('ResumeSyncService.onPulled (#4722)', () {
+    const newerRemote = RemoteProgress(
+        chapterUuid: 'u2', chapterId: 3, currentSec: 12, updatedAt: '2026-06-06T13:00:00Z');
+    const olderLocal = PlaybackPoint(
+        chapterUuid: 'u1', positionMs: 1000, listenedAt: '2026-06-06T12:00:00Z');
+
+    test('a pull calls it once with the book id, after the store holds the '
+        'pulled row, and awaits it', () async {
+      final store = MemPlaybackStore()..map['b1'] = olderLocal;
+      final seen = <String>[];
+
+      await make(FakeProgressApi(newerRemote), store, onPulled: (bookId) async {
+        final row = await store.loadPlayback(bookId);
+        await Future<void>.delayed(Duration.zero); // only seen if awaited
+        seen.add('$bookId|${row?.chapterUuid}|${row?.positionMs}');
+      }).syncBook('b1');
+
+      expect(seen, ['b1|u2|12000']);
+    });
+
+    test('a push does not call it', () async {
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u1', positionMs: 30000, listenedAt: '2026-06-06T14:00:00Z');
+      final pulled = <String>[];
+
+      final action = await make(FakeProgressApi(newerRemote), store,
+          onPulled: (b) async => pulled.add(b)).syncBook('b1');
+
+      expect(action, ResumeAction.pushLocal);
+      expect(pulled, isEmpty);
+    });
+
+    test('a noop does not call it', () async {
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u2', positionMs: 12000, listenedAt: '2026-06-06T13:00:00Z');
+      final pulled = <String>[];
+
+      final action = await make(FakeProgressApi(newerRemote), store,
+          onPulled: (b) async => pulled.add(b)).syncBook('b1');
+
+      expect(action, ResumeAction.noop);
+      expect(pulled, isEmpty);
+    });
+
+    test('a pull that writes nothing (no chapter uuid) does not call it',
+        () async {
+      final api = FakeProgressApi(const RemoteProgress(
+          chapterUuid: null, chapterId: 3, currentSec: 12, updatedAt: '2026-06-06T13:00:00Z'));
+      final store = MemPlaybackStore()..map['b1'] = olderLocal;
+      final pulled = <String>[];
+
+      final action = await make(api, store,
+          onPulled: (b) async => pulled.add(b)).syncBook('b1');
+
+      expect(action, ResumeAction.pullRemote);
+      expect(store.saves, isEmpty);
+      expect(pulled, isEmpty);
+    });
+
+    test('a throwing callback does not fail the sync', () async {
+      final store = MemPlaybackStore()..map['b1'] = olderLocal;
+      var calls = 0;
+
+      final action = await make(FakeProgressApi(newerRemote), store,
+          onPulled: (_) async {
+        calls++;
+        throw StateError('re-seek failed');
+      }).syncBook('b1');
+
+      expect(action, ResumeAction.pullRemote);
+      expect(calls, 1, reason: 'the callback really ran and threw');
+      expect(store.saves.single, 'b1|u2|12000|2026-06-06T13:00:00Z');
     });
   });
 }
