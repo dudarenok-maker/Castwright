@@ -1,0 +1,1 @@
+2026-11-26 21:01:50.951 [config] ANALYZER_OLLAMA_STRUCTURED_OUTPUT="bogus" is not a valid enum for analyzer.ollama.structuredOutput — ignoring env, falling through to override/default.

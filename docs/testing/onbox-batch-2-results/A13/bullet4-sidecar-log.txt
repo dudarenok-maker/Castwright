@@ -1,0 +1,6 @@
+2026-11-27 09:07:57.868 [sidecar] Device probe complete: {'kokoro': 'cuda', 'coqui': 'cuda', 'qwen': 'cuda'} (state=ready).
+2026-11-27 09:08:16.430 [sidecar] Pinned TTS.api import order at startup (COQUI_PIN_IMPORT_ORDER=1).
+2026-11-27 09:08:16.430 [sidecar] PRELOAD_COQUI is not set — skipping eager Coqui load; use POST /load to warm the model.
+2026-11-27 09:08:18.461 [sidecar] Loading Coqui model=tts_models/multilingual/multi-dataset/xtts_v2 on device=cuda:0 half=True deepspeed=True …
+2026-11-27 09:08:38.392 [sidecar] Coqui ready — 58 speakers in manifest.
+2026-11-27 09:09:22.568 [sidecar] Coqui model unloaded.

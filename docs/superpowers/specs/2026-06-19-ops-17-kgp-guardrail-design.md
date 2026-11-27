@@ -2,7 +2,7 @@
 
 - **Date:** 2026-06-19 (rev 2 — after two adversarial reviews)
 - **Backlog item:** `ops-17` ([#790](https://github.com/dudarenok-maker/Castwright/issues/790))
-- **Status:** implemented on `feat/app-ops-17-kgp-guardrail`; #790 stays open (blocked upstream)
+- **Status:** implemented on `feat/app-ops-17-kgp-guardrail`; KGP signal retired 2026-11-26 (#4649); #790 stays open (blocked upstream), tracked by hand
 - **Branch:** `feat/app-ops-17-kgp-guardrail`
 
 > **Rev 2 changes (adversarial review):** the monthly red trip is split into two
@@ -297,6 +297,11 @@ not-currently-broken build.
     > with no usable `latest` fails loud (fires) instead of silently trusting
     > it. See `scripts/deps-watch.mjs`'s `computeTransitions` doc-comment for
     > the exact rule.
+
+  > **Correction (#4649, PR #4697, 2026-11-26):** the whole KGP-plugin signal
+  > (A2 banner, transition comment, `computeTransitions`) was retired; the
+  > `computeTransitions` doc-comment referenced above no longer exists. #790 is
+  > tracked by hand. Only the behind-latest check (A1) remains.
   - a KGP plugin **absent** from the payload (current) → treated as at-pin.
   - the `kind` field present (asserts we filter on `kind`, never on a
     non-existent `isDirect`).

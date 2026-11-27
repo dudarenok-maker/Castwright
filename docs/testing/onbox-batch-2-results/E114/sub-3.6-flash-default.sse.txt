@@ -1,0 +1,158 @@
+:ok
+
+data: {"kind":"log","phaseId":0,"message":"Re-analyzing 1 chapter via Gemini 3.6 Flash."}
+
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"gemini-3.6-flash"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 3 — Chapter Two — The Pour: detecting cast…"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":3}
+
+:ka
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 3 cast FAILED — Chapter Two — The Pour: gemini gemini-3.6-flash request exceeded its thinking window after 120005 ms."}
+
+data: {"kind":"chapter-failed","chapterId":3,"message":"Gemini 3.6 Flash sent no answer text and stayed silent longer than its thinking window, so the request was stopped after 120 s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.","code":"analyzer-timeout","remediation":"Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms, a deliberate local ceiling); when a request ran too long overall, raise 'Gemini request ceiling' (ANALYZER_GEMINI_REQUEST_CEILING_MS) in Advanced Settings, or the endpoint's request time limit for an OpenAI-compatible endpoint. Or switch to a faster analyzer model.","phase":"cast"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":0.9500000000000001,"label":"Detecting characters","model":"gemini-3.6-flash"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":1,"label":"Detecting characters","model":"gemini-3.6-flash"}
+
+data: {"kind":"log","phaseId":0,"message":"Cast retry done. 3 chapters still need a retry before Phase 1 can run."}
+
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 3 chapters still need cast detection (Chapter 1, Chapter Two — The Pour, Chapter One — The Knock). Retry to continue."}
+

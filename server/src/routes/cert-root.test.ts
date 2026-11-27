@@ -9,13 +9,28 @@
  * temp dir with a fake rootCA.pem. We don't need a real mkcert install
  * — the cert content is opaque bytes to the route. */
 
-import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
 import request from 'supertest';
 import { certRootRouter, resolveRootCaPath } from './cert-root.js';
+
+/* cert-root.ts shells out via execFileSync from 'node:child_process'. The
+   wrapper delegates to the real one unless a case sets `mkcertStub.caroot`,
+   so every other case in this file still sees the real behaviour. */
+const mkcertStub = vi.hoisted(() => ({ caroot: null as string | null }));
+vi.mock('node:child_process', async (importOriginal) => {
+  const actual = await importOriginal<typeof import('node:child_process')>();
+  return {
+    ...actual,
+    execFileSync: ((...args: Parameters<typeof actual.execFileSync>) =>
+      mkcertStub.caroot !== null
+        ? `${mkcertStub.caroot}\n`
+        : actual.execFileSync(...args)) as typeof actual.execFileSync,
+  };
+});
 
 function makeApp(): Express {
   const app = express();
@@ -113,5 +128,110 @@ describe('GET /cert/root.crt', () => {
     const res = await request(makeApp()).get('/cert/root.crt');
     expect(res.status).toBe(200);
     expect(res.headers['cache-control']).toBe('no-store');
+  });
+});
+
+describe('GET /cert/root.crt 404 probed block, LAN caller (#4572)', () => {
+  const origEnv = process.env.MKCERT_CAROOT;
+  const BACKSLASH = String.fromCharCode(92);
+  const foreignCaroot =
+    process.platform === 'win32'
+      ? ['C:', 'Users', 'alice-secret', 'AppData', 'Local', 'mkcert-missing'].join(BACKSLASH)
+      : '/home/alice-secret/.local/share/mkcert-missing';
+
+  function makeLanApp(): Express {
+    const app = express();
+    app.use((req, _res, next) => {
+      Object.defineProperty(req, 'ip', { value: '192.168.1.50' });
+      next();
+    });
+    app.use('/cert', certRootRouter);
+    return app;
+  }
+
+  /* Hermetic: hide any real mkcert CLI / CA so the route reliably 404s. */
+  const saved: Record<string, string | undefined> = {};
+  let emptyDir: string;
+  beforeEach(() => {
+    emptyDir = mkdtempSync(join(tmpdir(), 'mkcert-lan-test-'));
+    for (const k of ['PATH', 'Path', 'LOCALAPPDATA', 'XDG_DATA_HOME']) saved[k] = process.env[k];
+    process.env.PATH = emptyDir;
+    process.env.LOCALAPPDATA = emptyDir;
+    process.env.XDG_DATA_HOME = emptyDir;
+  });
+  afterEach(() => {
+    for (const [k, v] of Object.entries(saved)) {
+      if (v === undefined) delete process.env[k];
+      else process.env[k] = v;
+    }
+    rmSync(emptyDir, { recursive: true, force: true });
+    if (origEnv === undefined) delete process.env.MKCERT_CAROOT;
+    else process.env.MKCERT_CAROOT = origEnv;
+  });
+
+  it('scrubs a CAROOT outside the server home for a non-loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    expect(res.status).toBe(404);
+    expect(JSON.stringify(res.body)).not.toContain('alice-secret');
+    expect(res.body.probed.env).toBe('<path>');
+  });
+
+  it('keeps the full diagnostic for a loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeApp()).get('/cert/root.crt');
+    expect(res.status).toBe(404);
+    expect(res.body.probed.env).toBe(foreignCaroot);
+  });
+
+  it('leaves no path in the other probes for a non-loopback caller', async () => {
+    process.env.MKCERT_CAROOT = foreignCaroot;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    const { mkcertCli, defaultForPlatform } = res.body.probed;
+    expect(defaultForPlatform).toBe('<path>');
+    if (mkcertCli !== null) {
+      expect(mkcertCli).not.toContain('/');
+      expect(mkcertCli).not.toContain(BACKSLASH);
+      expect(mkcertCli).not.toMatch(/^[A-Za-z]:/);
+    }
+  });
+
+  it('scrubs the mkcert -CAROOT probe for a LAN caller, raw for loopback', async () => {
+    mkcertStub.caroot = foreignCaroot;
+    try {
+      process.env.MKCERT_CAROOT = join(emptyDir, 'definitely-not-there');
+      const lan = await request(makeLanApp()).get('/cert/root.crt');
+      expect(lan.status).toBe(404);
+      expect(lan.body.probed.mkcertCli).toBe('<path>');
+      expect(JSON.stringify(lan.body)).not.toContain('alice-secret');
+      const lo = await request(makeApp()).get('/cert/root.crt');
+      expect(lo.body.probed.mkcertCli).toBe(foreignCaroot);
+    } finally {
+      mkcertStub.caroot = null;
+    }
+  });
+
+  /* Non-absolute hand-typed values have no root scrubChildOutput recognises. */
+  const nonAbsolute = [
+    ['root-relative', BACKSLASH + ['Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+    ['drive-relative', 'C:' + ['Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+    ['dot-dot-relative', ['..', '..', 'Users', 'alice-secret', 'certs'].join(BACKSLASH)],
+  ] as const;
+  for (const [label, value] of nonAbsolute) {
+    it(`scrubs a ${label} MKCERT_CAROOT for a LAN caller, raw for loopback`, async () => {
+      process.env.MKCERT_CAROOT = value;
+      const lan = await request(makeLanApp()).get('/cert/root.crt');
+      expect(lan.status).toBe(404);
+      expect(lan.body.probed.env).toBe('<path>');
+      expect(JSON.stringify(lan.body)).not.toContain('alice-secret');
+      const lo = await request(makeApp()).get('/cert/root.crt');
+      expect(lo.body.probed.env).toBe(value);
+    });
+  }
+
+  it('keeps probed.env null when MKCERT_CAROOT is unset', async () => {
+    delete process.env.MKCERT_CAROOT;
+    const res = await request(makeLanApp()).get('/cert/root.crt');
+    expect(res.body.probed.env).toBeNull();
   });
 });

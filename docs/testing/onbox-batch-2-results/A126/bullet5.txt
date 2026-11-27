@@ -1,0 +1,25 @@
+new sidecar health loaded/b17/design: False False False False
+0 MiB
+mint1 http=200 bytes=268800
+baseline smi before=0 peak=5685 rise=5685
+mint fp {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 1} qwen {'seed_mb': 3072, 'learned_mb': 0, 'sample_count': 0}
+INFO:     127.0.0.1:65467 - "POST /qwen/mint-variant HTTP/1.1" 200 OK
+mint2 (warm, 1.7B resident) http=200
+after mint2 mint fp {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 1}
+health loaded/b17/design: True True False
+mint3 pre health loaded/b17/design: False False False
+mint3 http=200
+mint3 smi before=175 peak=5667 rise=5492
+mint3 fp {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 2}
+mint4 pre health loaded/b17/design: False False False
+mint4 http=200
+mint4 smi before=175 peak=5669 rise=5494
+mint4 fp {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 3}
+mint5 pre health loaded/b17/design: False False False
+mint5 http=200
+mint5 smi before=175 peak=5679 rise=5504
+mint5 fp {'seed_mb': 6144, 'learned_mb': 0, 'sample_count': 4}
+mint6 pre health loaded/b17/design: False False False
+mint6 http=200
+mint6 smi before=207 peak=5701 rise=5494
+mint6 fp {'seed_mb': 6144, 'learned_mb': 5468, 'sample_count': 5}

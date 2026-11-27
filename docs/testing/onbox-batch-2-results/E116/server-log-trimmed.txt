@@ -1,0 +1,20 @@
+=== server2
+2026-11-26 22:40:50.388 [duplicate-bookid] "castwright__standalones__the-coalfall-commission" was carried by both C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\The Coalfall Commission and C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\A Coalfall Twin; C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\The Coalfall Commission keeps it (ranked first),
+2026-11-26 22:40:50.433 [duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).
+=== server3
+2026-11-26 22:41:42.027 [duplicate-bookid] "castwright__standalones__throwaway-book" was carried by both C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Throwaway Book and C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\A Throwaway Twin; C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Throwaway Book keeps it (ranked first), C:\Users\<user>\AppData\Lo
+2026-11-26 22:41:42.034 [duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).
+=== server7
+2026-11-26 22:42:53.079 [repaired-book-gate] could not read the persisted gate; it will not be overwritten Error: EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\Temp\e116\ws\.repaired-book-gate.json'
+  path: 'C:\\Users\\<user>\\AppData\\Local\\Temp\\e116\\ws\\.repaired-book-gate.json'
+2026-11-26 22:42:55.057 [repaired-book-gate] could not read the persisted gate; it will not be overwritten Error: EPERM: operation not permitted, open 'C:\Users\<user>\AppData\Local\Temp\e116\ws\.repaired-book-gate.json'
+  path: 'C:\\Users\\<user>\\AppData\\Local\\Temp\\e116\\ws\\.repaired-book-gate.json'
+=== server8
+2026-11-26 22:43:42.975 [duplicate-bookid] "castwright__standalones__dup-book" was carried by both C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup One and C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup Two; C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup One keeps it (ranked first), C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwr
+2026-11-26 22:43:42.983 [duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).
+=== server9
+2026-11-26 22:44:01.832 [duplicate-bookid-sweep] a directory is unlistable; skipping the sweep until next startup
+=== server10
+2026-11-26 22:44:20.664 [duplicate-bookid] "castwright__standalones__dup-book-b" was carried by both C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup Four and C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup Three; C:\Users\<user>\AppData\Local\Temp\e116\ws\books\Castwright\Standalones\Dup Four keeps it (ranked first), C:\Users\<user>\AppData\Local\Temp\e116\ws\books\
+2026-11-26 22:44:20.671 [duplicate-bookid] gave 1 book(s) a fresh id on startup (see the lines above).
+=== server11

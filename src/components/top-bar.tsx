@@ -10,7 +10,7 @@ import {
   CastwaveMark,
 } from '../lib/icons';
 import { Avatar } from './primitives';
-import { ThemeToggleButton, nextMode, LABELS } from './theme-toggle';
+import { ThemeToggleButton, nextMode, LABELS, SHORT_LABELS } from './theme-toggle';
 import { useAppInfo } from '../lib/use-app-info';
 import { useDismissedVersion, shouldShowUpdateNotice } from '../lib/update-notice';
 import { buildInfo } from '../lib/build-info';
@@ -351,12 +351,11 @@ export function TopBar({
 }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
   /* #4567 — the drawer now renders on EVERY stage, so hasNav only decides WHAT
-     it hosts: nav rows + the phone Admin row on a nav stage (ready / global),
-     the phone-only Help/Theme/Account group everywhere. On phone a nav-stage
-     Admin pill moves into the drawer to reclaim the ~120px the right cluster
-     needs; on a no-nav stage (upload/analysing/confirm) the inline pill stays
-     inline and the drawer's Admin row is hidden, so Admin is never
-     double-shown on phone. */
+     it hosts: nav rows on a nav stage (ready / global), the phone-only
+     Admin/Help/Theme/Account group everywhere. On phone the Admin pill moves
+     into the drawer on every stage (incl. upload/analysing/confirm) to
+     reclaim the ~120px the right cluster needs, so Admin is reachable and
+     never double-shown. */
   const hasNav = stage === 'ready' || showGlobalNav;
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books') onHome();
@@ -391,7 +390,8 @@ export function TopBar({
           only on the Linux mobile-chrome runner, where font metrics render
           wider than Windows/macOS); the middle strip already scrolls. Paired
           with hiding the redundant VersionPill on phone (below) so the clip is
-          pure insurance and never cuts a visible control. clip (not hidden)
+          pure insurance and never cuts a visible control (Admin, Help, Theme and
+          Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
       <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
@@ -471,11 +471,11 @@ export function TopBar({
           </div>
         )}
         <div className="flex items-center gap-3 shrink-0">
-          {/* On phone, a nav-stage Admin pill moves into the hamburger drawer
-              (#916) to reclaim width; on a no-nav stage the drawer carries no
-              Admin row (#4567), so it stays inline and Admin is never
-              unreachable. sm+ always shows it inline. */}
-          <span className={hasNav ? 'hidden sm:inline-flex' : 'inline-flex'}>
+          {/* On phone the Admin pill moves into the hamburger drawer (#916) on
+              EVERY stage (#4567: the drawer now exists on no-nav stages too, and
+              its trigger would otherwise push an inline pill off-screen). sm+
+              always shows it inline. */}
+          <span className="hidden sm:inline-flex">
             <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
           </span>
           {(queueCount ?? 0) > 0 && onOpenQueue && (
@@ -667,24 +667,21 @@ function NavDrawer({
               ))}
               {/* Admin lives inline at sm+ but moves here on phone (#916). Phone
                   -only (sm:hidden) so tablet/desktop keep the single inline pill
-                  and never double-show it. #4567: on a no-nav stage the inline
-                  pill is still inline (hasNav false => inline-flex), so the
-                  drawer row is gated on hasNav to avoid a phone double-show. */}
-              {hasNav && (
-                <button
-                  type="button"
-                  role="menuitem"
-                  data-testid="nav-drawer-link-admin"
-                  aria-current={adminActive ? 'page' : undefined}
-                  onClick={() => select(onOpenAdmin)}
-                  className={`sm:hidden mt-1 pt-3 border-t border-ink/10 w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
-                    adminActive ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
-                  }`}
-                >
-                  <span>Admin</span>
-                  {adminActive && <IconCheck className="w-4 h-4 shrink-0" />}
-                </button>
-              )}
+                  and never double-show it. #4567: rendered on every stage, since
+                  the inline pill is hidden below sm on every stage. */}
+              <button
+                type="button"
+                role="menuitem"
+                data-testid="nav-drawer-link-admin"
+                aria-current={adminActive ? 'page' : undefined}
+                onClick={() => select(onOpenAdmin)}
+                className={`sm:hidden ${rows.length > 0 ? 'mt-1 pt-3 border-t border-ink/10 ' : ''}w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                  adminActive ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
+                }`}
+              >
+                <span>Admin</span>
+                {adminActive && <IconCheck className="w-4 h-4 shrink-0" />}
+              </button>
               {/* #4567 — phone-only replacement cluster for the three controls
                   overflow-x-clip hides below `sm` on every stage: Help (same
                   rows as HelpMenu), Theme (plan 41 logic imported from
@@ -733,12 +730,13 @@ function NavDrawer({
                   type="button"
                   role="menuitem"
                   data-testid="nav-drawer-link-theme"
+                  aria-label={LABELS[currentMode]}
                   onClick={() => {
                     dispatch(uiActions.setThemeOverride(nextMode(currentMode)));
                   }}
                   className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5"
                 >
-                  {LABELS[currentMode]}
+                  {SHORT_LABELS[currentMode]}
                 </button>
                 <button
                   type="button"

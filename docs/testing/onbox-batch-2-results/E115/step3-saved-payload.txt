@@ -1,0 +1,1 @@
+{"gemini":{"config":{"safetySettings":[{"category":"castwright-onbox-probe-value","threshold":"BLOCK_NONE"}]}}}

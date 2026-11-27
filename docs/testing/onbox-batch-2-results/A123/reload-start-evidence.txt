@@ -1,0 +1,10 @@
+07:25:27 launcher: npm start equivalent (start-app.ps1) pid=20104
+07:26:10 ready=True status=reachable modelLoaded=False
+07:26:16 before reload: server pid=41464 sidecar pid=18388 kokoroLoaded=True
+07:26:16 touching C:\Claude\Projects\wt-onbox-batch-2\server\src\index.ts
+07:26:31 re-armed seen=True
+07:26:31 2026-11-27 07:26:17.215 [sidecar] server pid=41464 exited with code 1 = 0x00000001 (taskkill, a Node child.kill() (tsx restart, concurrently -k) or process.exit(1))
+07:26:31 2026-11-27 07:26:25.378 [sidecar] a new server took over within 15s; sidecar stays up
+07:26:31 2026-11-27 07:26:25.379 [sidecar] parent watch re-armed: server pid=35736 (was pid=41464)
+07:26:34 after reload: server pid=35736 sidecar pid=18388 (unchanged=True) kokoroLoaded=True status=reachable
+07:26:56 teardown ports checked; nvidia-smi 0 MiB

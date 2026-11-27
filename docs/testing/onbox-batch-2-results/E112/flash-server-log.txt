@@ -1,0 +1,15 @@
+2026-11-26 18:42:54.980 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Cast retry done. 3 chapters still need a retry before Phase 1 can run.
+2026-11-26 18:43:03.662 [analysis-subset] request received manuscript="mns_7IWcnMvyKF" model="gemini-3.5-flash-lite" chapters=1
+2026-11-26 18:43:03.668 [analysis-subset] start manuscript="mns_7IWcnMvyKF" engine=gemini model="gemini-3.5-flash-lite"
+2026-11-26 18:43:03.712 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Re-analyzing 1 chapter via Gemini 3.5 Flash Lite.
+2026-11-26 18:43:03.720 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Chapter 2 — Chapter One — The Knock: detecting cast…
+2026-11-26 18:43:03.730 [gemini] gemini-3.5-flash-lite 1-ch2 schema adapter dropped: properties.characters.items.properties.color.minLength, properties.characters.items.properties.id.minLength, properties.characters.items.properties.name.minLength, properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength, properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength, properties.characters.items.properties.role.minLength
+2026-11-26 18:43:08.918 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=1968 firstAnswerMs=1968 thoughtPartsBeforeAnswer=0
+2026-11-26 18:43:08.935 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Chapter 2 cast — 5 characters detected.
+2026-11-26 18:43:08.938 [analysis] narrator has 2 evidence quote(s); analyzer prompt asks for ≥3.
+2026-11-26 18:43:08.939 [analysis] master-oduvan has 2 evidence quote(s); analyzer prompt asks for ≥3.
+2026-11-26 18:43:08.939 [analysis] wren has 2 evidence quote(s); analyzer prompt asks for ≥3.
+2026-11-26 18:43:08.939 [analysis] maerin has 2 evidence quote(s); analyzer prompt asks for ≥3.
+2026-11-26 18:43:08.939 [analysis] coalfall has 2 evidence quote(s); analyzer prompt asks for ≥3.
+2026-11-26 18:43:08.940 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Quote-match tiers: verbatim=6, terminal-punct=1, segments=3.
+2026-11-26 18:43:08.951 [analysis-subset] mns=mns_7IWcnMvyKF phase=0 Cast retry done. 2 chapters still need a retry before Phase 1 can run.

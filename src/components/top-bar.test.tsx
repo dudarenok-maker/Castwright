@@ -49,6 +49,7 @@ import {
   type DesignPillData,
   type ExportPillData,
 } from './top-bar';
+import { LABELS } from './theme-toggle';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
 import { tourSlice } from '../store/tour-slice';
@@ -965,6 +966,20 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     }
   });
 
+  it('no-nav stage: the drawer Admin row has no divider/top padding (it is the first child, #4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const admin = screen.getByTestId('nav-drawer-link-admin');
+    expect(admin.className).not.toMatch(/border-t/);
+    expect(admin.className).not.toMatch(/\bpt-3\b/);
+  });
+
+  it('nav stage: the drawer Admin row keeps the divider above it (#4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-admin').className).toMatch(/border-t/);
+  });
+
   it('keeps the drawer unmounted until the trigger is clicked (duplicate-selector safety)', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
     expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
@@ -1079,9 +1094,8 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
 /* #916 — phone inline-chrome trim. The responsive nav's 44px hamburger pushed
    the right cluster (Help / Theme / Account) ~120px past the 412px phone
    viewport, where overflow-x-clip hid them. The fix reclaims width by hiding the
-   wordmark text on phone and moving the Admin pill into the drawer on nav stages
-   (it stays inline where the drawer has no Admin row — no-nav stages, #4567 —
-   and inline at sm+). jsdom can't see
+   wordmark text on phone and moving the Admin pill into the drawer on every
+   stage (#4567: the drawer now exists on no-nav stages too; inline at sm+). jsdom can't see
    the pixel clip, so these lock the responsive-class intent + drawer reachability;
    the geometry itself is gated by e2e/responsive/topbar-nav.spec.ts at Pixel-7. */
 describe('TopBar — #916 phone inline-chrome trim', () => {
@@ -1100,18 +1114,23 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     expect(wrap.className).toMatch(/sm:inline-flex/);
   });
 
-  it('keeps the inline Admin pill on phone for a no-nav stage (upload) so it is never stranded', () => {
-    renderWithStore(<TopBar {...makeProps({ stage: 'upload', view: null })} />);
-    const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
-    expect(wrap.className).not.toMatch(/hidden/);
-    expect(wrap.className).toMatch(/inline-flex/);
-  });
+  it.each(['upload', 'analysing', 'confirm'] as const)(
+    'hides the inline Admin pill below sm on the no-nav %s stage (the drawer carries it, #4567)',
+    (kind) => {
+      renderWithStore(<TopBar {...makeProps({ stage: kind, view: null })} />);
+      const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
+      expect(wrap.className).toMatch(/\bhidden\b/);
+      expect(wrap.className).toMatch(/sm:inline-flex/);
+    },
+  );
 
   it.each(['books', 'upload', 'analysing'] as const)(
     'hides the inline Help / Theme / Account below sm on the %s stage (#4567)',
     (kind) => {
       renderWithStore(
-        <TopBar {...makeProps({ stage: kind, view: kind === 'books' ? makeProps().view : null })} />,
+        <TopBar
+          {...makeProps({ stage: kind, view: kind === 'books' ? makeProps().view : null })}
+        />,
       );
       const help = screen.getByTestId('topbar-help').closest('span.hidden');
       const theme = screen.getByTestId('theme-toggle').closest('span.hidden');
@@ -1154,18 +1173,21 @@ describe('TopBar — #4567 drawer on every stage (phone-only Help/Theme/Account)
     expect(screen.getByTestId('topbar-nav-toggle').className).toMatch(/xl:hidden/);
   });
 
-  it('opening the drawer on analysing shows the five phone rows and no nav/Admin row', () => {
-    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
-    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
-    const d = within(screen.getByTestId('topbar-nav-drawer'));
-    for (const id of PHONE_ROWS) {
-      expect(d.getByTestId(`nav-drawer-link-${id}`)).toBeInTheDocument();
-    }
-    expect(d.queryByTestId('nav-drawer-link-admin')).not.toBeInTheDocument();
-    /* no Cast/Books destination rows leak onto a no-nav stage */
-    expect(d.queryByTestId('nav-drawer-link-cast')).not.toBeInTheDocument();
-    expect(d.queryByTestId('nav-drawer-link-books')).not.toBeInTheDocument();
-  });
+  it.each(['analysing', 'confirm'] as const)(
+    'opening the drawer on %s shows the five phone rows plus a phone-only Admin row, and no nav rows',
+    (kind) => {
+      renderWithStore(<TopBar {...makeProps({ stage: kind, view: null })} />);
+      fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+      const d = within(screen.getByTestId('topbar-nav-drawer'));
+      for (const id of PHONE_ROWS) {
+        expect(d.getByTestId(`nav-drawer-link-${id}`)).toBeInTheDocument();
+      }
+      expect(d.getByTestId('nav-drawer-link-admin').className).toMatch(/sm:hidden/);
+      /* no Cast/Books destination rows leak onto a no-nav stage */
+      expect(d.queryByTestId('nav-drawer-link-cast')).not.toBeInTheDocument();
+      expect(d.queryByTestId('nav-drawer-link-books')).not.toBeInTheDocument();
+    },
+  );
 
   it('on ready the drawer shows the nav rows, the Admin row, and the five phone rows', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
@@ -1228,6 +1250,17 @@ describe('TopBar — #4567 drawer on every stage (phone-only Help/Theme/Account)
     expect(store.getState().ui.themeOverride).toBe('light');
     expect(screen.getByTestId('topbar-nav-drawer')).toBeInTheDocument();
     expect(screen.getByTestId('nav-drawer-link-theme').textContent).toMatch(/light/i);
+  });
+
+  it('Theme row shows the short label as text, keeps the full LABELS string as aria-label, and both track a click', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = () => screen.getByTestId('nav-drawer-link-theme');
+    expect(row().textContent).toBe('Theme: System');
+    expect(row()).toHaveAttribute('aria-label', LABELS.system);
+    fireEvent.click(row());
+    expect(row().textContent).toBe('Theme: Light');
+    expect(row()).toHaveAttribute('aria-label', LABELS.light);
   });
 
   it('Account row fires onOpenAccount, closes the drawer, and is aria-current on the account stage', () => {

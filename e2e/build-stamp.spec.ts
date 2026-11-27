@@ -1,4 +1,3 @@
-import { readFileSync } from 'node:fs';
 import { test, expect } from '@playwright/test';
 
 /**
@@ -6,31 +5,20 @@ import { test, expect } from '@playwright/test';
  *
  * The footer lives in the app shell (layout.tsx), so it must render at the
  * bottom of every stage. This asserts it's present + visible on the cold-boot
- * books library and carries the real injected version from package.json.
+ * books library and carries the pinned e2e stamp.
  *
  * The e2e webServer runs `vite --mode e2e` — a DEV server, so
- * `import.meta.env.DEV === true` and the VERBOSE stamp renders. We assert only
- * version + the `·` separator; SHA / branch / build-time vary per checkout and
- * CI environment, so pinning them would be flaky.
- *
- * The version is read from package.json at test time (not hard-coded) so a
- * `bump-version` run can't leave this assertion stale — that's exactly how
- * the v1.5.0 bump left it asserting v1.4.0.
+ * `import.meta.env.DEV === true` and the VERBOSE stamp renders. `.env.e2e`
+ * sets VITE_PIN_BUILD_STAMP=1 (#4566), which pins version, SHA, branch and
+ * build time in vite.config.ts, so the footer text is exact and identical on
+ * every checkout (and the stats visual baselines stay deterministic).
  */
-const expectedVersion = (
-  JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as {
-    version: string;
-  }
-).version;
-
 test.describe('build-version footer', () => {
-  test('renders in the shell with the app version on the books library', async ({ page }) => {
+  test('renders in the shell with the pinned stamp on the books library', async ({ page }) => {
     await page.goto('/');
 
     const footer = page.getByTestId('build-stamp');
     await expect(footer).toBeVisible();
-    await expect(footer).toContainText(`v${expectedVersion}`);
-    /* Verbose (dev) stamp uses the middle-dot separator. */
-    await expect(footer).toContainText('·');
+    await expect(footer).toHaveText('Castwright · v0.0.0-e2e · e2e0000 · e2e · 00:00');
   });
 });
