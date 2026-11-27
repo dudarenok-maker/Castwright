@@ -17,6 +17,7 @@
 import type { Middleware } from '@reduxjs/toolkit';
 import { castActions, type CastState } from './cast-slice';
 import type { ManuscriptState } from './manuscript-slice';
+import type { LoadedBookState } from './loaded-book-slice';
 import type { UiState } from './ui-slice';
 import type { ChangeLogState } from './change-log-slice';
 import type { BookMetaState } from './book-meta-slice';
@@ -40,6 +41,8 @@ interface PersistableRootState {
   ui: UiState;
   cast: CastState;
   manuscript: ManuscriptState;
+  /* Optional: a hand-built store without it records no loaded book. */
+  loadedBook?: LoadedBookState;
   changeLog: ChangeLogState;
   bookMeta: BookMetaState;
   /* Optional like `settings`: only the toast title fallback reads it. */
@@ -931,11 +934,14 @@ export const persistenceMiddleware: Middleware = (store) => {
     /* #3624 — the patch is built from the slices as they are RIGHT NOW, but
        the target comes from the stage. Between `openBook(A)` and A's hydrate
        the stage says A while cast / manuscript / changeLog still hold B, so an
-       edit here would write B's content into A's files. `manuscript.bookId` is
-       the loaded-book identity (cast and changeLog hydrate in the same tick, so
-       it stands in for them — same proxy as preview-thunks, #3594). Drop the
-       write silently. A null identity records no other book, so it persists. */
-    const held = after.manuscript?.bookId ?? null;
+       edit here would write B's content into A's files. The loaded-book pair
+       records which book they hold (#3519): it moves with the manuscript
+       slice's identity actions, and a book read hydrates cast and changeLog in
+       the same tick. The pair is not persisted, so after a reload it is empty
+       while redux-persist has restored `manuscript.bookId`; that id is read
+       when the pair names no book. Drop the write silently. With neither naming
+       one, nothing records another book, so it persists. */
+    const held = after.loadedBook?.loadedBookId ?? after.manuscript?.bookId ?? null;
     if (held !== null && held !== bookId && !BOOK_KEYED_RULES.has(type)) {
       console.warn(
         `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,

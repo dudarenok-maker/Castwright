@@ -913,11 +913,12 @@ export function Layout() {
   useEffect(() => {
     if (!bookId) return;
     if (stageKind !== 'analysing' && stageKind !== 'confirm' && stageKind !== 'ready') return;
-    /* Short-circuit only when the slice already reflects THIS book. Without
-       the bookId check, navigating from analysing Book A to generating Book B
-       (e.g. the user clicks the global generation pill) would skip the disk
-       hydrate and leave every per-book slice — manuscript title, chapters,
-       cast, revisions, change log, book meta — pinned to Book A.
+    /* Short-circuit only when the slices already hold THIS book, as the
+       loaded-book pair records it (#3519). Without that check, navigating from
+       analysing Book A to generating Book B (e.g. the user clicks the global
+       generation pill) would skip the disk hydrate and leave every per-book
+       slice — manuscript title, chapters, cast, revisions, change log, book
+       meta — pinned to Book A.
 
        The cast-non-empty leg only applies to confirm/ready: analysing
        legitimately starts with cast=[] and grows it via streamed Phase 0a
@@ -930,8 +931,11 @@ export function Layout() {
        to the fetch so disk fills the gap. */
     const needsCast = stageKind === 'confirm' || stageKind === 'ready';
     const castReady = !needsCast || characters.length > 0;
+    /* The pair starts empty after a reload, so that read is a full one even
+       when the restored manuscript fields name this book. */
+    const { loadedBookId } = selectLoadedBook(store.getState());
     const manuscriptReady =
-      !!(manuscript.bookId === bookId && manuscript.manuscriptId && manuscript.title) && castReady;
+      !!(loadedBookId === bookId && manuscript.manuscriptId && manuscript.title) && castReady;
     /* Plan 286 — revisions are server-owned: every arrival at a book re-reads
        them (one GET), so a take recorded while the user was away (#3397) — or a
        delete + re-import in another tab — is picked up. A stage change within
@@ -1009,8 +1013,12 @@ export function Layout() {
                  then persist to it, not get dropped by the gate). Read live;
                  a null identity means an in-flight upload of THIS book, so
                  leave the slices on their in-memory defaults. Non-persisted
-                 actions only: the reset itself must never PUT (#3376). */
-              const held = store.getState().manuscript.bookId;
+                 actions only: the reset itself must never PUT (#3376).
+                 #3519 — the loaded-book pair names the held book. After a
+                 reload it is empty while the restored manuscript id still
+                 names one, so that id is read when the pair names none. */
+              const now = store.getState();
+              const held = selectLoadedBook(now).loadedBookId ?? now.manuscript.bookId;
               if (held !== null && held !== bookId) {
                 resetBookSlices(dispatch, bookId);
               }

@@ -9,6 +9,7 @@ const { putBookState } = vi.hoisted(() => ({
 vi.mock('../lib/api', () => ({ api: { putBookState } }));
 
 import { persistenceMiddleware, PERSISTED_ACTION_TYPES } from './persistence-middleware';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 
 const EXEMPT = 'bookMeta/commitDraft';
 const SENTINELS = ['b-only', 'b-ev', 'B-ONLY', 'B-KEY', 'B title'];
@@ -31,11 +32,19 @@ const meta = (title: string) => ({
   notes: '',
 });
 
-const state = (stageBookId: string, heldBookId: string | null) => ({
+/* `heldBookId` seeds the loaded-book pair (#3519). `manuscriptBookId` defaults
+   to the STAGE's book, so the two records differ whenever the pair names another
+   book: a gate that read the manuscript slice instead would let those through. */
+const state = (
+  stageBookId: string,
+  heldBookId: string | null,
+  manuscriptBookId: string | null = stageBookId,
+) => ({
   ui: { stage: { bookId: stageBookId } },
+  loadedBook: loadedPair({ bookId: heldBookId }),
   cast: { characters: [{ id: 'b-only' }] },
   manuscript: {
-    bookId: heldBookId,
+    bookId: manuscriptBookId,
     sentences: [{ id: 1, chapterId: 1, text: 'B-ONLY' }],
     mergedAwayKeys: ['B-KEY'],
   },
@@ -112,10 +121,26 @@ describe('persistenceMiddleware — book-switch gate (#3624)', () => {
   it.each(['cast/updateCharacter', 'manuscript/setSentenceCharacter', 'changeLog/appendLogEvent'])(
     '(d) control: no recorded identity still persists %s',
     async (type) => {
-      await fire(state('A', null), type);
+      await fire(state('A', null, null), type);
       expect(callsTo('A')).toHaveLength(1);
     },
   );
+
+  /* #3519 — a page reload: redux-persist restores `manuscript.bookId`, the pair
+     starts empty until a read lands. */
+  describe('(f) reload shape: empty pair, restored manuscript id names B, stage is A', () => {
+    it.each(PERSISTED_ACTION_TYPES.filter((t) => t !== EXEMPT))('%s is dropped', async (type) => {
+      await fire(state('A', null, 'B'), type);
+      expect(putBookState).not.toHaveBeenCalled();
+      expect(warn).toHaveBeenCalledWith(expect.stringContaining('slices hold book B'));
+    });
+  });
+
+  it('(g) control: the pair wins over a manuscript id naming another book', async () => {
+    await fire(state('A', 'A', 'B'), 'cast/updateCharacter');
+    expect(callsTo('A')).toHaveLength(1);
+    expect(warn).not.toHaveBeenCalled();
+  });
 
   it('(e) race shape: B edit persists to B, post-openBook edit does not reach A', async () => {
     await fire(state('B', 'B'), 'cast/updateCharacter');

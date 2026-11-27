@@ -15,7 +15,7 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
 import { Provider } from 'react-redux';
-import { configureStore, type Middleware } from '@reduxjs/toolkit';
+import { configureStore, type Middleware, type UnknownAction } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route, useOutletContext } from 'react-router';
 import { useEffect } from 'react';
 
@@ -318,7 +318,28 @@ import { BooksRoute } from '../routes/index';
 import { AccountView } from '../views/account';
 import { createBookStateDisk } from '../test/book-state-disk';
 
-function makeStore(extraMiddleware: Middleware[] = []) {
+/* #3519 — the identity records a test preloads to make them differ, which no
+   action can: a page reload restores the manuscript slice's identity fields and
+   leaves the loaded-book pair empty. */
+type ReloadedState = {
+  manuscript: ReturnType<typeof manuscriptSlice.reducer>;
+  loadedBook?: ReturnType<typeof loadedBookSlice.reducer>;
+};
+/* The two identity reducers, starting at `start` when a test gives one. */
+const identityReducers = (start?: ReloadedState) => ({
+  manuscript: (state = start?.manuscript, action: UnknownAction) =>
+    manuscriptSlice.reducer(state, action),
+  loadedBook: (state = start?.loadedBook, action: UnknownAction) =>
+    loadedBookSlice.reducer(state, action),
+});
+const restoredManuscript = (bookId: string) => ({
+  ...manuscriptSlice.getInitialState(),
+  bookId,
+  manuscriptId: `mns_${bookId}`,
+  title: `Book ${bookId}`,
+});
+
+function makeStore(extraMiddleware: Middleware[] = [], preloadedState?: ReloadedState) {
   return configureStore({
     middleware: (getDefault) => getDefault().concat(...extraMiddleware),
     reducer: {
@@ -327,8 +348,7 @@ function makeStore(extraMiddleware: Middleware[] = []) {
       cast: castSlice.reducer,
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
-      manuscript: manuscriptSlice.reducer,
-      loadedBook: loadedBookSlice.reducer,
+      ...identityReducers(preloadedState),
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,
@@ -389,7 +409,7 @@ const openAt = (store: ReturnType<typeof makeStore>, id: string) =>
     the #3435 tests below, which assert on the `cast` patches
     `api.putBookState` receives while a book switch is in flight. Kept separate from the plain `makeStore()` so the many tests that
     don't care about persistence aren't dragged through the debounce timers. */
-function makeStoreWithScopeAndPersistence() {
+function makeStoreWithScopeAndPersistence(preloadedState?: ReloadedState) {
   return configureStore({
     reducer: {
       ui: uiSlice.reducer,
@@ -397,8 +417,7 @@ function makeStoreWithScopeAndPersistence() {
       cast: castSlice.reducer,
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
-      manuscript: manuscriptSlice.reducer,
-      loadedBook: loadedBookSlice.reducer,
+      ...identityReducers(preloadedState),
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,
@@ -845,6 +864,37 @@ describe('Layout — revisions hydrate (plan 286)', () => {
     const pill = screen.queryByTestId('status-pill');
     if (pill && !screen.queryByTestId('status-popover-revisions')) fireEvent.click(pill);
     expect(screen.queryByText(/revisions? pending/)).toBeNull();
+  });
+});
+
+describe('Layout — the "already loaded" short-circuit reads the loaded-book pair (#3519)', () => {
+  const eliza = { id: 'b1-old', name: 'Stale', role: '', color: 'narrator' as const };
+  const cases = [
+    {
+      name: 'the manuscript id matches the stage but the pair names another book',
+      status: 'cast_pending',
+      loadedBook: { loadedBookId: 'b2', loadedManuscriptId: 'mns_b2' },
+    },
+    /* After a reload nothing is in memory, so a book mid-analysis is read in
+       full too: that read is what fills the pair there. */
+    {
+      name: 'a reload on the analysing stage left the pair empty',
+      status: 'analysing',
+      loadedBook: undefined,
+    },
+  ];
+
+  it.each(cases)('issues a full read when $name', async ({ status, loadedBook }) => {
+    getBookStateMock.mockResolvedValue(bookStateFor('b1', revState('b1', F1, 1, [])));
+    const store = makeStore([], { manuscript: restoredManuscript('b1'), loadedBook });
+    store.dispatch(castActions.hydrateCharacters([eliza]));
+    act(() => { store.dispatch({ type: 'ui/openBook', payload: { id: 'b1', status } }); });
+    renderLayoutAt(store, 'b1');
+    await waitFor(() => expect(store.getState().revisions.fileId).toBe(F1)); // the read landed
+    // A revisions-only read would leave the pair and the cast as they were.
+    const readPair = { loadedBookId: 'b1', loadedManuscriptId: 'mns_b1' };
+    expect(store.getState().loadedBook).toEqual(readPair);
+    expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['eliza']);
   });
 });
 
@@ -5209,6 +5259,27 @@ describe('Layout — empty book-state read after another book resets the slices 
     await new Promise((resolve) => setTimeout(resolve, 100));
     expect(store.getState().manuscript).toMatchObject({ manuscriptId: 'm-up', sourceText: 'abc', bookId: null });
     expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['up-hero']);
+  });
+
+  it('(g) resets after a reload too: the pair is empty but the restored manuscript id names B (#3519)', async () => {
+    const store = makeStoreWithScopeAndPersistence({ manuscript: restoredManuscript('b2') });
+    await openEmptyA(store);
+    await waitFor(() =>
+      expect(store.getState().loadedBook).toEqual({ loadedBookId: 'b1', loadedManuscriptId: null }),
+    );
+    expect(store.getState().manuscript).toMatchObject({ bookId: 'b1', manuscriptId: null, title: null });
+  });
+
+  it('(h) resets on the pair alone naming B, whatever the manuscript id says (#3519)', async () => {
+    const store = makeStoreWithScopeAndPersistence({
+      manuscript: restoredManuscript('b1'),
+      loadedBook: { loadedBookId: 'b2', loadedManuscriptId: 'mns_b2' },
+    });
+    await openEmptyA(store);
+    await waitFor(() =>
+      expect(store.getState().loadedBook).toEqual({ loadedBookId: 'b1', loadedManuscriptId: null }),
+    );
+    expect(store.getState().manuscript.title).toBeNull();
   });
 
   it('(e) does not reset when the slices already hold the book being opened', async () => {
