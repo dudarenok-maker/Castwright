@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show debugPrint, visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, visibleForTesting;
 
 import '../domain/listen_stats_accumulator.dart';
 import '../domain/playback_source.dart';
@@ -623,8 +623,11 @@ class PlayerController {
         // so call order matches the order of the saves.
         // A failed write is logged, not leaked: _persist already restored
         // "played", so the next save retries (#4650). saveNow still rethrows.
-        _persist(book, uuid, position.inMilliseconds, now).catchError(
-            (Object e) => debugPrint('autosave failed (will retry): $e'));
+        // debugPrint logs in release builds too, and a drift error carries the
+        // write's parameters, so it is gated on kDebugMode.
+        _persist(book, uuid, position.inMilliseconds, now).catchError((Object e) {
+          if (kDebugMode) debugPrint('autosave failed (will retry): $e');
+        });
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }
