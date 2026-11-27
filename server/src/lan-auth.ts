@@ -233,7 +233,7 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
       const pathname = pathnameOf(originalUrl);
       if (isPlainTarget(originalUrl) && companionAllows(req.method, pathname)) return next();
       console.warn(
-        `[lan-auth] scope-denied companion device ${JSON.stringify(device.label)} (${device.id}):` +
+        `[lan-auth] scope-denied companion device ${JSON.stringify(device.label)} (${device.id}): ` +
           `${req.method} ${pathname}`,
       );
       res.status(403).json({ error: 'scope-denied', scope: 'companion' });

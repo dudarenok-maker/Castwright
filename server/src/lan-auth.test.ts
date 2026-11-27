@@ -380,6 +380,14 @@ describe('requireLanToken companion scope (#898)', () => {
     expect(next).toHaveBeenCalledTimes(1);
   });
 
+  it('logs a denial in the exact documented format', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    drive({ ip: DENY_IP, headers: bearer, method: 'DELETE', originalUrl: '/api/books/x/cover?q=1' });
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      '[lan-auth] scope-denied companion device "Anna phone" (d1): DELETE /api/books/x/cover',
+    );
+  });
+
   // The label is client-chosen at /redeem: a newline in it must not forge log lines.
   it('writes a denial as one log line even when the device label carries a newline', () => {
     const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
