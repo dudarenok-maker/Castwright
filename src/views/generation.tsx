@@ -141,6 +141,7 @@ import { castActions, selectCharacterNamesById } from '../store/cast-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { analysisActions, isStaleIncludeSnapshot, selectMainAnalysisLive } from '../store/analysis-slice';
 import { selectIsOpenBook } from '../store/open-book';
+import { selectLoadedBook } from '../store/loaded-book-slice';
 import { uiActions } from '../store/ui-slice';
 import { selectGenerationActivityCount } from '../store/queue-slice';
 import { enqueueQueueEntries } from '../store/queue-thunks';
@@ -332,7 +333,8 @@ export function GenerationView({
      chapterId or compares against render maps that still carry raw ids, so
      they keep the raw list. */
   const characterIdAliases = useAppSelector((s) => s.chapters.characterIdAliases);
-  const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  /* #3519 — the manuscript this view acts on is the one the slices hold. */
+  const manuscriptId = useAppSelector((s) => selectLoadedBook(s).loadedManuscriptId);
   const characterNames = useAppSelector(selectCharacterNamesById);
   /* #3435 decision A — the server refuses a subset run (Re-analyse, Include)
      while this book's main analysis run is live, so both controls are

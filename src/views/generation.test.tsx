@@ -8,6 +8,7 @@ import { MemoryRouter, Outlet, Routes, Route, useNavigate } from 'react-router';
 import { chaptersSlice, STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import { changeLogSlice } from '../store/change-log-slice';
@@ -2485,11 +2486,14 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
     activeStream,
     withMiddleware,
     chapters = [chapter1, chapter2, ch3Excluded],
+    preloadedState,
   }: {
     selectedModel?: string;
     activeStream?: { bookId: string; modelKey: string };
     withMiddleware?: boolean;
     chapters?: Chapter[];
+    /** Take this state as it is: none of the seeding below runs. */
+    preloadedState?: object;
   } = {}) {
     const store = configureStore({
       reducer: {
@@ -2506,7 +2510,10 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
         notifications: notificationsSlice.reducer,
       },
       middleware: (g) => (withMiddleware ? g().concat(analysisStreamMiddleware) : g()),
+      /* Cast so the option does not take over the store's state type. */
+      preloadedState: preloadedState as undefined,
     });
+    if (preloadedState) return store;
     store.dispatch(chaptersSlice.actions.setChapters(chapters));
     store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
     /* Order matters: hydrateFromAnalysis FIRST while manuscriptId is
@@ -5084,6 +5091,42 @@ describe('GenerationView — Include in book (subset re-analysis)', () => {
       expect(s.manuscript.sentences.some((x) => x.id === 51)).toBe(true);
       expect(s.chapters.analysisGapById?.[1]).toBeUndefined();
     });
+
+    /* #3519 — the reverse of P4a: the stage names A again while the pair still
+       names B (B's read landed, A's re-read has not). The pair decides, so the
+       result is skipped whatever the stage says. */
+    it('a Re-analyse result with the stage back on A while the pair names B is skipped', async () => {
+      const store = makeIncludeStore();
+      const { run, view, opts } = await startReanalyse(store);
+      view.unmount();
+      openBookB(store, true);
+      store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+      expect(store.getState().loadedBook).toEqual(
+        loadedPair({ bookId: 'b2', manuscriptId: 'm2' }),
+      );
+      const before = bookView(store);
+      act(() => opts.onCastUpdate?.({ characters: [villain] }));
+      await act(async () => run.resolve(subsetResponse));
+      await flush();
+      expect(bookView(store)).toEqual(before);
+    });
+  });
+
+  /* #3519 — redux-persist restores the manuscript slice's ids before any read,
+     while the pair is still null: the view takes its manuscript from the pair,
+     so it names none yet. */
+  it('Re-analyse starts no run while only the restored manuscript slice names a manuscript', async () => {
+    const hydrated = makeIncludeStore().getState();
+    const store = makeIncludeStore({
+      preloadedState: { ...hydrated, loadedBook: loadedPair({}) },
+    });
+    expect(store.getState().manuscript.manuscriptId).toBe('m1');
+    renderInclude(store);
+    fireEvent.click(screen.getByTestId('chapter-row-1-reanalyse'));
+    fireEvent.click(await screen.findByRole('button', { name: /Re-analyse chapter/i }));
+    await act(() => new Promise((r) => setTimeout(r, 0)));
+    expect(runAnalysisForChaptersSpy).not.toHaveBeenCalled();
+    expect(store.getState().analysis.activeStream).toBeNull();
   });
 });
 

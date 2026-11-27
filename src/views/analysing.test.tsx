@@ -12,6 +12,7 @@ import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { AnalysingView } from './analysing';
 import { castGateMiddleware } from '../store/cast-gate';
 import { WIKI_BASE } from '../lib/wiki-links';
@@ -2981,6 +2982,40 @@ describe('AnalysingView — failed-chapter retry', () => {
         capturedOpts!.onCastUpdate!({ characters: [villain] as Character[] });
       });
       expect(store.getState().cast.characters.map((c) => c.id)).toEqual(['a-villain']);
+    });
+
+    /* #3519 — the pair, not the stage, says where a late cast update may land:
+       each step below has the stage naming one book and the pair the other. */
+    it("a main run cast update lands only for the pair's book, whichever book the stage names", async () => {
+      const { store } = await mountAfterMainFailure(false, { withManuscript: true });
+      const read = (bookId: string, manuscriptId: string) =>
+        manuscriptSlice.actions.hydrateFromBookState({
+          state: { bookId, manuscriptId, title: bookId },
+          sentences: [],
+        } as never);
+      const lateUpdate = () => {
+        store.dispatch(castSlice.actions.setCharacters([hero] as Character[]));
+        act(() => {
+          capturedOpts!.onCastUpdate!({ characters: [villain] as Character[] });
+        });
+        return store.getState().cast.characters.map((c) => c.id);
+      };
+
+      /* Pair on this view's book, stage already on b2: lands. */
+      store.dispatch(read('b1', 'm1'));
+      store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
+      expect(store.getState().loadedBook).toEqual(
+        loadedPair({ bookId: 'b1', manuscriptId: 'm1' }),
+      );
+      expect(lateUpdate()).toEqual(['a-villain']);
+
+      /* The reverse: stage back on this view's book, pair on b2: skipped. */
+      store.dispatch(read('b2', 'm2'));
+      store.dispatch(uiActions.openBook({ id: 'b1', status: 'analysing', manuscriptId: 'm1' }));
+      expect(store.getState().loadedBook).toEqual(
+        loadedPair({ bookId: 'b2', manuscriptId: 'm2' }),
+      );
+      expect(lateUpdate()).toEqual(['b-hero']);
     });
 
     it.each([
