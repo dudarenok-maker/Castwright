@@ -49,6 +49,35 @@ describe('a Gemini 400 whose envelope the SDK wrapped in a second envelope (#471
     expect(JSON.stringify(r)).not.toContain(PROBE);
   });
 
+  it('a payload value holding a quote, backslash or newline is redacted in every spelling', () => {
+    for (const value of ['my-"quoted"-value-xyz', 'my-back\\slash-value-xyz', 'my-new\nline-value-xyz']) {
+      const description = `Invalid value at 'safety_settings[0].category', "${value}"`;
+      const upstream = wrappedApiError({
+        message: description,
+        status: 'INVALID_ARGUMENT',
+        details: [
+          {
+            '@type': 'type.googleapis.com/google.rpc.BadRequest',
+            fieldViolations: [{ field: 'safety_settings[0].category', description }],
+          },
+        ],
+      });
+      const thrown = redactGeminiError(
+        upstream,
+        payloadSecretValues({ config: { safetySettings: [{ category: value, threshold: 'BLOCK_NONE' }] } }),
+      );
+      const r = classifyAnalysisFailure(thrown, 'Gemini 3.5 Flash Lite');
+
+      expect(r.code).toBe('analyzer-request-rejected');
+      expect(r.userMessage).toContain('[redacted]');
+      const spellings = [value, JSON.stringify(value).slice(1, -1), JSON.stringify(JSON.stringify(value).slice(1, -1)).slice(1, -1)];
+      for (const s of spellings) {
+        expect(JSON.stringify(r)).not.toContain(s);
+        expect((thrown as Error).message).not.toContain(s);
+      }
+    }
+  });
+
   it('a wrapped FAILED_PRECONDITION 400 stays unknown', () => {
     const r = classifyAnalysisFailure(
       wrappedApiError({ message: 'User location is not supported for the API use.', status: 'FAILED_PRECONDITION' }),
