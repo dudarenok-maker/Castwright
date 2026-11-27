@@ -603,8 +603,9 @@ export function tryParseApiError(raw: string): ApiErrorEnvelope | null {
   const outer = readApiErrorEnvelope(raw);
   /* #4718 — for a non-2xx body not served as application/json, `@google/genai` wraps the body text:
      {"error":{"message":"<Google envelope>","code":400,"status":"Bad Request"}}. That outer status is
-     only the HTTP reason phrase, so a 400 reads the envelope inside. */
-  if (outer?.code !== 400 || !outer.message.trimStart().startsWith('{')) return outer;
+     only the HTTP reason phrase, so whatever the code (the 429s and 503s are wrapped the same way),
+     a message that is itself an envelope is read instead. */
+  if (!outer || !outer.message.trimStart().startsWith('{')) return outer;
   return readApiErrorEnvelope(outer.message) ?? outer;
 }
 

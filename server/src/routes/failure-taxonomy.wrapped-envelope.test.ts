@@ -11,11 +11,14 @@ import { payloadSecretValues } from '../analyzer/runner/extra-params.js';
 
 const PROBE = 'castwright-onbox-probe-value';
 
-function wrappedApiError(inner: { message: string; status: string; details?: unknown[] }): ApiError {
-  const body = `${JSON.stringify({ error: { code: 400, ...inner } }, null, 2)}\n`;
+function wrappedApiError(
+  inner: { message: string; status: string; details?: unknown[] },
+  http: { code: number; reason: string } = { code: 400, reason: 'Bad Request' },
+): ApiError {
+  const body = `${JSON.stringify({ error: { code: http.code, ...inner } }, null, 2)}\n`;
   return new ApiError({
-    status: 400,
-    message: JSON.stringify({ error: { message: body, code: 400, status: 'Bad Request' } }),
+    status: http.code,
+    message: JSON.stringify({ error: { message: body, code: http.code, status: http.reason } }),
   });
 }
 
@@ -64,5 +67,95 @@ describe('a Gemini 400 whose envelope the SDK wrapped in a second envelope (#471
       'Gemini 3.5 Flash Lite',
     );
     expect(r.code).toBe('auth');
+  });
+});
+
+/* The SDK wraps whatever the status, so the unwrap is not specific to 400 (the on-box 503s in
+   docs/testing/onbox-batch-2-results/E112/gemma-run1-503-sse.txt carry the same shape). */
+describe('a non-400 Gemini error the SDK wrapped in a second envelope (#4718)', () => {
+  const quotaFailure = (quotaId: string) => [
+    {
+      '@type': 'type.googleapis.com/google.rpc.QuotaFailure',
+      violations: [{ quotaMetric: 'generativelanguage.googleapis.com/generate_content_free_tier_requests', quotaId }],
+    },
+  ];
+
+  it('a wrapped per-minute 429 is analyzer-rate-limit with the first sentence of the envelope message', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        {
+          message: 'You exceeded your current quota. Please retry in 20s.',
+          status: 'RESOURCE_EXHAUSTED',
+          details: quotaFailure('GenerateRequestsPerMinutePerProjectPerModel-FreeTier'),
+        },
+        { code: 429, reason: 'Too Many Requests' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-rate-limit');
+    expect(r.userMessage).toBe(
+      'Gemini 3.5 Flash Lite returned 429 (RESOURCE_EXHAUSTED): You exceeded your current quota.',
+    );
+    expect(r.detail).toContain('status: RESOURCE_EXHAUSTED');
+  });
+
+  it('a wrapped per-day 429 is analyzer-daily-quota, decided on the envelope message', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        {
+          message: 'Quota exceeded for metric GenerateRequestsPerDayPerProjectPerModel-FreeTier. Retry tomorrow.',
+          status: 'RESOURCE_EXHAUSTED',
+          details: quotaFailure('GenerateRequestsPerDayPerProjectPerModel-FreeTier'),
+        },
+        { code: 429, reason: 'Too Many Requests' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-daily-quota');
+    expect(r.userMessage).toContain('returned 429 (RESOURCE_EXHAUSTED)');
+  });
+
+  it('a per-day marker only in details does not make a wrapped 429 daily', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        {
+          message: 'You exceeded your current quota. Please retry in 20s.',
+          status: 'RESOURCE_EXHAUSTED',
+          details: quotaFailure('GenerateRequestsPerDayPerProjectPerModel-FreeTier'),
+        },
+        { code: 429, reason: 'Too Many Requests' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-rate-limit');
+  });
+
+  it('a wrapped 503 reads the real UNAVAILABLE envelope, not the raw JSON', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        { message: 'The model is overloaded. Please try again later.', status: 'UNAVAILABLE' },
+        { code: 503, reason: 'Service Unavailable' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-unreachable');
+    expect(r.userMessage).toBe(
+      'Gemini 3.5 Flash Lite returned 503 (UNAVAILABLE): The model is overloaded. Please try again later.',
+    );
+    expect(r.detail).toContain('status: UNAVAILABLE');
+  });
+
+  it('a wrapped 403 reads the real PERMISSION_DENIED envelope and stays auth', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        { message: 'Permission denied on resource project.', status: 'PERMISSION_DENIED' },
+        { code: 403, reason: 'Forbidden' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('auth');
+    expect(r.userMessage).toBe(
+      'Gemini 3.5 Flash Lite returned 403 (PERMISSION_DENIED): Permission denied on resource project.',
+    );
   });
 });
