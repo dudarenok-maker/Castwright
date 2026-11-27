@@ -1104,7 +1104,28 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     const home = screen.getByRole('button', { name: 'Castwright — home' });
     const wordmark = within(home).getByText('Castwright');
     expect(wordmark.className).toMatch(/hidden/);
-    expect(wordmark.className).toMatch(/sm:inline/);
+    expect(wordmark.className).toMatch(/lg:inline/);
+  });
+
+  /* #4691 decision A — Help / Theme / Account stay inline from sm up, so the
+     bar sheds width elsewhere: the version pill is lg+, and the book title
+     truncates (full text kept in `title`) instead of holding its width. */
+  it('hides the version pill below lg', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('version-pill').parentElement!.className).toMatch(
+      /hidden lg:inline-flex/,
+    );
+  });
+
+  it('truncates a long book title with an ellipsis and keeps the full text in title', () => {
+    const long = 'The Coalfall Commission: A Very Long Subtitle That Cannot Fit';
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen', projectTitle: long })} />);
+    const button = screen.getByTitle(long);
+    expect(button.className).toMatch(/min-w-0/);
+    expect(button.className).not.toMatch(/shrink-0/);
+    const text = within(button).getByText(long);
+    expect(text.className).toMatch(/truncate/);
+    expect(text.className).toMatch(/max-w-\[/);
   });
 
   it('hides the inline Admin pill on phone for a nav stage (it lives in the drawer there)', () => {
