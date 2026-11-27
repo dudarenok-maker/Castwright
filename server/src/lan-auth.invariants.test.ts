@@ -96,16 +96,58 @@ function productionSources(): Record<string, string> {
 it('keeps createDevice un-aliased and imported only by the two minting routes', () => {
   expect(mintAliasViolations(productionSources())).toEqual([]);
 });
+/* Each case starts from the two-file base the real source has (both minting routes, each
+   importing createDevice and calling it directly), so the importer-set check is already
+   satisfied and the case is flagged only by the alias / direct-call checks under test. */
+const DEVICES_BASE = "import { createDevice } from 'x';\nawait createDevice(a, b, 'full');";
+const PAIRING_BASE = "import { createDevice } from 'x';\nawait createDevice(a, b, 'companion');";
+const ALIASES = (file: string) => `${file}: aliases or renames createDevice`;
+const NOT_DIRECT = (file: string) => `${file}: createDevice referenced other than as a direct call (stripped line 3)`;
 it.each([
-  ['an aliased import', { 'routes/devices.ts': "import { createDevice as mint } from 'x';\nmint(a, b, c);" }],
-  ['a renaming re-export', { 'routes/devices.ts': "export { createDevice as mintDevice } from 'x';" }],
-  ['a destructured rename', { 'routes/pairing.ts': "const { createDevice: mint } = await import('x');" }],
-  ['an assigned reference', { 'routes/pairing.ts': "import { createDevice } from 'x';\nconst mint = createDevice;" }],
-  ['.call', { 'routes/pairing.ts': "import { createDevice } from 'x';\ncreateDevice.call(null, a);" }],
-  ['an optional call', { 'routes/pairing.ts': "import { createDevice } from 'x';\ncreateDevice?.(a);" }],
-  ['a third importer', { 'routes/devices.ts': "import { createDevice } from 'x';", 'routes/pairing.ts': "import { createDevice } from 'x';", 'routes/other.ts': "import { createDevice } from 'x';" }],
-])('flags %s', (_name, sources) => {
-  expect(mintAliasViolations({ [DEFINITION_FILE]: 'export async function createDevice(', ...sources })).not.toEqual([]);
+  [
+    'an aliased import',
+    { 'routes/devices.ts': "import { createDevice as mint } from 'x';\nmint(a, b, c);" },
+    [ALIASES('routes/devices.ts')],
+  ],
+  [
+    'a renaming re-export',
+    { 'routes/devices.ts': `${DEVICES_BASE}\nexport { createDevice as mintDevice } from 'x';` },
+    [ALIASES('routes/devices.ts'), NOT_DIRECT('routes/devices.ts')],
+  ],
+  [
+    'a destructured rename',
+    { 'routes/pairing.ts': `${PAIRING_BASE}\nconst { createDevice: mint } = await import('x');` },
+    [ALIASES('routes/pairing.ts'), NOT_DIRECT('routes/pairing.ts')],
+  ],
+  [
+    'an assigned reference',
+    { 'routes/pairing.ts': `${PAIRING_BASE}\nconst mint = createDevice;\nmint(a, b, req.body.scope);` },
+    [NOT_DIRECT('routes/pairing.ts')],
+  ],
+  [
+    '.call',
+    { 'routes/pairing.ts': `${PAIRING_BASE}\ncreateDevice.call(null, a);` },
+    [NOT_DIRECT('routes/pairing.ts')],
+  ],
+  [
+    'an optional call',
+    { 'routes/pairing.ts': `${PAIRING_BASE}\ncreateDevice?.(a);` },
+    [NOT_DIRECT('routes/pairing.ts')],
+  ],
+  [
+    'a third importer',
+    { 'routes/other.ts': "import { createDevice } from 'x';" },
+    ['importers: routes/devices.ts, routes/other.ts, routes/pairing.ts'],
+  ],
+])('flags %s', (_name, sources, expected) => {
+  expect(
+    mintAliasViolations({
+      [DEFINITION_FILE]: 'export async function createDevice(',
+      'routes/devices.ts': DEVICES_BASE,
+      'routes/pairing.ts': PAIRING_BASE,
+      ...sources,
+    }),
+  ).toEqual(expected);
 });
 it('accepts a multi-line import and direct calls in exactly the two minting routes', () => {
   expect(
