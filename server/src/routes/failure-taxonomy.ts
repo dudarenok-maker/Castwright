@@ -597,9 +597,18 @@ function trimQuotaMessage(message: string): string {
   return message.slice(0, 240) + (message.length > 240 ? '…' : '');
 }
 
-export function tryParseApiError(
-  raw: string,
-): { code?: number; message: string; status?: string; details?: unknown[] } | null {
+type ApiErrorEnvelope = { code?: number; message: string; status?: string; details?: unknown[] };
+
+export function tryParseApiError(raw: string): ApiErrorEnvelope | null {
+  const outer = readApiErrorEnvelope(raw);
+  /* #4718 — for a non-2xx body not served as application/json, `@google/genai` wraps the body text:
+     {"error":{"message":"<Google envelope>","code":400,"status":"Bad Request"}}. That outer status is
+     only the HTTP reason phrase, so a 400 reads the envelope inside. */
+  if (outer?.code !== 400 || !outer.message.trimStart().startsWith('{')) return outer;
+  return readApiErrorEnvelope(outer.message) ?? outer;
+}
+
+function readApiErrorEnvelope(raw: string): ApiErrorEnvelope | null {
   /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
      Find the first '{' and try to parse from there. */
   const start = raw.indexOf('{');
