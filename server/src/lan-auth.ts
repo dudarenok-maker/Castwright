@@ -16,7 +16,7 @@ import { parseCookie } from 'cookie';
 import type { Request, Response, NextFunction } from './http.js';
 import { isLanHttpsEnabled } from './routes/export-lan.js';
 import { authenticateDeviceToken } from './workspace/device-tokens.js';
-import { companionAllows, pathnameOf } from './device-scope.js';
+import { companionAllows, isPlainTarget, pathnameOf } from './device-scope.js';
 import { getLanRuntime } from './lan-runtime.js';
 import { isLoopbackRequest } from './loopback.js';
 
@@ -229,8 +229,9 @@ export function requireLanToken(req: Request, res: Response, next: NextFunction)
     const device = authenticateDeviceToken(provided);
     if (device !== null) {
       if (device.scope === 'full') return next();
-      const pathname = pathnameOf(req.originalUrl ?? '');
-      if (companionAllows(req.method, pathname)) return next();
+      const originalUrl = req.originalUrl ?? '';
+      const pathname = pathnameOf(originalUrl);
+      if (isPlainTarget(originalUrl) && companionAllows(req.method, pathname)) return next();
       console.warn(
         `[lan-auth] scope-denied companion device ${JSON.stringify(device.label)} (${device.id}):` +
           `${req.method} ${pathname}`,

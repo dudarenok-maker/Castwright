@@ -42,6 +42,18 @@ export function pathnameOf(originalUrl: string): string {
   return i === -1 ? originalUrl : originalUrl.slice(0, i);
 }
 
+/* A companion request target is considered at all only if it is made solely of
+   RFC 3986 path/query characters. Anything else (#, \, { } | ^ ` " < >, whitespace,
+   non-ASCII) sends parseurl down legacy url.parse, which rewrites or escapes it, so
+   the path this guard matched and the path the router (and its parameterised-mount
+   prefix trim) ends up routing diverge. Deny, never normalise (#4720 review passes 1-2). */
+const PLAIN_TARGET = /^[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*$/;
+
+/** Whether the raw request-target is plain enough that guard and router agree on its path. */
+export function isPlainTarget(originalUrl: string): boolean {
+  return PLAIN_TARGET.test(originalUrl);
+}
+
 /** Whether a companion-scoped device may call `method` on `pathname`. */
 export function companionAllows(method: string | undefined, pathname: string): boolean {
   if (!method) return false;

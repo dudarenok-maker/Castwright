@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { COMPANION_ALLOWLIST, companionAllows, pathnameOf } from './device-scope.js';
+import { COMPANION_ALLOWLIST, companionAllows, isPlainTarget, pathnameOf } from './device-scope.js';
 
 const BOOK = '%D0%BB%D1%83%D0%BA%D1%8C%D1%8F%D0%BD%D0%B5%D0%BD%D0%BA%D0%BE__x__y';
 
@@ -88,6 +88,26 @@ describe('device-scope companion allowlist', () => {
   // anchored pattern: denied. Safe direction, pinned so it can't flip silently.
   it('denies a trailing slash', () => {
     expect(companionAllows('GET', '/api/info/')).toBe(false);
+  });
+});
+
+describe('isPlainTarget', () => {
+  it.each([
+    '/api/info',
+    '/api/books/b/cover?x=1&y=%7B',
+    "/api/books/a-b_c.d~e!$&'()*+,;=:@/cover",
+  ])('accepts %s', (t) => expect(isPlainTarget(t)).toBe(true));
+
+  // Characters outside RFC 3986's path/query set: legacy url.parse escapes or rewrites them.
+  it.each(['{', '}', '|', '^', '`', '"', '<', '>', '#', '\\', ' ', '\t', 'é'])(
+    'rejects a target containing %j',
+    (c) => expect(isPlainTarget(`/api/books/b${c}/cover`)).toBe(false),
+  );
+
+  // "'" is a legal sub-delim and parseurl's fast path leaves it alone; it is only
+  // escaped on the legacy path, which a # (denied above) is needed to reach.
+  it("rejects the legacy-parse escapable \"'\" when it travels with a #", () => {
+    expect(isPlainTarget("/api/books/b'/cover#x")).toBe(false);
   });
 });
 

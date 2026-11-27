@@ -19,6 +19,7 @@ import { requireLanToken } from './lan-auth.js';
 
 let server: Server;
 let port: number;
+const ran: string[] = [];
 const origHttps = process.env.LAN_HTTPS;
 const origToken = process.env.LAN_AUTH_TOKEN;
 
@@ -33,8 +34,19 @@ beforeAll(async () => {
     next();
   });
   app.use(['/api', '/workspace'], requireLanToken);
+  // Like app.ts:298: a parameterised mount, whose prefix trim shifts the routed path.
+  app.use('/api/books/:bookId', (_req, _res, next) => next());
   app.get('/api/books/:bookId/exports/:exportId', (_req, res) => {
+    ran.push('GET exports');
     res.json({ route: 'export' });
+  });
+  app.put('/api/books/:bookId/state', (_req, res) => {
+    ran.push('PUT state');
+    res.json({ route: 'state' });
+  });
+  app.post('/api/books/:bookId/generation', (_req, res) => {
+    ran.push('POST generation');
+    res.json({ route: 'generation' });
   });
   app.get('/api/books/:bookId/cover', (_req, res) => {
     res.json({ route: 'cover' });
@@ -52,11 +64,11 @@ afterAll(() => {
   else process.env.LAN_AUTH_TOKEN = origToken;
 });
 
-function raw(target: string): Promise<string> {
+function raw(target: string, method = 'GET'): Promise<string> {
   return new Promise((resolve) => {
     const s = net.connect({ port, host: '127.0.0.1' }, () => {
       s.write(
-        `GET ${target} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer goodtoken\r\nConnection: close\r\n\r\n`,
+        `${method} ${target} HTTP/1.1\r\nHost: x\r\nAuthorization: Bearer goodtoken\r\nContent-Length: 0\r\nConnection: close\r\n\r\n`,
       );
     });
     let buf = '';
@@ -77,5 +89,21 @@ describe('companion scope guard vs Express routing', () => {
     expect(res.startsWith('HTTP/1.1 403')).toBe(true);
     expect(res).toContain('scope-denied');
     expect(res).not.toContain('"route":"export"');
+  });
+
+  /* The parameterised mount's prefix trim slices the matched length off the RAW url, but
+     legacy url.parse (taken for a target containing #) escapes { } | ^ ` ' " < > in the
+     pathname, so each such bookId character shifts the routed path 2 characters. The
+     guard saw an allowlisted row; the router ran a non-allowlisted handler (#4720 pass 2). */
+  it.each([
+    ['GET', '/api/books/{{{{/cover#X/exports/foo'],
+    ['PUT', '/api/books/{{{{{{{{{/listen-progress#X/state'],
+    ['POST', '/api/books/{{{{{{{{/shelf-status#XY/generation'],
+  ])('denies %s %s, which the shifted router would run as another handler', async (m, target) => {
+    ran.length = 0;
+    const res = await raw(target, m);
+    expect(res.startsWith('HTTP/1.1 403')).toBe(true);
+    expect(res).toContain('scope-denied');
+    expect(ran).toEqual([]);
   });
 });
