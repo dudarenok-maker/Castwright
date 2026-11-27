@@ -427,6 +427,26 @@ void main() {
       await pc.dispose();
     });
 
+    // Re-opening the same book re-reads the stamp from the store, so only the
+    // restored "played" flag (not the held stamp) can make the next save stamp.
+    test('a failed save keeps "played" across a same-book reopen', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u1', positionMs: 0, listenedAt: '2026-06-01T00:00:00Z');
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      store.failNextSave = true;
+      await expectLater(pc.saveNow(), throwsStateError);
+      await pc.openBook('b1');
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:00.000Z');
+      await pc.dispose();
+    });
+
     test('a failed autosave tick leaks no unhandled error and keeps "played" '
         'for the next save', () async {
       final engine = FakeAudioEngine();
@@ -539,6 +559,30 @@ void main() {
       t = DateTime.utc(2026, 6, 6, 21);
       await pc.pause(); // e.g. leaving the player pane: pause, then sync
       expect(store.map['b1']!.listenedAt, '2026-06-06T18:00:14.000Z');
+      await pc.dispose();
+    });
+
+    // The play edge dates a play that has no tick yet; without it a resume would
+    // reuse the previous session's `_lastPlayingAt`.
+    test('a save after a resume but before its first tick stamps the play time',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      var t = DateTime.utc(2026, 6, 6, 18);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 5));
+      engine.emit(const Duration(seconds: 5));
+      await Future<void>.delayed(Duration.zero);
+      await pc.pause();
+      expect(store.map['b1']!.listenedAt, '2026-06-06T18:00:05.000Z');
+      t = DateTime.utc(2026, 6, 6, 20);
+      await pc.play(); // buffering: no tick yet
+      await Future<void>.delayed(Duration.zero);
+      await pc.saveNow(); // e.g. the app is backgrounded
+      expect(store.map['b1']!.listenedAt, '2026-06-06T20:00:00.000Z');
       await pc.dispose();
     });
 
