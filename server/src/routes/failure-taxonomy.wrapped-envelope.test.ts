@@ -174,6 +174,39 @@ describe('a non-400 Gemini error the SDK wrapped in a second envelope (#4718)', 
     expect(r.detail).toContain('status: UNAVAILABLE');
   });
 
+  it('a wrapped Gemini 503 does not tell the user to start Ollama or switch to Gemini', () => {
+    const r = classifyAnalysisFailure(
+      wrappedApiError(
+        { message: 'The model is overloaded. Please try again later.', status: 'UNAVAILABLE' },
+        { code: 503, reason: 'Service Unavailable' },
+      ),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-unreachable');
+    expect(r.remediation).toBe(
+      'Gemini is temporarily unavailable. Retry the chapter, or resume the run later.',
+    );
+    expect(r.remediation).not.toMatch(/Ollama|switch the analyzer to Gemini/);
+  });
+
+  it('a Gemini 500 ApiError carries the same retry-later remediation', () => {
+    const r = classifyAnalysisFailure(
+      new ApiError({ status: 500, message: 'Internal error encountered.' }),
+      'Gemini 3.5 Flash Lite',
+    );
+    expect(r.code).toBe('analyzer-unreachable');
+    expect(r.remediation).toBe(
+      'Gemini is temporarily unavailable. Retry the chapter, or resume the run later.',
+    );
+  });
+
+  it('a non-Gemini 503 (no ApiError) keeps the Ollama remediation', () => {
+    const err = Object.assign(new Error('Service Unavailable'), { status: 503 });
+    const r = classifyAnalysisFailure(err, 'Ollama');
+    expect(r.code).toBe('analyzer-unreachable');
+    expect(r.remediation).toContain('Check that Ollama is running (ollama serve)');
+  });
+
   it('a wrapped 403 reads the real PERMISSION_DENIED envelope and stays auth', () => {
     const r = classifyAnalysisFailure(
       wrappedApiError(

@@ -1047,9 +1047,15 @@ const ENDPOINT_UNREACHABLE_REMEDIATION =
   "Check that the endpoint's server is running and that its base URL in Settings is right, then " +
   'retry. Castwright switches to Gemini only when a Gemini key is saved and cloud fallback is on.';
 
-/* A Gemini key problem (an ApiError, or the 400 whose wording names the key) points at both places
-   the key can live; the static `auth` text is neutral across every source. Anything else keeps the static copy. */
-function geminiAuthRemediation(err: unknown, code: FailureCode): string | undefined {
+/* Gemini-specific remediation overrides. A key problem (an ApiError, or the 400 whose wording names the key)
+   points at both places the key can live; the static `auth` text is neutral across every source. Anything else
+   keeps the static copy. */
+function geminiRemediation(err: unknown, code: FailureCode): string | undefined {
+  /* A Gemini 500/503 is Google's outage, not a local daemon: the static copy (start Ollama, switch to
+     Gemini) is wrong on both halves. Only an ApiError is Gemini's; Ollama and endpoints keep it. */
+  if (code === 'analyzer-unreachable' && err instanceof ApiError) {
+    return 'Gemini is temporarily unavailable. Retry the chapter, or resume the run later.';
+  }
   if (code !== 'auth') return undefined;
   const status = (err as { status?: number })?.status;
   if (!(err instanceof ApiError) && status !== 400) return undefined;
@@ -1427,7 +1433,7 @@ export function classifyAnalysisFailure(
       code,
       `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
       formatErrorDetail(parsed, raw),
-      geminiAuthRemediation(err, code),
+      geminiRemediation(err, code),
     );
   }
   if (status) {
@@ -1435,7 +1441,7 @@ export function classifyAnalysisFailure(
     if (code === 'analyzer-request-rejected') {
       return requestRejected(modelLabel, err instanceof ApiError ? 'gemini' : undefined, raw);
     }
-    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiAuthRemediation(err, code));
+    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiRemediation(err, code));
   }
   /* Not an API envelope — give the signature table a chance (catches the
      connection-refused / fetch-failed family) before the unknown fallback. */
