@@ -7,7 +7,7 @@
    Rows are ADDED when a new client ships, and REMOVED only when the last APK
    that used them is out of support. Do NOT edit this table to track HEAD.
 
-   Coupled to apps/android/test/data/api_client_test.dart's nine pins. There is
+   Coupled to apps/android/test/data/companion_endpoints_test.dart's nine pins. There is
    deliberately no mechanical link (see the design of record, §Q1): a Dart
    parser here would not run — no verify.yml scope regex anchors on apps/ — and
    its failure mode is silent green.
