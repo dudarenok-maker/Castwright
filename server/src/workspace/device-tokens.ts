@@ -17,6 +17,12 @@ import { existsSync, readFileSync } from 'node:fs';
 import { deviceTokensJsonPath } from './paths.js';
 import { writeJsonAtomic } from './state-io.js';
 
+/** What a device token may reach. `'full'` is the whole LAN API (a LAN web
+ *  browser running the desktop UI, or the loopback admin mint); `'companion'`
+ *  is the Android companion app's narrow allowlist (enforced in
+ *  `requireLanToken`, #4623). */
+export type DeviceScope = 'full' | 'companion';
+
 export interface DeviceTokenRecord {
   id: string;
   label: string;
@@ -24,6 +30,11 @@ export interface DeviceTokenRecord {
   tokenHash: string;
   createdAt: string;
   expiresAt?: string;        // ISO; absent (legacy schema-1) OR unparseable → rejected (#2144)
+  /** Required. A record whose scope is absent or unrecognised does NOT
+   *  authenticate (`findValidDevice` skips it) — the same fail-closed choice
+   *  as `expiresAt`. It stays listed and revocable: this is deliberately NOT
+   *  checked in `invalidDeviceField`, which would quarantine it at load. */
+  scope: DeviceScope;
   lastSeenAt?: string;
   revoked?: boolean;
   /** True iff this record was minted by "Authorize this browser" (a
@@ -60,6 +71,11 @@ export function findValidDevice(
   const h = Buffer.from(hashToken(rawToken));
   for (const d of devices) {
     if (d.revoked) continue;
+    // Scope guard. This READ-PATH check is the guarantee: a required
+    // parameter on `createDevice` cannot reach a hand-edited
+    // device-tokens.json, a mock, or a merge conflict, so a legacy
+    // (scope-less) or unknown-scope record must be refused here.
+    if (d.scope !== 'full' && d.scope !== 'companion') continue;
     const exp = d.expiresAt === undefined ? NaN : Date.parse(d.expiresAt);
     if (!Number.isFinite(exp) || now > exp) continue;
     // #2149 — defence-in-depth, mirroring the expiresAt guard above.
@@ -133,7 +149,7 @@ let cache: DeviceTokenRecord[] | null = null;
  *  `cache` and the malformed-only re-read. The extra read is bounded by
  *  write frequency — mint, revoke, and the hourly-throttled touch — never by
  *  request frequency (see `persistDegradedAt` below); the synchronous auth
- *  guard (`isValidDeviceToken`) never calls `persist` and is unaffected. */
+ *  guard (`authenticateDeviceToken`) never calls `persist` and is unaffected. */
 let quarantine: unknown[] = [];
 
 /** True when the most recent `loadSync` hit a whole-store fault (corrupt
@@ -151,7 +167,7 @@ let degradedAt = 0;
  *  populated (see `loadDegraded` above), which used to mean every single
  *  call re-ran `existsSync` -> `readFileSync` -> `JSON.parse` and emitted a
  *  fresh `console.warn`. `loadSync` sits under the SYNCHRONOUS LAN-auth
- *  guard (`isValidDeviceToken`), which fires on every `/api` and
+ *  guard (`authenticateDeviceToken`), which fires on every `/api` and
  *  `/workspace` request — a phone streaming chapter audio issues hundreds
  *  of these, so a degraded store meant blocking disk IO plus a log line on
  *  the hot path, per request, unbounded, for as long as the store stayed
@@ -502,7 +518,8 @@ async function persist(devices: DeviceTokenRecord[]): Promise<void> {
   // not be read...") would be actively misleading; only the RETRY RATE
   // needed fixing here, not the error's shape.
   try {
-    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 2, devices: [...devices, ...quarantine] });
+    // `schema: 3` is documentation, not enforcement — `loadSync` never reads it.
+    await writeJsonAtomic(deviceTokensJsonPath(), { schema: 3, devices: [...devices, ...quarantine] });
   } catch (err) {
     persistDegradedAt = Date.now();
     throw err;
@@ -574,22 +591,30 @@ export async function touchLastSeen(id: string, now: number): Promise<void> {
  *  so a second touch fired before the first settles isn't dropped. */
 const pendingWrites = new Set<Promise<unknown>>();
 
-/** Sync token check used by the LAN guard (cache-backed). */
-export function isValidDeviceToken(rawToken: string): boolean {
+/** Sync token check used by the LAN guard (cache-backed). Returns the matched
+ *  RECORD (not a boolean or a `{ scope }` projection) so the guard can read
+ *  `scope` and its denial log can name the device (`label`, `id`) without a
+ *  second, timing-sensitive hash lookup. `null` when no valid device matches. */
+export function authenticateDeviceToken(rawToken: string): DeviceTokenRecord | null {
   const now = Date.now();
   const device = findValidDevice(loadSync(), rawToken, now);
-  if (!device) return false;
-  // Best-effort touch — must not throw on the sync guard path; swallow any rejection.
+  if (!device) return null;
+  // The touch fires before any scope decision by the caller: the device did
+  // present a valid token. Best-effort - must not throw on the sync guard path;
+  // swallow any rejection.
   if (shouldTouchLastSeen(device, now)) {
     const write = touchLastSeen(device.id, now).catch(() => {});
     pendingWrites.add(write);
     void write.finally(() => pendingWrites.delete(write));
   }
-  return true;
+  return device;
 }
 
 /** Mint a new per-device token. Returns the raw token ONCE (only its hash is
  *  stored); callers must surface it to the user immediately.
+ *
+ *  `scope` is REQUIRED and positional (third): `'full'` or `'companion'`,
+ *  chosen per mint site, never per credential type.
  *
  *  `opts.selfBind` marks the new record as the host's self-bind AND, in the
  *  same critical section, revokes any prior non-revoked `selfBind` record —
@@ -602,6 +627,7 @@ export function isValidDeviceToken(rawToken: string): boolean {
 export async function createDevice(
   label: string,
   ttlDays: number,
+  scope: DeviceScope,
   opts?: { selfBind?: boolean },
 ): Promise<{ device: PublicDevice; token: string }> {
   return enqueueWrite(async () => {
@@ -617,6 +643,7 @@ export async function createDevice(
       tokenHash: hashToken(token),
       createdAt: new Date(now).toISOString(),
       expiresAt: new Date(now + ttlDays * 86_400_000).toISOString(),
+      scope,
       ...(opts?.selfBind ? { selfBind: true } : {}),
     };
     devices.push(record);
@@ -703,7 +730,7 @@ export function _resetDeviceTokenCacheForTests(): void {
 }
 
 /** Test hook — await every fire-and-forget `touchLastSeen` write kicked off
- *  by `isValidDeviceToken`, so a temp-workspace teardown (recursive rm) run
+ *  by `authenticateDeviceToken`, so a temp-workspace teardown (recursive rm) run
  *  right after doesn't race an in-flight write and intermittently fail with
  *  ENOTEMPTY. */
 export async function _flushPendingWritesForTests(): Promise<void> {

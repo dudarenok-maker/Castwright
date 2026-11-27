@@ -21,6 +21,9 @@ function rec(over: Partial<DeviceTokenRecord> & { tokenHash: string }): DeviceTo
     expiresAt: over.expiresAt ?? future,
     lastSeenAt: over.lastSeenAt,
     revoked: over.revoked,
+    // RESTRICTIVE default: an under-specified future test fails instead of
+    // passing against a full-scope record.
+    scope: over.scope ?? 'companion',
   };
 }
 
@@ -63,12 +66,12 @@ describe('device-tokens (pure)', () => {
   });
 
   it('rejects an expired record', () => {
-    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: past };
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, scope: 'companion' as const, expiresAt: past };
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
   it('rejects a record with no expiresAt (legacy → re-pair)', () => {
-    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future };
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, scope: 'companion' as const };
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
@@ -82,13 +85,14 @@ describe('device-tokens (pure)', () => {
       label: 'P',
       tokenHash: hashToken('tok'),
       createdAt: future,
+      scope: 'companion' as const,
       expiresAt: null as unknown as string,
     };
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
   it('rejects expiresAt: "" (empty string)', () => {
-    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: '' };
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, scope: 'companion' as const, expiresAt: '' };
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
@@ -98,18 +102,39 @@ describe('device-tokens (pure)', () => {
       label: 'P',
       tokenHash: hashToken('tok'),
       createdAt: future,
+      scope: 'companion' as const,
       expiresAt: 'garbage',
     };
     expect(findValidDevice([d], 'tok')).toBeNull();
   });
 
-  it('accepts a valid future ISO expiresAt', () => {
+  // #898 — the scope guard in findValidDevice is the guarantee. A required
+  // parameter on createDevice cannot reach a hand-edited device-tokens.json,
+  // so the READ path must refuse a legacy (scope-less) or unknown-scope record.
+  it('rejects a record with no scope (legacy → re-pair)', () => {
     const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: future };
+    expect(findValidDevice([d as unknown as DeviceTokenRecord], 'tok')).toBeNull();
+  });
+
+  it('rejects a record with an unknown scope', () => {
+    const d = rec({ tokenHash: hashToken('tok'), scope: 'admin' as never });
+    expect(findValidDevice([d], 'tok')).toBeNull();
+  });
+
+  // Mirror case: pins that a valid scope is not rejected, so the two
+  // rejection cases above cannot pass merely because EVERYTHING is rejected.
+  it.each(['full', 'companion'] as const)('accepts scope %s', (scope) => {
+    const d = rec({ tokenHash: hashToken('tok'), scope });
+    expect(findValidDevice([d], 'tok')?.scope).toBe(scope);
+  });
+
+  it('accepts a valid future ISO expiresAt', () => {
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, scope: 'companion' as const, expiresAt: future };
     expect(findValidDevice([d], 'tok')?.id).toBe('1');
   });
 
   it('honours an injected now', () => {
-    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, expiresAt: future };
+    const d = { id: '1', label: 'P', tokenHash: hashToken('tok'), createdAt: future, scope: 'companion' as const, expiresAt: future };
     expect(findValidDevice([d], 'tok', Date.parse(future) + 1)).toBeNull();
     expect(findValidDevice([d], 'tok', Date.parse(future) - 1)).not.toBeNull();
   });
@@ -131,6 +156,7 @@ describe('device-tokens (pure)', () => {
       label: 'P',
       tokenHash: 123 as unknown as string,
       createdAt: future,
+      scope: 'companion' as const,
       expiresAt: future,
     };
     const good = {
@@ -138,6 +164,7 @@ describe('device-tokens (pure)', () => {
       label: 'P',
       tokenHash: hashToken('tok-good'),
       createdAt: future,
+      scope: 'companion' as const,
       expiresAt: future,
     };
     expect(() => findValidDevice([bad, good], 'tok-good')).not.toThrow();
@@ -152,6 +179,7 @@ describe('device-tokens (pure)', () => {
         label: 'P',
         tokenHash: shape as unknown as string,
         createdAt: future,
+      scope: 'companion' as const,
         expiresAt: future,
       };
       expect(() => findValidDevice([bad], 'anything')).not.toThrow();

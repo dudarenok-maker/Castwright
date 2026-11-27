@@ -159,7 +159,7 @@ void main() {
     expect(distinctShapes, hasLength(9),
         reason: 'the recorder must see exactly the nine allowlisted shapes');
 
-    // Coupled to server/src/device-scope.ts (arrives with PR B, chain B), the
+    // Coupled to server/src/device-scope.ts, the
     // exact-equality nine-row allowlist; the two lists are coupled by review.
     // Coupled to server/src/device-scope.ts — change both or the phone 403s.
     expect(distinctShapes, contains('GET /api/info'),

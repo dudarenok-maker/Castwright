@@ -28,7 +28,7 @@ vi.mock('../lan-runtime.js', () => ({
    vi.fn so we can mock them per-test. requireLanToken is exposed as a forwarding
    wrapper so it always calls through to the freshly-imported REAL requireLanToken
    (which shares the same device-tokens module as deviceTokens, keeping
-   isValidDeviceToken in sync with created device tokens). */
+   authenticateDeviceToken in sync with created device tokens). */
 let _requireLanToken: typeof import('../lan-auth.js')['requireLanToken'] | null = null;
 vi.mock('../lan-auth.js', async (o) => {
   const real = await o<typeof import('../lan-auth.js')>();
@@ -50,13 +50,17 @@ let lanAuth: typeof import('../lan-auth.js');
 let pairingSessions: typeof import('../workspace/pairing-sessions.js');
 let devicesRouter: import('express').Router;
 
-function mkReq(opts: { ip?: string; headers?: Record<string, string> } = {}) {
+function mkReq(
+  opts: { ip?: string; headers?: Record<string, string>; method?: string; originalUrl?: string } = {},
+) {
   const ip = opts.ip ?? '203.0.113.5'; // non-loopback documentation range
   return {
     ip,
     socket: { remoteAddress: ip },
     headers: opts.headers ?? {},
     query: {},
+    method: opts.method ?? 'GET',
+    originalUrl: opts.originalUrl ?? '/api/info',
   } as never;
 }
 function mkRes() {
@@ -83,7 +87,7 @@ beforeEach(async () => {
   deviceTokens = await import('../workspace/device-tokens.js');
   lanAuth = await import('../lan-auth.js');
   // Load the real (un-mocked) lan-auth so requireLanToken shares the same
-  // device-tokens instance as deviceTokens, keeping isValidDeviceToken in sync.
+  // device-tokens instance as deviceTokens, keeping authenticateDeviceToken in sync.
   const realLanAuth = await vi.importActual<typeof import('../lan-auth.js')>('../lan-auth.js');
   _requireLanToken = realLanAuth.requireLanToken;
   ({ devicesRouter } = await import('./devices.js'));
@@ -95,7 +99,7 @@ beforeEach(async () => {
 
 afterEach(async () => {
   _requireLanToken = null;
-  // Flush any fire-and-forget touchLastSeen write isValidDeviceToken kicked
+  // Flush any fire-and-forget touchLastSeen write authenticateDeviceToken kicked
   // off (e.g. the "accepts a minted device token" test below) before wiping
   // the workspace — otherwise the in-flight write can race the recursive rm
   // and intermittently fail with ENOTEMPTY.
@@ -215,7 +219,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('the LAN guard accepts a minted device token from a non-loopback client', async () => {
-    const { token } = await deviceTokens.createDevice('Phone', 30);
+    const { token } = await deviceTokens.createDevice('Phone', 30, 'full');
     let passed = false;
     lanAuth.requireLanToken(
       mkReq({ headers: { authorization: `Bearer ${token}` } }),
@@ -227,8 +231,35 @@ describe('devices route (srv-33)', () => {
     expect(passed).toBe(true);
   });
 
+  // Invariant 5 (#898): a scope-denied request still authenticated, so the
+  // device's lastSeenAt is touched. Real guard + real store: a mock of
+  // authenticateDeviceToken could not catch the touch moving behind a scope check.
+  it('a scope-denied companion token still stamps lastSeenAt (invariant 5)', async () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { device, token } = await deviceTokens.createDevice('Anna phone', 30, 'companion');
+    const res = mkRes();
+    let passed = false;
+    lanAuth.requireLanToken(
+      mkReq({
+        headers: { authorization: `Bearer ${token}` },
+        method: 'DELETE',
+        originalUrl: '/api/books/x/cover',
+      }),
+      res as never,
+      () => {
+        passed = true;
+      },
+    );
+    warn.mockRestore();
+    expect(passed).toBe(false);
+    expect(res._res.statusCode).toBe(403);
+    await deviceTokens._flushPendingWritesForTests();
+    const listed = deviceTokens.listDevices().find((d) => d.id === device.id);
+    expect(listed?.lastSeenAt).toBeDefined();
+  });
+
   it('the LAN guard rejects a revoked device token (but the shared secret still works)', async () => {
-    const { device, token } = await deviceTokens.createDevice('Phone', 30);
+    const { device, token } = await deviceTokens.createDevice('Phone', 30, 'full');
     await deviceTokens.revokeDevice(device.id);
 
     const revokedRes = mkRes();
@@ -566,7 +597,7 @@ describe('devices route (srv-33)', () => {
   });
 
   it('caps an over-long device label at 64 chars', async () => {
-    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30);
+    const { device } = await deviceTokens.createDevice('x'.repeat(200), 30, 'full');
     expect(device.label.length).toBe(64);
   });
 
