@@ -98,6 +98,21 @@ test('findSticky: a bot comment starting with the marker is found', () => {
   assert.equal(findSticky([{ id: 7, body: '<!-- ops-17-deps-watch -->', user: BOT }]).id, 7);
 });
 
+test('findSticky: a HUMAN comment starting with the marker is not a sticky (login check)', () => {
+  const human = { id: 8, body: STICKY_MARKER + '\nstatus', user: { login: 'someone' } };
+  assert.equal(findSticky([human]), null);
+});
+
+test('findSticky: a bot comment with the marker NOT at the start is not a sticky (startsWith)', () => {
+  const mid = { id: 10, body: 'note\n' + STICKY_MARKER, user: BOT };
+  assert.equal(findSticky([mid]), null);
+});
+
+test('findSticky: finds what renderSticky writes (render -> find round trip)', () => {
+  const body = renderSticky({ behind: [], today: '2026-11-27' });
+  assert.equal(findSticky([{ id: 9, body, user: BOT }])?.id, 9);
+});
+
 test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', () => {
   assert.deepEqual(stickyRequest({ id: 42 }, 'o/r', '790'), {
     method: 'PATCH',
