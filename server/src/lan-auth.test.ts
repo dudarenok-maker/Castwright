@@ -5,13 +5,16 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
-const mockState = vi.hoisted(() => ({ scope: 'full' as 'full' | 'companion' }));
+const mockState = vi.hoisted(() => ({
+  scope: 'full' as 'full' | 'companion',
+  label: 'Anna phone',
+}));
 vi.mock('./workspace/device-tokens.js', () => ({
   authenticateDeviceToken: (t: string) =>
     t === 'goodtoken'
       ? {
           id: 'd1',
-          label: 'Anna phone',
+          label: mockState.label,
           tokenHash: 'h',
           createdAt: '',
           expiresAt: '',
@@ -254,6 +257,7 @@ describe('requireLanToken companion scope (#898)', () => {
   });
   afterEach(() => {
     mockState.scope = 'full';
+    mockState.label = 'Anna phone';
     vi.restoreAllMocks();
     if (origHttps === undefined) delete process.env.LAN_HTTPS;
     else process.env.LAN_HTTPS = origHttps;
@@ -374,6 +378,15 @@ describe('requireLanToken companion scope (#898)', () => {
       originalUrl: '/api/books/x/cover',
     });
     expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  // The label is client-chosen at /redeem: a newline in it must not forge log lines.
+  it('writes a denial as one log line even when the device label carries a newline', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockState.label = 'x\n[lan-auth] scope-denied companion device "forged"';
+    drive({ ip: DENY_IP, headers: bearer, method: 'DELETE', originalUrl: '/api/books/x/cover' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain('\n');
   });
 
   it('a full-scope token on a denied route passes', () => {
