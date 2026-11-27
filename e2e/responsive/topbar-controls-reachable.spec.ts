@@ -11,21 +11,15 @@
 import { test, expect, type Page } from '@playwright/test';
 import { goToAnalysing, waitForListenViewReady } from '../helpers';
 
-/* knownClipped = control labels (prefix match) that the generic in-viewport
- * check currently catches overflowing on a real product defect OUTSIDE this
- * ticket's scope (e2e-only; see the follow-up filed from #4654). Each entry is
- * a debt: delete it when the product fix lands. phone = <640, tablet = 640-1279. */
 type Stage = {
   name: string;
   open: (page: Page) => Promise<void>;
-  knownClipped?: { phone?: string[]; tablet?: string[] };
 };
 
 const STAGES: Stage[] = [
   {
     name: 'analysing',
     open: goToAnalysing,
-    knownClipped: { phone: ['topbar-admin-link'], tablet: ['theme-toggle', 'Account'] },
   },
   {
     name: 'listen',
@@ -33,7 +27,6 @@ const STAGES: Stage[] = [
       await page.goto('/#/books/sb/listen');
       await waitForListenViewReady(page);
     },
-    knownClipped: { tablet: ['theme-toggle', 'Account'] },
   },
   {
     name: 'generate',
@@ -41,7 +34,6 @@ const STAGES: Stage[] = [
       await page.goto('/#/books/sb/generate');
       await expect(page.locator('header').first()).toBeVisible({ timeout: 10_000 });
     },
-    knownClipped: { tablet: ['theme-toggle', 'Account'] },
   },
   {
     name: 'books home',
@@ -54,7 +46,7 @@ const STAGES: Stage[] = [
 
 /* Every visible button / link / role=button inside the top bar must sit fully
  * inside [0, viewport width] (+-1px). The label names the offender. */
-async function expectHeaderControlsInViewport(page: Page, known: string[] = []): Promise<void> {
+async function expectHeaderControlsInViewport(page: Page): Promise<void> {
   const vw = page.viewportSize()?.width ?? 0;
   const controls = await page.locator('header').first().evaluate((header) => {
     const out: { label: string; x: number; right: number }[] = [];
@@ -78,7 +70,6 @@ async function expectHeaderControlsInViewport(page: Page, known: string[] = []):
   });
   expect(controls.length, 'header has visible interactive controls').toBeGreaterThan(0);
   for (const c of controls) {
-    if (known.some((k) => c.label.startsWith(k))) continue;
     expect(c.x, `top-bar control "${c.label}" clipped off the left (vw=${vw})`).toBeGreaterThanOrEqual(-1);
     expect(c.right, `top-bar control "${c.label}" clipped off the right (vw=${vw})`).toBeLessThanOrEqual(
       vw + 1,
@@ -95,7 +86,7 @@ for (const stage of STAGES) {
       test.skip(width >= 640, 'phone-only: sm+ keeps the inline Help/Theme/Account');
 
       await stage.open(page);
-      await expectHeaderControlsInViewport(page, stage.knownClipped?.phone);
+      await expectHeaderControlsInViewport(page);
 
       const toggle = page.getByTestId('topbar-nav-toggle');
       await expect(toggle, 'hamburger present (analysing included)').toBeVisible();
@@ -137,10 +128,7 @@ test.describe('top-bar controls reachable — sm+ inline cluster unchanged', () 
       test.skip(width < 640, 'sm+ only: phone moves these into the drawer');
 
       await stage.open(page);
-      await expectHeaderControlsInViewport(
-        page,
-        width < 1280 ? stage.knownClipped?.tablet : undefined,
-      );
+      await expectHeaderControlsInViewport(page);
       await expect(page.getByTestId('topbar-help'), 'inline Help').toBeVisible();
       await expect(page.getByTestId('theme-toggle'), 'inline Theme').toBeVisible();
       await expect(page.getByRole('button', { name: /^Account/ }), 'inline Account').toBeVisible();

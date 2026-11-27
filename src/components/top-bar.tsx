@@ -394,7 +394,7 @@ export function TopBar({
           Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
-      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
+      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 xl:gap-8 overflow-x-clip">
         <NavDrawer
           stage={stage}
           view={view}
