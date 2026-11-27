@@ -513,6 +513,35 @@ void main() {
       await pc.dispose();
     });
 
+    // The `false` edge of a late pause() is not when listening ended: the engine
+    // reports `playing` until something pauses it, so the stamp stays the last tick.
+    test('a pause() hours after the book finished stamps the last tick, not '
+        'the pause', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      var t = DateTime.utc(2026, 6, 6, 18);
+      final pc = make(engine, store,
+          now: () => t,
+          playlists: {
+            'b1': const [PlayableChapter(uuid: 'u1', path: '/b1/u1/audio.mp3')],
+          });
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 10));
+      engine.emit(const Duration(seconds: 10)); // autosave 18:00:10
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 4));
+      engine.emit(const Duration(seconds: 14)); // last tick before the end
+      await Future<void>.delayed(Duration.zero);
+      engine.emitCompletion(); // `playing` stays true, no further ticks
+      await Future<void>.delayed(Duration.zero);
+      t = DateTime.utc(2026, 6, 6, 21);
+      await pc.pause(); // e.g. leaving the player pane: pause, then sync
+      expect(store.map['b1']!.listenedAt, '2026-06-06T18:00:14.000Z');
+      await pc.dispose();
+    });
+
     test('a failed save of a switched-away book does not mark the new book '
         'played', () async {
       final engine = FakeAudioEngine();

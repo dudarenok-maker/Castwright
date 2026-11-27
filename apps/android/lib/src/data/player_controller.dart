@@ -231,8 +231,9 @@ class PlayerController {
   /// gate for stamping a fresh `listenedAt` (#4650).
   bool _playedSinceSave = false;
 
-  /// The last moment audio was seen playing (a position tick while playing, or a
-  /// play/stop edge). A played save is stamped with this, not with the save's own
+  /// The last moment audio was seen playing (a position tick while playing, or
+  /// the play edge — never the stop edge: a late `pause()` after a finished book
+  /// or a stall is not when audio stopped). A played save is stamped with this, not with the save's own
   /// time: just_audio can stop itself (headset unplug, focus loss, a finished
   /// book that leaves `playing` true) with nothing saving at that moment, and a
   /// later save must not claim it was listening then (#4650).
@@ -568,8 +569,6 @@ class PlayerController {
     if (isPlaying) {
       _playedSinceSave = true;
       _lastPlayingAt = _now();
-    } else if (_playedSinceSave) {
-      _lastPlayingAt = _now(); // the stop edge: when listening really ended
     }
     // Accrual is gated on play/pause intent only. With app-10 LAN streaming
     // (setStreamUrl), a network stall can leave `playing` true while buffering,

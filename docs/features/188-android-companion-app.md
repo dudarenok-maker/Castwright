@@ -424,7 +424,7 @@ IDs are permanent. Priority = position. MVP block first, follow-ups after.
   (loaded when the book opened, updated by played saves — not re-read from the store, so a
   resume-sync pull cannot turn it into a tie), so it never wins a sync. A played save is
   stamped with the last time audio was actually playing (set on every position tick while
-  playing and on play/stop edges), not the save's own time, so a save long after an
+  playing and on the play edge, never the stop edge), not the save's own time, so a save long after an
   out-of-band stop (headset unplug, Bluetooth, focus loss, a finished book) doesn't claim
   fresh listening. The position is still saved. *(Open nuance for the `app-6` plan: position isn't monotonic in time —
   consider "furthest position" vs "latest `listenedAt`" when they disagree; LWW-by-listen-
