@@ -1,0 +1,11 @@
+{
+  "analyzerReasoningByEngine": {
+    "gemini": {
+      "gemma-4-31b-it": "off"
+    }
+  },
+  "analyzerExtraParamsByEngine": {},
+  "configOverrides": {
+    "analyzer.gemini.maxOutputTokens": 64
+  }
+}

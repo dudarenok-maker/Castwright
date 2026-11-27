@@ -8204,13 +8204,13 @@ Wave 2 made four changes to Gemini analysis:
 - the output cap is Auto (the model's own limit, not 8192);
 - thinking models are asked for thought summaries and may stay silent for up to 120 s at a time before their answer text;
 - an empty `MAX_TOKENS` response with reasoning evidence fails as `analyzer-reasoning-overflow` and stops the run instead of splitting;
-- on Gemma, which asks for no thoughts, only a thought part counts as reasoning evidence, so its empty `MAX_TOKENS` still splits.
+- on Gemma at its default level or `off`, which ask for no thoughts, only a thought part counts as reasoning evidence, so with reasoning `off` its empty `MAX_TOKENS` still splits.
 
 Unit tests drive all four against a mocked stream. Only a real `gemini-3.6-flash` run proves the #3084 reporter's stall is gone, and only a real `gemma-4-31b-it` run proves Gemma's split recovery survives whatever usage Gemma reports.
 
-On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Auto and once at `8192`: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, `analyzer-timeout` failures, truncations, reasoning-overflow failures and request count. Then, on `gemma-4-31b-it` with "Gemini max output tokens" at `64`, record each `output truncated reason=MAX_TOKENS bytes=0` line, whether a re-split follows it, and any `analyzer-reasoning-overflow` failure.
+On a 19,000–21,000-character chapter, record on `gemini-3.6-flash`, once at Auto and once at `8192`: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, `analyzer-timeout` failures, truncations, reasoning-overflow failures and request count. Then, on `gemma-4-31b-it` with its reasoning level set to **`off`** (`analyzerReasoningByEngine.gemini["gemma-4-31b-it"] = "off"`, or Advanced settings → Analyzer request controls) and "Gemini max output tokens" at `64`, record each `stream-timing` line's `thoughtPartsBeforeAnswer`, each `output truncated reason=MAX_TOKENS bytes=0` line, whether a re-split follows it, and any `analyzer-reasoning-overflow` failure.
 
-**Pass:** Auto completes with no `analyzer-timeout` and no overflow, using no more requests than the 8192 run; and on Gemma at `64` at least one `bytes=0` truncation appears, each is followed by a re-split, and no `analyzer-reasoning-overflow` failure occurs. **The row fails if no `bytes=0` truncation can be reproduced at `64`.**
+**Pass:** Auto completes with no `analyzer-timeout` and no overflow, using no more requests than the 8192 run; and on Gemma with reasoning `off` at `64`, `thoughtPartsBeforeAnswer=0`, at least one `bytes=0` truncation appears, each is followed by a re-split, and no `analyzer-reasoning-overflow` failure occurs. At Gemma's default (reasoning on), an `analyzer-reasoning-overflow` after a `bytes=0` truncation is the by-design outcome ([#4723](https://github.com/dudarenok-maker/Castwright/issues/4723)). **The row fails if no `bytes=0` truncation can be reproduced at `64`.**
 
 Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084-openai-analyzer-onbox-acceptance.md).
 
@@ -8224,6 +8224,16 @@ Criteria and result lines: [`3084-openai-analyzer-onbox-acceptance.md` §2](3084
 > The #3084 reporter's stall on a thinking model at Auto remains unproven; the model was unavailable for the whole window and a free-tier daily quota blocked the fallback. Re-run the two Gemini rows when `gemini-3.6-flash` has capacity.
 >
 > **Row verdict: KEEP — still owed: `gemini-3.6-flash` Auto and 8192 runs (503 / daily quota on every thinking model), and the Gemma re-split bullet (FAIL, #4723)**
+
+> **2026-11-28 — on-box Gemini re-run (#4728), claude lane (#4729), part 1 of 2 (Gemma):** The Gemma criterion above was amended first (owner decision on [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723): run it with reasoning `off`; an overflow at Gemma's default is by design). Run on this worktree's server (`node scripts/dev-server.mjs` in `server/`, port 8100, sidecar auto-start disabled, `main` ddf1b3f0, real Gemini key), with a throwaway `USER_SETTINGS_FILE` holding only `analyzerReasoningByEngine.gemini["gemma-4-31b-it"] = "off"` and `analyzer.gemini.maxOutputTokens = 64`. Same chapter file as 2026-11-26, **19,928 characters** (manuscript `mns_VUqreAlVdr`). Three runs of `POST /api/manuscripts/:id/analysis {"model":"gemma-4-31b-it","fresh":true}`; none completed the chapter. Run 1 (09:20) returned two answers and then ended on an idle stream; runs 2 (09:27) and 3 (10:00) got only 503s and add no observation. Capacity probes: 09:09 503, 09:19 200, 09:40 503, 10:00 200. Evidence: [`onbox-gemini-rerun-results/E111/`](onbox-gemini-rerun-results/E111/).
+>
+> - **`thoughtPartsBeforeAnswer=0` — FAIL.** Both streams that returned anything showed `thoughtPartsBeforeAnswer=1` (09:22:11, `firstChunkMs=32920`; 09:24:13, `firstChunkMs=34620`). The `0` lines are attempts with `firstChunkMs=none`. A direct API call at `MINIMAL` / 64 shows the part: `{"text": "","thought": true}`, with no thought-token count. Filed as bug [#4851](https://github.com/dudarenok-maker/Castwright/issues/4851).
+> - **At least one `bytes=0` truncation at `64` — FAIL.** None. Both truncations carried answer text: `[gemini] output truncated reason=MAX_TOKENS bytes=188 tokens=60 model=gemma-4-31b-it` and `… bytes=187 tokens=60 …`. The direct call also hit `MAX_TOKENS` after answer text. This is a small sample, but at `off` the clause may not be reachable (#4851, needs a decision).
+> - **Each `bytes=0` truncation followed by a re-split — NOT RUN** (no `bytes=0` truncation to follow). For the two non-empty ones: the first was followed by `Chapter 1/1 cast — large chapter, section 1/5 (3,442 chars)`; the second by a smaller request (`userTurnLength` 8934 → 7011) with no `section N/M` line, because the recursive split in `stage1-chunk.ts` does not log one.
+> - **No `analyzer-reasoning-overflow` — none seen** in any of the three runs. This proves nothing about the split path, since no empty truncation occurred. From the code (not observed), the thought part would make an empty `MAX_TOKENS` at `off` an overflow (#4851).
+> - **`gemini-3.6-flash` Auto and 8192 runs, and their pass criteria — STILL OWED**; not attempted here (part 2).
+>
+> Part 1 (Gemma) result: FAIL
 
 ### E112 · Gemini `schema` mode on a real key (#3084 PR 3b) · **any machine with a Gemini key; no GPU**
 

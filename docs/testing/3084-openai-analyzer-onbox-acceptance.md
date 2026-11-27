@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 (discharged 2026-11-26 (#4699), removed from the register) result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
+Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -113,9 +113,14 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
      before and after).
 3. Set Advanced Settings → "Gemini max output tokens" to `8192`, re-run the
    same chapter, and record the same fields.
-4. **Gemma split.** Select `gemma-4-31b-it` for both phases, set "Gemini max
+4. **Gemma split.** Select `gemma-4-31b-it` for both phases, set its reasoning
+   level to **`off`** (`analyzerReasoningByEngine.gemini["gemma-4-31b-it"] =
+   "off"`, or Advanced settings → Analyzer request controls), set "Gemini max
    output tokens" to `64`, and analyse the same chapter. A 64-token cap is far
-   below any chapter's reply, so Gemma must stop at `MAX_TOKENS`. Record:
+   below any chapter's reply, so Gemma must stop at `MAX_TOKENS`. At Gemma's
+   default (reasoning on), an `analyzer-reasoning-overflow` after a `bytes=0`
+   truncation is the by-design outcome (#4723). Record:
+   - the `thoughtPartsBeforeAnswer` of each `[gemini] stream-timing` line;
    - every `[gemini] output truncated reason=MAX_TOKENS bytes=0` line;
    - whether a `section N/M` re-split log line follows each of them;
    - any `analyzer-reasoning-overflow` failure;
@@ -125,16 +130,20 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
    **If no `bytes=0` line appears at `64`, this row FAILS.** Record the
    truncation lines that did appear and the SHA. The split recovery is unproven
    until an empty `MAX_TOKENS` has been reproduced.
-5. Clear the override (back to Auto).
+5. Clear the override (back to Auto), and set Gemma's reasoning level back to
+   the model default.
 
 ### Pass
 
 - Auto completes the chapter with no `analyzer-timeout` and no
   reasoning-overflow failure.
 - Auto uses no more requests than the 8192 run.
-- On `gemma-4-31b-it` at `64`, at least one `bytes=0` truncation appears,
+- On `gemma-4-31b-it` with reasoning `off` at `64`,
+  `thoughtPartsBeforeAnswer=0`, at least one `bytes=0` truncation appears,
   every one is followed by a re-split, and no `analyzer-reasoning-overflow`
-  failure occurs.
+  failure occurs. At Gemma's default (reasoning on), an
+  `analyzer-reasoning-overflow` after a `bytes=0` truncation is the by-design
+  outcome (#4723).
 - A truncation or overflow in the 8192 run is the baseline being recorded, not
   a failure of this row.
 
@@ -144,9 +153,11 @@ Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (als
 
 8192 baseline — Result: NOT RUN — same 503.
 
-Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723).
+Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723). → superseded: criterion amended 2026-11-28 (#4723); see the re-run below
 
-Run by / date / SHA:
+Gemma split (reasoning off) — Result: FAIL — 19,928 chars at 64: both streams that answered showed thoughtPartsBeforeAnswer=1 (empty thought part, bug #4851); no bytes=0 truncation (two truncations, bytes=188 and 187, each followed by a smaller request; section 1/5 logged after the first); no analyzer-reasoning-overflow; chapter not completed (idle stream, then 503). Evidence: onbox-gemini-rerun-results/E111/.
+
+Run by / date / SHA: claude lane (#4729, Gemma split only) / 2026-11-28 / main ddf1b3f0
 
 ---
 
