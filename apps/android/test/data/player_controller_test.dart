@@ -1013,6 +1013,182 @@ void main() {
 
   // ── Task 5: bookReplayedStream — un-finish on genuine replay ─────────────
 
+  group('applyPulledResume (#4722)', () {
+    const localStamp = '2026-06-01T10:00:00.000Z';
+    const pulledStamp = '2026-06-02T20:00:00.000Z';
+    const local = PlaybackPoint(
+        chapterUuid: 'u1', positionMs: 100000, listenedAt: localStamp);
+    PlaybackPoint pulled(String uuid) => PlaybackPoint(
+        chapterUuid: uuid, positionMs: 900000, listenedAt: pulledStamp);
+
+    test(
+        'paused, same chapter: seeks to the pulled position, and the next idle '
+        'save keeps the pulled position and stamp', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      // Listening that nothing has saved yet: the pulled point is newer, so it
+      // must not re-stamp the next save.
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause();
+      await Future<void>.delayed(Duration.zero);
+      store.map['b1'] = pulled('u1'); // what a resume-sync pull writes
+      engine.calls.clear();
+      await pc.applyPulledResume('b1');
+      expect(engine.position, const Duration(seconds: 900));
+      expect(engine.calls, ['seek:900000'],
+          reason: 'same chapter: no reload, and no play()');
+      await pc.saveNow(); // idle save, e.g. app background
+      expect(store.map['b1']!.positionMs, 900000);
+      expect(store.map['b1']!.listenedAt, pulledStamp);
+      await pc.dispose();
+    });
+
+    test('paused, different chapter: loads it and seeks to the pulled position',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      store.map['b1'] = pulled('u2');
+      engine.calls.clear();
+      await pc.applyPulledResume('b1');
+      expect(pc.currentChapterUuid, 'u2');
+      expect(engine.loadedPath, '/b1/u2/audio.mp3');
+      expect(engine.position, const Duration(seconds: 900));
+      expect(engine.calls, ['set:/b1/u2/audio.mp3', 'seek:900000']);
+      await pc.saveNow();
+      expect(store.map['b1']!.chapterUuid, 'u2');
+      expect(store.map['b1']!.positionMs, 900000);
+      expect(store.map['b1']!.listenedAt, pulledStamp);
+      await pc.dispose();
+    });
+
+    // The pull arrived while playing, so it stays ignored even if the user
+    // pauses before a store read could have returned.
+    test(
+        'engine playing: nothing changes, and a later played save stamps its '
+        'own time', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['b1'] = local;
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final pc = make(engine, store, now: () => t);
+      await pc.openBook('b1');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 5));
+      engine.emit(const Duration(seconds: 105)); // under the throttle: no save
+      await Future<void>.delayed(Duration.zero);
+      store.map['b1'] = pulled('u2');
+      engine.calls.clear();
+      store.gate = Completer<void>(); // holds any read the call makes
+      final apply = pc.applyPulledResume('b1');
+      await engine.pause();
+      store.gate!.complete();
+      await apply;
+      expect(engine.calls, ['pause'], reason: 'no load, no seek');
+      expect(pc.currentChapterUuid, 'u1');
+      expect(engine.position, const Duration(seconds: 105));
+      await pc.saveNow();
+      expect(store.map['b1']!.chapterUuid, 'u1');
+      expect(store.map['b1']!.positionMs, 105000);
+      expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:05.000Z');
+      await pc.dispose();
+    });
+
+    test('a book that is not the open one: nothing changes', () async {
+      final engine = FakeAudioEngine();
+      // b2's row names a chapter the open playlist has, so acting on it would
+      // be visible.
+      final store = MemPlaybackStore()
+        ..map['b1'] = local
+        ..map['b2'] = pulled('u2');
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      engine.calls.clear();
+      await pc.applyPulledResume('b2');
+      expect(engine.calls, isEmpty);
+      expect(pc.currentBookId, 'b1');
+      expect(pc.currentChapterUuid, 'u1');
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, localStamp);
+      await pc.dispose();
+    });
+
+    test('book switched while the store read is awaiting: nothing changes',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['b1'] = local;
+      // b2 shares the pulled uuid, so only the book re-check (not the playlist
+      // lookup) can stop the stale read being applied to it.
+      final pc = make(engine, store, playlists: {
+        'b1': playlistB1,
+        'b2': const [
+          PlayableChapter(uuid: 'v1', path: '/b2/v1/audio.mp3'),
+          PlayableChapter(uuid: 'u2', path: '/b2/u2/audio.mp3'),
+        ],
+      });
+      await pc.openBook('b1');
+      store.map['b1'] = pulled('u2');
+      final gate = Completer<void>();
+      store.gate = gate; // holds this call's read only
+      final apply = pc.applyPulledResume('b1');
+      store.gate = null;
+      await pc.openBook('b2');
+      engine.calls.clear();
+      gate.complete();
+      await apply;
+      expect(engine.calls, isEmpty);
+      expect(pc.currentBookId, 'b2');
+      expect(pc.currentChapterUuid, 'v1');
+      await pc.saveNow();
+      expect(store.map['b2']!.listenedAt, isEmpty);
+      await pc.dispose();
+    });
+
+    test('play started while the store read is awaiting: nothing changes',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      store.map['b1'] = pulled('u2');
+      engine.calls.clear();
+      store.gate = Completer<void>();
+      final apply = pc.applyPulledResume('b1');
+      await pc.play();
+      store.gate!.complete();
+      await apply;
+      expect(engine.calls, ['play'], reason: 'no load, no seek');
+      expect(pc.currentChapterUuid, 'u1');
+      await pc.saveNow();
+      expect(store.map['b1']!.chapterUuid, 'u1');
+      expect(store.map['b1']!.listenedAt, '2026-06-06T12:00:00.000Z');
+      await pc.dispose();
+    });
+
+    test('pulled chapter not in the playlist: nothing changes, no throw',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = make(engine, store);
+      await pc.openBook('b1');
+      store.map['b1'] = pulled('gone');
+      engine.calls.clear();
+      await pc.applyPulledResume('b1');
+      expect(engine.calls, isEmpty);
+      expect(pc.currentChapterUuid, 'u1');
+      expect(store.map['b1']!.chapterUuid, 'gone',
+          reason: 'the pulled row is left for the next open');
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, localStamp,
+          reason: 'an unapplied pull must not lend its stamp to this position');
+      await pc.dispose();
+    });
+  });
+
   group('bookReplayedStream', () {
     test(
         'forward navigation ch0→ch1→ch2 does NOT emit bookReplayedStream',

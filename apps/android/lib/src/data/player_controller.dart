@@ -543,6 +543,33 @@ class PlayerController {
     await openBook(bookId, bookTitle: bookTitle, artPath: artPath);
   }
 
+  /// Adopt a resume point that a resume-sync pull has just written for the open
+  /// book: seek to it and take on its `listenedAt`, so the next save doesn't
+  /// put the stale local position back over it (#4722).
+  ///
+  /// Only while paused — owner decision (2026-11-27): a pull never makes playing
+  /// audio jump. A pull for any other book is left for its next [openBook].
+  /// Never starts playback.
+  Future<void> applyPulledResume(String bookId) async {
+    if (_bookId != bookId) return;
+    if (_engine.playing) return;
+    final saved = await _store.loadPlayback(bookId);
+    if (saved == null) return;
+    // The user may have pressed play or switched book during the read.
+    if (_bookId != bookId || _engine.playing) return;
+    final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
+    if (i < 0) return;
+    // Adopted before the seek, so a save its position tick triggers carries the
+    // pulled stamp. Unsaved local listening is older than the pulled point.
+    _lastListenedAt = saved.listenedAt;
+    _playedSinceSave = false;
+    if (i == _index) {
+      await _engine.seek(Duration(milliseconds: saved.positionMs));
+    } else {
+      await _loadIndex(i, seekMs: saved.positionMs, userInitiated: true);
+    }
+  }
+
   Future<void> skip({required bool forward}) async {
     final action = resolveSkipAction(skipBehavior_,
         forward: forward,
