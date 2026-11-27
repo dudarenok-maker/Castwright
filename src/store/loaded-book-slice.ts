@@ -60,3 +60,13 @@ export function selectLoadedBookMatchesStage(state: {
     manuscriptId: loadedManuscriptId ?? '',
   });
 }
+
+/** Must edits be held back: a Confirm or Ready view over slices that do not
+    hold its book. Analysing is left out, as it starts on empty slices and
+    grows them. */
+export function selectEditsGated(
+  state: Parameters<typeof selectLoadedBookMatchesStage>[0],
+): boolean {
+  const { kind } = state.ui.stage;
+  return (kind === 'confirm' || kind === 'ready') && selectLoadedBookMatchesStage(state) === false;
+}

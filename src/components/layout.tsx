@@ -43,7 +43,7 @@ import {
   castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { selectLoadedBook } from '../store/loaded-book-slice';
+import { selectEditsGated, selectLoadedBook } from '../store/loaded-book-slice';
 import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
@@ -906,6 +906,17 @@ export function Layout() {
   const fullReadInFlight = useRef<string | null>(null);
   const marksFor = (id: string) => store.getState().bookMeta.needsFullRead?.[id] ?? 0;
 
+  /* #3519 — the book whose full read landed empty. With no other book held
+     that read moves nothing in the loaded-book pair, so the edit gate would
+     never clear on the pair alone; with the pair naming no book there is
+     nothing for an edit to land in but this one. */
+  const [emptyReadBookId, setEmptyReadBookId] = useState<string | null>(null);
+  const editsGated = useAppSelector(
+    (s) =>
+      selectEditsGated(s) &&
+      !(selectLoadedBook(s).loadedBookId === null && emptyReadBookId === bookId),
+  );
+
   /* Per-book hydration. When the user opens a book whose redux state isn't
      populated (page refresh, library click on a previously analysed book, or
      library click on a book mid-analysis), fetch the on-disk .audiobook/*.json
@@ -1022,6 +1033,7 @@ export function Layout() {
               if (held !== null && held !== bookId) {
                 resetBookSlices(dispatch, bookId);
               }
+              setEmptyReadBookId(bookId);
             }
             return;
           }
@@ -1320,6 +1332,8 @@ export function Layout() {
     return () => {
       cancelled = true;
       fullReadInFlight.current = null;
+      /* The next run reads again, so an earlier empty read no longer counts. */
+      setEmptyReadBookId(null);
       readCtrl?.abort();
       if (retryTimer) clearTimeout(retryTimer);
       for (const t of boundTimers) clearTimeout(t);
@@ -2412,9 +2426,29 @@ export function Layout() {
           150 ms delay (DelayedSpinner default) means cached routes swap
           in with no visible spinner; only genuinely-cold chunk downloads
           paint the loading state. */}
-      <Suspense fallback={<DelayedSpinner />}>
-        <Outlet context={ctx} />
-      </Suspense>
+      {/* #3519 — while the slices hold another book than the stage names, the
+          view is inert under a loading overlay: the persistence gate would
+          drop an edit made there (#3624). Both wrappers stay mounted so the
+          view is not remounted when the gate clears. Global chrome sits
+          outside, so the user can still leave. */}
+      <div className={editsGated ? 'relative' : undefined}>
+        <div
+          inert={editsGated}
+          aria-busy={editsGated || undefined}
+          className={editsGated ? 'isolate' : undefined}
+        >
+          <Suspense fallback={<DelayedSpinner />}>
+            <Outlet context={ctx} />
+          </Suspense>
+        </div>
+        {editsGated && (
+          <div data-testid="book-loading" className="absolute inset-0 z-10 bg-canvas/70">
+            <div className="sticky top-16">
+              <DelayedSpinner label="Loading this book…" />
+            </div>
+          </div>
+        )}
+      </div>
 
       {/* Plan 124 — build-version footer. Last in-flow child of the shell so it
           sits at the bottom of page content on every stage. The fixed MiniPlayer

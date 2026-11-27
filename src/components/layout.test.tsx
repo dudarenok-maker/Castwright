@@ -898,6 +898,117 @@ describe('Layout — the "already loaded" short-circuit reads the loaded-book pa
   });
 });
 
+/* #3519 — while the slices hold another book than the stage names, an edit in
+   the routed view would be dropped by the persistence gate, so the view is
+   inert under a loading overlay instead. */
+describe('Layout — edits are gated while the slices do not hold the stage book (#3519)', () => {
+  function renderWithView(store: ReturnType<typeof makeStore>) {
+    return render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<button type="button" data-testid="routed-view">Edit</button>} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+  }
+  const open = (store: ReturnType<typeof makeStore>, id: string, status = 'complete') =>
+    act(() => { store.dispatch({ type: 'ui/openBook', payload: { id, status } }); });
+  const hydrateFor = (id: string) =>
+    manuscriptActions.hydrateFromBookState({
+      state: bookStateFor(id, null).state as never,
+      sentences: null,
+    });
+  const neverLands = () => new Promise<never>(() => {});
+  const view = () => screen.findByTestId('routed-view');
+  const expectGated = async () => {
+    const el = await view();
+    expect(screen.getByTestId('book-loading')).toBeInTheDocument();
+    expect(el.closest('[inert]')).toHaveAttribute('aria-busy', 'true');
+  };
+  const expectInteractive = async () => {
+    const el = await view();
+    expect(screen.queryByTestId('book-loading')).toBeNull();
+    expect(el.closest('[inert]')).toBeNull();
+    expect(el.closest('[aria-busy]')).toBeNull();
+  };
+
+  it.each([
+    ['ready', 'complete'],
+    ['confirm', 'cast_pending'],
+  ])('gates the %s view until the slices hold its book', async (kind, status) => {
+    getBookStateMock.mockImplementation(neverLands);
+    const store = makeStore();
+    store.dispatch(hydrateFor('b2'));
+    open(store, 'b1', status);
+    expect(store.getState().ui.stage.kind).toBe(kind);
+    renderWithView(store);
+
+    await expectGated();
+    expect(await within(screen.getByTestId('book-loading')).findByText('Loading this book…')).toBeInTheDocument();
+    /* Global chrome stays usable: the user can leave while the book loads. */
+    expect(screen.getByRole('banner').closest('[inert]')).toBeNull();
+
+    act(() => { store.dispatch(hydrateFor('b1')); });
+    await expectInteractive();
+  });
+
+  it('keeps the same view element when the gate clears (no remount)', async () => {
+    getBookStateMock.mockImplementation(neverLands);
+    const store = makeStore();
+    store.dispatch(hydrateFor('b2'));
+    open(store, 'b1');
+    renderWithView(store);
+    const before = await view();
+    act(() => { store.dispatch(hydrateFor('b1')); });
+    expect(await view()).toBe(before);
+  });
+
+  it('does not gate a render of the book the slices already hold', async () => {
+    getBookStateMock.mockImplementation(neverLands);
+    const store = makeStore();
+    store.dispatch(hydrateFor('b1'));
+    open(store, 'b1');
+    renderWithView(store);
+    await expectInteractive();
+  });
+
+  /* A landed empty read (a 404, or a fresh mock boot) with no other book held
+     moves nothing in the pair, so the gate has to clear on the read itself. */
+  it.each([
+    ['a fresh session', undefined],
+    ['a reload whose restored manuscript names this book', { manuscript: restoredManuscript('b1') }],
+  ])('clears the gate once an empty read lands in %s', async (_name, preloaded) => {
+    let land: (v: null) => void = () => {};
+    getBookStateMock.mockImplementation(() => new Promise((resolve) => { land = resolve; }));
+    const store = makeStore([], preloaded);
+    open(store, 'b1');
+    renderWithView(store);
+    await expectGated();
+    await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
+
+    await act(async () => { land(null); });
+    await expectInteractive();
+  });
+
+  it("does not carry one book's empty read over to the next book, or to a later return", async () => {
+    getBookStateMock.mockResolvedValueOnce(null).mockImplementation(neverLands);
+    const store = makeStore();
+    open(store, 'b1');
+    renderWithView(store);
+    await view();
+    await waitFor(() => expect(screen.queryByTestId('book-loading')).toBeNull());
+
+    open(store, 'b2');
+    await expectGated();
+    open(store, 'b1');
+    await expectGated();
+  });
+});
+
 /* #3774 H' -- the include origin lives on the SERVER (the include's start POST
    carries it; GET /analysis/state reports it for the live run), because the client
    snapshot is rebuilt from that answer on every arrival at a book the manuscript

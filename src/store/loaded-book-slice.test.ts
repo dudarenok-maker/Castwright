@@ -4,6 +4,7 @@ import {
   loadedBookSlice,
   selectLoadedBook,
   selectLoadedBookMatchesStage,
+  selectEditsGated,
 } from './loaded-book-slice';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { castSlice, castActions } from './cast-slice';
@@ -150,5 +151,46 @@ describe('selectLoadedBookMatchesStage', () => {
     expect(selectLoadedBookMatchesStage(analysing('m1', 'm1'))).toBe(true);
     expect(selectLoadedBookMatchesStage(analysing('m2', 'm1'))).toBe(false);
     expect(selectLoadedBookMatchesStage(analysing('m1', null))).toBe(false);
+  });
+});
+
+describe('selectEditsGated', () => {
+  const loadedB1 = () => {
+    const store = makeStore();
+    store.dispatch(hydrate('b1', 'm1'));
+    return store;
+  };
+
+  it.each(['complete', 'cast_pending'] as const)(
+    'true on a mismatch (a %s book opens on ready or confirm)',
+    (status) => {
+      const store = loadedB1();
+      store.dispatch(uiActions.openBook({ id: 'b2', status }));
+      expect(store.getState().ui.stage.kind).toBe(status === 'complete' ? 'ready' : 'confirm');
+      expect(selectEditsGated(store.getState())).toBe(true);
+    },
+  );
+
+  it.each(['complete', 'cast_pending'] as const)('false when the %s book is the loaded one', (status) => {
+    const store = loadedB1();
+    store.dispatch(uiActions.openBook({ id: 'b1', status }));
+    expect(selectEditsGated(store.getState())).toBe(false);
+  });
+
+  /* Analysing legitimately starts on empty slices and grows them. */
+  it('false on the analysing stage, even on a mismatch', () => {
+    const store = loadedB1();
+    store.dispatch(uiActions.openBook({ id: 'b2', status: 'analysing', manuscriptId: 'm2' }));
+    expect(store.getState().ui.stage.kind).toBe('analysing');
+    expect(selectLoadedBookMatchesStage(store.getState())).toBe(false);
+    expect(selectEditsGated(store.getState())).toBe(false);
+  });
+
+  it.each(['books', 'upload', 'account'])('false on the %s stage', (kind) => {
+    const state = {
+      ui: { stage: { kind } },
+      loadedBook: { loadedBookId: 'b1', loadedManuscriptId: 'm1' },
+    };
+    expect(selectEditsGated(state)).toBe(false);
   });
 });
