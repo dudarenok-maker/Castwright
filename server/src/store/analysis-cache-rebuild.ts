@@ -11,11 +11,14 @@
    This helper re-derives the cache's `chapters` map from manuscript-edits
    .json. Sentence shape matches: SentenceOutput requires { id, chapterId,
    characterId, text } and accepts optional `confidence`, all of which
-   manuscript-edits.json carries through the remap. chapterCast /
-   stage1 / castDurations / failedChapterIds are carried forward
-   unchanged from any prior cache — generation doesn't read them, but
-   keeping them avoids dropping observed-rate samples that the analyzer
-   uses on resume.
+   manuscript-edits.json carries through the remap. The other members of
+   any prior cache are carried forward — generation doesn't read them,
+   but keeping them avoids dropping observed-rate samples that the
+   analyzer uses on resume. A restructure passes `remap` (#3506), which
+   moves the chapter-keyed ones (chapterCast, castDurations,
+   stage2Durations, failedChapterIds, failedChapterErrors and the pending
+   set) to each chapter's new id (analysis-cache-restructure.ts); without
+   `remap` they keep the ids they had.
 
    Plan 287 spec 2.2 — two modes. `'overlay'` (the default) lays the edits
    over the prior chapters map instead of replacing it: the edits carry no
@@ -39,6 +42,7 @@ import {
   clearAnalysisCache,
   mutateAnalysisCache,
 } from './analysis-cache.js';
+import { remapCacheChapterKeys } from './analysis-cache-restructure.js';
 
 interface EditsFile {
   sentences?: SentenceOutput[];
@@ -50,6 +54,9 @@ export interface RebuildCacheOptions {
   /** Overlay only: the chapters excluded in state.json, whose prior take is
       kept although the edits do not carry it. */
   excludedChapterIds?: readonly number[];
+  /** Replace only (#3506): the restructure's old → new chapter ids, and the new
+      ids to reset. Applied to the prior chapter-keyed records. */
+  remap?: { idMap: ReadonlyMap<number, number>; resetNewIds: ReadonlySet<number> };
 }
 
 export async function rebuildCacheFromEdits(
@@ -78,6 +85,7 @@ export async function rebuildCacheFromEdits(
      cannot be lost between a load and a save. A file this op creates is stamped
      v2 (it holds cast-of-record ids only); a loaded cache keeps its own version. */
   const excluded = new Set(opts.excludedChapterIds ?? []);
+  const { remap } = opts;
   await mutateAnalysisCache(manuscriptId, {
     chapters,
     chaptersMode: mode === 'overlay' ? 'merge' : 'replace',
@@ -99,7 +107,7 @@ export async function rebuildCacheFromEdits(
             }
             return { ...cache, chapters: kept };
           }
-        : undefined,
+        : remap && ((cache) => remapCacheChapterKeys(cache, remap.idMap, remap.resetNewIds)),
   });
 }
 

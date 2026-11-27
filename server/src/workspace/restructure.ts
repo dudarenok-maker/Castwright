@@ -210,6 +210,25 @@ export function pendingMovesAfterRestructure(
   return moves;
 }
 
+/** #3506 — old chapter id → new chapter id, paired by chapter `uuid` (the identity a
+    restructure carries). An old chapter with no uuid, or whose uuid no new chapter
+    holds (merged away, pruned), gets no entry. */
+export function chapterIdMapByUuid(
+  oldChapters: BookStateJson['chapters'],
+  newChapters: BookStateJson['chapters'],
+): Map<number, number> {
+  const newIdByUuid = new Map<string, number>();
+  for (const c of newChapters) {
+    if (c.uuid) newIdByUuid.set(c.uuid, c.id);
+  }
+  const idMap = new Map<number, number>();
+  for (const old of oldChapters) {
+    const newId = old.uuid ? newIdByUuid.get(old.uuid) : undefined;
+    if (newId !== undefined) idMap.set(old.id, newId);
+  }
+  return idMap;
+}
+
 /** #3704 — the slugs whose `.previous.*` take must be cleared before a restructure's renames
     land: every slug a chapter newly occupies without its own take arriving. A rendered chapter
     with no rename op keeps its slug and its own take, so it is skipped; a rename target is

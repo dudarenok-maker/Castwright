@@ -784,6 +784,67 @@ describe('POST /:bookId/chapters/reorder', () => {
   });
 });
 
+/* -- analysis records ----------------------------------------------- */
+
+describe('#3506 — analysis records follow their chapter through a restructure', () => {
+  const castOf = (id: string) => [{ id, name: id, role: 'minor', color: 'halloran' }];
+  const failureOf = (message: string) => ({
+    code: 'analyzer-timeout',
+    message,
+    remediation: 'Retry.',
+    phase: 'cast' as const,
+  });
+
+  /* Chapters 1 and 2 each carry a failure record, a cast record and a place in P;
+     chapter 3 carries none, so a record left on its new id shows. */
+  async function seedRecords(): Promise<void> {
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {},
+      chapterCast: { 1: castOf('one'), 2: castOf('two') },
+      failedChapterIds: [1, 2],
+      failedChapterErrors: { '1': failureOf('one'), '2': failureOf('two') },
+      pendingAttributionChapterIds: [1, 2],
+    });
+  }
+
+  async function loadRecords() {
+    const { loadAnalysisCache } = await import('../store/analysis-cache.js');
+    return loadAnalysisCache(MANUSCRIPT_ID);
+  }
+
+  it('rename keeps every record under its unchanged chapter id', async () => {
+    await seedRecords();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/2/rename`)
+      .send({ title: 'The Hunt Begins' });
+    expect(res.status).toBe(200);
+
+    const cache = await loadRecords();
+    expect(cache.chapterCast).toEqual({ 1: castOf('one'), 2: castOf('two') });
+    expect(cache.failedChapterIds).toEqual([1, 2]);
+    expect(cache.failedChapterErrors).toEqual({ '1': failureOf('one'), '2': failureOf('two') });
+    expect(cache.pendingAttributionChapterIds).toEqual([1, 2]);
+  });
+
+  it('reorder [3,1,2] moves every record to its chapter new id', async () => {
+    await seedRecords();
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/reorder`)
+      .send({ order: [3, 1, 2] });
+    expect(res.status).toBe(200);
+
+    /* Old chapter 1 is now 2, old chapter 2 is now 3. */
+    const cache = await loadRecords();
+    expect(cache.chapterCast).toEqual({ 2: castOf('one'), 3: castOf('two') });
+    expect(cache.failedChapterIds).toEqual([2, 3]);
+    expect(cache.failedChapterErrors).toEqual({ '2': failureOf('one'), '3': failureOf('two') });
+    expect(cache.pendingAttributionChapterIds).toEqual([2, 3]);
+  });
+});
+
 /* -- cross-cutting -------------------------------------------------- */
 
 describe('chapters-restructure shared behaviour', () => {

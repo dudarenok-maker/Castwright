@@ -22,6 +22,7 @@ import {
   computeBodySplitIndex,
   touchedChapterIds,
   pendingMovesAfterRestructure,
+  chapterIdMapByUuid,
   carryMergedAwayKeys,
   applySentenceRemap,
   type RefreshTitlesOptions,
@@ -1266,6 +1267,43 @@ describe('pendingMovesAfterRestructure (#3704)', () => {
   });
   it('never maps a delete', () => {
     expect(pendingMovesAfterRestructure(old as never, ops, new Set(['05-e'])).size).toBe(0);
+  });
+});
+
+describe('chapterIdMapByUuid (#3506)', () => {
+  const chapters = (...rows: Array<[number, string?]>) =>
+    rows.map(([id, uuid]) => ({ id, uuid, title: `C${id}`, slug: `c-${id}` }));
+
+  it('a reorder maps each old id to the id its uuid now holds', () => {
+    const map = chapterIdMapByUuid(
+      chapters([1, 'a'], [2, 'b'], [3, 'c']),
+      chapters([1, 'c'], [2, 'a'], [3, 'b']),
+    );
+    expect(map).toEqual(
+      new Map([
+        [1, 2],
+        [2, 3],
+        [3, 1],
+      ]),
+    );
+  });
+
+  it('gives no entry to a chapter missing from the new state', () => {
+    const map = chapterIdMapByUuid(
+      chapters([1, 'a'], [2, 'b'], [3, 'c']),
+      chapters([1, 'a'], [2, 'c']),
+    );
+    expect(map).toEqual(
+      new Map([
+        [1, 1],
+        [3, 2],
+      ]),
+    );
+  });
+
+  it('gives no entry to an old chapter with no uuid, even beside a new one without', () => {
+    const map = chapterIdMapByUuid(chapters([1], [2, 'b']), chapters([1, 'b'], [2]));
+    expect(map).toEqual(new Map([[2, 1]]));
   });
 });
 

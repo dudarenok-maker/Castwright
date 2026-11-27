@@ -45,6 +45,7 @@ import {
   applyRename,
   touchedChapterIds,
   pendingMovesAfterRestructure,
+  chapterIdMapByUuid,
   staleTakeClearSlugs,
   carryMergedAwayKeys,
   type MergeOp,
@@ -717,10 +718,19 @@ async function applyRestructureClaimed(
   // sentences keyed by the new chapter ids. Earlier code wiped the
   // cache outright, which made every post-restructure Generate halt
   // with "No analysed sentences cached for this book."
-  // Plan 287 — 'replace': ids are renumbered, so prior keys cannot be kept.
+  // Plan 287 — 'replace': ids are renumbered, so the takes are rebuilt whole.
+  // #3506 — the other chapter-keyed records (failures, chapterCast, durations,
+  // pending set) are remapped to each chapter's new id, paired by uuid, in the
+  // same cache write.
   // Plan 290 — called with the result state, which carries the stale-evidence
   // marker forward: while it is set the cache is cleared instead of rebuilt.
-  await refreshCacheFromEdits(result.state, editsPath, { mode: 'replace' }).catch((e) => {
+  await refreshCacheFromEdits(result.state, editsPath, {
+    mode: 'replace',
+    remap: {
+      idMap: chapterIdMapByUuid(oldChapters, result.state.chapters),
+      resetNewIds: new Set(),
+    },
+  }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
   });
 
