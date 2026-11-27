@@ -2,6 +2,7 @@
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   STICKY_MARKER,
   compareSemver,
@@ -121,4 +122,12 @@ test('renderSummary lists behind deps in a table', () => {
   });
   assert.ok(md.includes('build_runner'));
   assert.ok(md.includes('2.16.0'));
+});
+
+test('deps-watch sticky posts on #4726 by default, not the KGP issue #790 (#4696)', () => {
+  // The IO orchestrator is not unit-tested (it shells out to gh), so pin its
+  // default issue number by reading its source.
+  const src = readFileSync(new URL('../deps-watch-run.mjs', import.meta.url), 'utf8');
+  assert.match(src, /process\.env\.OPS17_ISSUE \|\| '4726'/);
+  assert.doesNotMatch(src, /\|\| '790'/);
 });

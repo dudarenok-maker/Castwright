@@ -1,8 +1,9 @@
 // scripts/deps-watch.mjs
-// Pure helpers for the ops-17 deps-watch (#790). NO IO here. Unit-tested under
-// scripts/tests/deps-watch.test.mjs (npm run test:hooks). The KGP-plugin
-// signal was retired (#4649): #790 is tracked by hand; only the catch-up nudge
-// (direct/dev deps behind `latest`) remains.
+// Pure helpers for the ops-17 deps-watch. NO IO here. Unit-tested under
+// scripts/tests/deps-watch.test.mjs (npm run test:hooks). The sticky comment
+// lives on #4726 (#4696); #790 is the KGP issue, tracked by hand. The KGP-plugin
+// signal was retired (#4649): only the catch-up nudge (direct/dev deps behind
+// `latest`) remains.
 
 export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
 
