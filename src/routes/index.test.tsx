@@ -17,6 +17,7 @@ import { uiSlice, uiActions } from '../store/ui-slice';
 import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { queueSlice } from '../store/queue-slice';
 import { revisionsSlice } from '../store/revisions-slice';
@@ -182,6 +183,7 @@ function makeStore(opts: { persist?: boolean } = {}) {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,

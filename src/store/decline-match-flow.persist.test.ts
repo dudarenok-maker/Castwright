@@ -22,6 +22,8 @@ import { declineMatchFlow } from './decline-match-flow';
 import { castSlice, castActions } from './cast-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
+import type { LoadedBookState } from './loaded-book-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import type { Character } from '../lib/types';
 
 const row = (extra: Record<string, unknown>) =>
@@ -41,6 +43,7 @@ function makeStore(characters: Character[]) {
       ui: uiSlice.reducer,
       notifications: notificationsSlice.reducer,
       manuscript: (s: { manuscriptId: string | null } = { manuscriptId: 'm-two' }) => s,
+      loadedBook: (s: LoadedBookState = loadedPair({ manuscriptId: 'm-two' })) => s,
     },
     preloadedState: {
       ui: { ...initialUi, stage: { kind: 'ready', bookId: 'book-two', view: 'cast' } } as ReturnType<typeof uiSlice.getInitialState>,

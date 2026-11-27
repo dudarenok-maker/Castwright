@@ -3,6 +3,8 @@ import { combineReducers, configureStore } from '@reduxjs/toolkit';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { uiSlice } from '../store/ui-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { prosodySlice } from '../store/prosody-slice';
@@ -24,12 +26,14 @@ function makeStore() {
   const store = configureStore({
     reducer: {
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
       prosody: prosodySlice.reducer,
       scriptReview: scriptReviewSlice.reducer,
     },
     preloadedState: {
+      loadedBook: loadedPair({ bookId: 'b1' }),
       manuscript: {
         ...manuscriptSlice.getInitialState(),
         bookId: 'b1',
@@ -100,6 +104,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
     function makeSwitchableStore() {
       const combined = combineReducers({
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer,
         prosody: prosodySlice.reducer,
@@ -118,13 +123,19 @@ describe('fs-33 — DetectEmotionsButton', () => {
       const rootReducer = (state: ReturnType<typeof combined> | undefined, action: any) => {
         if (action.type === 'test/switchToY') {
           const base = combined(state, { type: 'noop' });
-          return { ...base, manuscript: yState.manuscript, ui: { ...base.ui, stage: yState.stage } };
+          return {
+            ...base,
+            manuscript: yState.manuscript,
+            loadedBook: loadedPair(yState.manuscript),
+            ui: { ...base.ui, stage: yState.stage },
+          };
         }
         return combined(state, action);
       };
       return configureStore({
         reducer: rootReducer as never,
         preloadedState: {
+          loadedBook: loadedPair({ bookId: 'bX', manuscriptId: 'mX' }),
           manuscript: {
             ...manuscriptSlice.getInitialState(),
             bookId: 'bX',
@@ -203,11 +214,12 @@ describe('fs-33 — DetectEmotionsButton', () => {
          book B's sentences. A click must not bind to B. */
       const store = configureStore({
         reducer: {
-          manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer,
+          manuscript: manuscriptSlice.reducer, loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer,
           chapters: chaptersSlice.reducer, prosody: prosodySlice.reducer,
           scriptReview: scriptReviewSlice.reducer,
         },
         preloadedState: {
+          loadedBook: loadedPair({ bookId: 'bB', manuscriptId: 'mB' }),
           manuscript: {
             ...manuscriptSlice.getInitialState(),
             bookId: 'bB',
@@ -572,7 +584,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
   it('primary is disabled when the current chapter has no sentences', () => {
     const store = configureStore({
       reducer: {
-        manuscript: manuscriptSlice.reducer, ui: uiSlice.reducer,
+        manuscript: manuscriptSlice.reducer, loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer,
         chapters: chaptersSlice.reducer, prosody: prosodySlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
       },

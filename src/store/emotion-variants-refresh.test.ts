@@ -6,6 +6,8 @@ import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { castSlice } from './cast-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
+import { loadedBookSlice } from './loaded-book-slice';
 import { refreshEmotionVariants } from './emotion-variants-refresh';
 import { api } from '../lib/api';
 import type { Character } from '../lib/types';
@@ -28,10 +30,11 @@ const row = (id: string, key: string, variants: Record<string, { name: string }>
 
 function makeStore(characters: Character[], manuscriptId: string | null = 'mns_y') {
   return configureStore({
-    reducer: { cast: castSlice.reducer, manuscript: manuscriptSlice.reducer },
+    reducer: { cast: castSlice.reducer, manuscript: manuscriptSlice.reducer, loadedBook: loadedBookSlice.reducer },
     preloadedState: {
       cast: { characters },
       manuscript: { ...manuscriptSlice.getInitialState(), manuscriptId },
+      loadedBook: loadedPair({ manuscriptId }),
     },
   });
 }

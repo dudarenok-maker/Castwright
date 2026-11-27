@@ -12,6 +12,7 @@ import { analysisSlice, analysisActions } from '../store/analysis-slice';
 import { castDesignSlice, castDesignActions } from '../store/cast-design-slice';
 import { librarySlice } from '../store/library-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { voiceLibrarySlice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -141,6 +142,7 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       voiceLibrary: voiceLibrarySlice.reducer,
       analysis: analysisSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
     preloadedState: myVoices

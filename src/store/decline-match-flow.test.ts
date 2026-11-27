@@ -4,6 +4,8 @@ import { declineMatchFlow } from './decline-match-flow';
 import { castSlice } from './cast-slice';
 import { uiSlice } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
+import type { LoadedBookState } from './loaded-book-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import type { Character } from '../lib/types';
 
 vi.mock('../lib/api', () => ({
@@ -27,8 +29,8 @@ function makeStore(characters: Character[], stage: 'ready' | 'confirm' | 'books'
       notifications: notificationsSlice.reducer,
       /* the slices hold ONE book at a time; `test/open` stands in for the layout
          hydrating another book's slices */
-      manuscript: (s: { manuscriptId: string | null } = { manuscriptId: 'm-two' }, a: { type: string; payload?: string }) =>
-        a.type === 'test/open' ? { manuscriptId: a.payload ?? null } : s,
+      loadedBook: (s: LoadedBookState = loadedPair({ manuscriptId: 'm-two' }), a: { type: string; payload?: string }) =>
+        a.type === 'test/open' ? loadedPair({ manuscriptId: a.payload }) : s,
     },
     preloadedState: {
       ui: {
@@ -251,7 +253,7 @@ describe('declineMatchFlow — route-backed meta (plan 291, R31)', () => {
         cast: castSlice.reducer,
         ui: uiSlice.reducer,
         notifications: notificationsSlice.reducer,
-        manuscript: (s: { manuscriptId: string | null } = { manuscriptId: 'm-two' }) => s,
+        loadedBook: (s: LoadedBookState = loadedPair({ manuscriptId: 'm-two' })) => s,
       },
       preloadedState: {
         ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: 'book-two', view: 'cast' } } as ReturnType<

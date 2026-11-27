@@ -11,6 +11,7 @@ import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { AnalysingView } from './analysing';
 import { castGateMiddleware } from '../store/cast-gate';
 import { WIKI_BASE } from '../lib/wiki-links';
@@ -132,6 +133,7 @@ function renderView(bookId?: string) {
       bookMeta: bookMetaSlice.reducer,
       notifications: notificationsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
     },
   });
   /* The cast slice holds m1: the open book (store/open-book.ts). */
@@ -2770,7 +2772,7 @@ describe('AnalysingView — failed-chapter retry', () => {
           bookMeta: bookMetaSlice.reducer,
           analysis: analysisSlice.reducer,
           notifications: notificationsSlice.reducer,
-          ...(withManuscript ? { manuscript: manuscriptSlice.reducer } : {}),
+          ...(withManuscript ? { manuscript: manuscriptSlice.reducer, loadedBook: loadedBookSlice.reducer } : {}),
         },
         middleware: (gd) => gd().concat(...(withGate ? [castGateMiddleware] : [])),
       });

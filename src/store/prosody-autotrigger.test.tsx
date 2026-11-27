@@ -30,6 +30,7 @@ import { castSlice } from './cast-slice';
 import { chaptersSlice } from './chapters-slice';
 import { revisionsSlice } from './revisions-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
 import { librarySlice } from './library-slice';
 import { voicesSlice } from './voices-slice';
 import { changeLogSlice } from './change-log-slice';
@@ -146,8 +147,13 @@ import { isChapterTextEditedSinceRender, textHashForStale } from '../lib/stale-c
 
 /* ── Store factory ─────────────────────────────────────────────────────── */
 
-function makeStore(withPersistence = false) {
+function makeStore(
+  withPersistence = false,
+  /* What redux-persist restores into the manuscript slice on a page reload. */
+  restoredManuscript: Partial<ReturnType<typeof manuscriptSlice.getInitialState>> = {},
+) {
   return configureStore({
+    preloadedState: { manuscript: { ...manuscriptSlice.getInitialState(), ...restoredManuscript } },
     middleware: (getDefault) =>
       withPersistence ? getDefault().concat(persistenceMiddleware) : getDefault(),
     reducer: {
@@ -157,6 +163,7 @@ function makeStore(withPersistence = false) {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,
@@ -1086,6 +1093,30 @@ describe('Layout — an unfinished book is re-run when it is next opened (#3435)
     expect(JSON.stringify(puts[1][1])).toContain('"emotion":"angry"');
     expect(detectEmotionsMock).toHaveBeenCalledTimes(2);
   }, 10_000);
+
+  /* #3519 — after a reload redux-persist restores the manuscript slice's ids
+     before any read, but the slices hold the book only once its read lands. A
+     trigger that fired on the restored ids would find the book not open, apply
+     nothing, and count this visit as handled. */
+  it('after a reload, the re-run on open waits for the slices to hold the book, then fills it', async () => {
+    marks.set('b1', false);
+    libBooks = [makeBook('b1', 'cast_pending')];
+    /* The first read issued answers late (on a reload that is the layout's
+       hydrate), every later one at once. */
+    let reads = 0;
+    getBookStateMock.mockImplementation(async (id: string) => {
+      if (++reads === 1) await new Promise((r) => setTimeout(r, 100));
+      return stateFor(id);
+    });
+    const store = makeStore(true, { bookId: 'b1', manuscriptId: 'mns_b1', title: 'Book b1' });
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_pending' }));
+    renderAnyPath(store);
+
+    await waitFor(() => expect(watermarkPuts('b1')).toHaveLength(1), { timeout: 3000 });
+    expect(detectEmotionsMock).toHaveBeenCalledTimes(1);
+    expect(emotionOf(store, 1)).toBe('angry');
+    expect(emotionOf(store, 2)).toBe('sad');
+  });
 
   it('P6b: a run that stays on the Library saves nothing and marks its book unfinished; opening the book re-runs it into that book and marks it', async () => {
     const store = makeStore(true);

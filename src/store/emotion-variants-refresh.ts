@@ -20,6 +20,7 @@
  *     clear is the half a mock backend serves). */
 
 import { castActions } from './cast-slice';
+import { selectLoadedBook } from './loaded-book-slice';
 import { api } from '../lib/api';
 import type { Character } from '../lib/types';
 import type { AppDispatch, RootState } from './index';
@@ -37,11 +38,11 @@ export function refreshEmotionVariants(bookId: string, characterId: string) {
   return async (dispatch: AppDispatch, getState: () => RootState): Promise<void> => {
     if (import.meta.env.VITE_USE_MOCKS === 'true') return;
     try {
-      const { cast, manuscript } = getState();
+      const { cast } = getState();
       const redesigned = cast.characters.find((c) => c.id === characterId);
       if (!redesigned) return;
       const key = variantBaseKey(redesigned);
-      const loadedId = manuscript.manuscriptId;
+      const loadedId = selectLoadedBook(getState()).loadedManuscriptId;
       const snapshot = cast.characters
         .filter((c) => variantBaseKey(c) === key)
         .map((c) => ({ id: c.id, emotions: Object.keys(c.overrideTtsVoices?.qwen?.variants ?? {}) }))
@@ -52,7 +53,11 @@ export function refreshEmotionVariants(bookId: string, characterId: string) {
       if (!characters || !loadedId) return;
       /* The read must be of the book the slices still hold, not merely a book
          that did not change while we waited. */
-      if (res.state?.manuscriptId !== loadedId || getState().manuscript.manuscriptId !== loadedId) return;
+      if (
+        res.state?.manuscriptId !== loadedId ||
+        selectLoadedBook(getState()).loadedManuscriptId !== loadedId
+      )
+        return;
       const fresh = new Map(characters.map((c) => [c.id, c.overrideTtsVoices?.qwen?.variants]));
       dispatch(
         castActions.pruneStaleEmotionVariants(

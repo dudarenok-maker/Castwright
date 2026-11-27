@@ -26,6 +26,7 @@ import { castActions } from './cast-slice';
 import { notificationsActions } from './notifications-slice';
 import { api } from '../lib/api';
 import { selectIsOpenBook } from './open-book';
+import { selectLoadedBook } from './loaded-book-slice';
 import type { AppDispatch, RootState } from './index';
 
 export function declineMatchFlow(characterId: string) {
@@ -34,7 +35,7 @@ export function declineMatchFlow(characterId: string) {
     const stage = state.ui.stage;
     const bookId = stage.kind === 'ready' || stage.kind === 'confirm' ? stage.bookId : null;
     const fromBookId = state.cast.characters.find((c) => c.id === characterId)?.matchedFrom?.bookId;
-    const openBook = { manuscriptId: state.manuscript.manuscriptId as string };
+    const openBook = { manuscriptId: selectLoadedBook(state).loadedManuscriptId as string };
 
     let marker:
       | { declinedVoiceFrom: string[]; declinedVoiceUuids: string[]; voiceUuid?: string | null; separated?: boolean; movedCharacterIds?: string[] }

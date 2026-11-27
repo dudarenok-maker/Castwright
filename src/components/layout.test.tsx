@@ -24,6 +24,7 @@ import { castSlice } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { revisionsSlice } from '../store/revisions-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { librarySlice } from '../store/library-slice';
 import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice, changeLogActions } from '../store/change-log-slice';
@@ -327,6 +328,7 @@ function makeStore(extraMiddleware: Middleware[] = []) {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,
@@ -396,6 +398,7 @@ function makeStoreWithScopeAndPersistence() {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,

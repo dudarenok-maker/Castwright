@@ -3,16 +3,17 @@
    Re-analyse on the Generate view) is a request that outlives its view: by
    the time it settles the user may be on another book. The cast, chapters and
    manuscript slices hold ONE book at a time, and the persistence middleware
-   saves them into whichever book the stage names, so a write into another
-   book's slices ends up in that book's files on its next edit.
+   saves them into the book the stage names, so a write into another book's
+   slices ends up in that book's files on its next edit.
 
    The slices decide, not the stage: the stage names a new book at once, the
    slices move only when that book's read lands (the layout hydrates all
-   three together). A result for the book the slices hold lands in them, even
-   once the stage has moved on, because the layout will not reload them on
-   the way back. A result for any other book is skipped; the server has
-   already persisted it, and since the slices hold another book the layout's
-   next open of this one is a full read from disk. */
+   three together). Which book they hold has one owner, the loaded-book pair
+   (store/loaded-book-slice.ts, #3519). A result for the book the slices hold
+   lands in them, even once the stage has moved on, because the layout will
+   not reload them on the way back. A result for any other book is skipped;
+   the server has already persisted it, and since the slices hold another book
+   the layout's next open of this one is a full read from disk. */
 
 export interface BookRef {
   bookId?: string | null;
@@ -36,12 +37,11 @@ export function stageNamesBook(stage: StageLike, book: BookRef): boolean | null 
 }
 
 /* Is this book the open one: the book the cast, chapters and manuscript
-   slices hold, whatever the stage shows. The manuscript slice's manuscriptId
-   names that book: the layout's hydrate sets it together with the cast and
-   chapters. */
+   slices hold, whatever the stage shows. The loaded-book pair's
+   loadedManuscriptId names that book (#3519). */
 export function selectIsOpenBook(
-  state: { manuscript: { manuscriptId: string | null } },
+  state: { loadedBook: { loadedManuscriptId: string | null } },
   book: BookRef,
 ): boolean {
-  return state.manuscript.manuscriptId === book.manuscriptId;
+  return state.loadedBook.loadedManuscriptId === book.manuscriptId;
 }

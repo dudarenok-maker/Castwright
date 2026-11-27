@@ -2,9 +2,16 @@ import { describe, expect, it } from 'vitest';
 import { selectIsOpenBook, stageNamesBook } from './open-book';
 
 const A = { bookId: 'b1', manuscriptId: 'm1' };
-const state = (stage: { kind: string; bookId?: string; manuscriptId?: string | null }, manuscriptId: string | null) => ({
+/* The loaded-book pair and the manuscript slice name the same book unless a
+   case passes `manuscriptSliceId` to tell them apart. */
+const state = (
+  stage: { kind: string; bookId?: string; manuscriptId?: string | null },
+  loadedManuscriptId: string | null,
+  manuscriptSliceId: string | null = loadedManuscriptId,
+) => ({
   ui: { stage },
-  manuscript: { manuscriptId },
+  manuscript: { manuscriptId: manuscriptSliceId },
+  loadedBook: { loadedBookId: null, loadedManuscriptId },
 });
 
 describe('stageNamesBook', () => {
@@ -38,5 +45,15 @@ describe('selectIsOpenBook', () => {
   it('false once the slices hold another book, even while the stage shows this one', () => {
     expect(selectIsOpenBook(state({ kind: 'books' }, 'm2'), A)).toBe(false);
     expect(selectIsOpenBook(state({ kind: 'analysing', bookId: 'b1', manuscriptId: 'm1' }, 'm2'), A)).toBe(false);
+  });
+  /* #3519 — the loaded-book pair answers, not the manuscript slice's own id. */
+  it("true for the pair's manuscript id, even when the manuscript slice names another", () => {
+    expect(selectIsOpenBook(state({ kind: 'books' }, 'm1', 'm2'), A)).toBe(true);
+  });
+  it('false for a book the pair does not name, even when the manuscript slice names it', () => {
+    expect(selectIsOpenBook(state({ kind: 'books' }, 'm2', 'm1'), A)).toBe(false);
+  });
+  it('false while the pair is null, even when the manuscript slice names the book', () => {
+    expect(selectIsOpenBook(state({ kind: 'books' }, null, 'm1'), A)).toBe(false);
   });
 });

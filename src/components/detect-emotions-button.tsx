@@ -18,6 +18,7 @@ import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { selectLoadedBook } from '../store/loaded-book-slice';
 import { selectCastReadOnly } from '../store/book-busy-slice';
 import { refuseIfManuscriptEditsLocked } from '../store/restructure-lock';
 import { DetectEmotionsError, DetectInstructError } from '../lib/api';
@@ -112,7 +113,10 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
        which holds ONE book and is saved into the book the stage names. Bind the
        gate to the book at click time and apply only while the slices hold it
        AND the stage names it (same gate as the layout's auto-trigger). */
-    const book = { bookId, manuscriptId: store.getState().manuscript.manuscriptId as string };
+    const book = {
+      bookId,
+      manuscriptId: selectLoadedBook(store.getState()).loadedManuscriptId as string,
+    };
     /* #3400 — a chapter restructure re-keys the sentences this run snapshotted,
        so a later annotation would land on the wrong line. The run ends when a
        restructure of its book BEGINS (the counter, not restructuringBookId:

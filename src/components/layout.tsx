@@ -43,6 +43,7 @@ import {
   castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { selectLoadedBook } from '../store/loaded-book-slice';
 import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
@@ -223,15 +224,16 @@ export function _resetRevisionPollWarningsForTests(): void {
 }
 
 /* #3435 — the book the emotion-detection open trigger serves: the book open
-   on Confirm or a Ready view, once the slices hold it (the manuscript slice
-   names it and carries its manuscriptId). Null on any other stage. */
+   on Confirm or a Ready view, once the slices hold it (the loaded-book pair
+   names it and carries its manuscriptId, #3519). Null on any other stage. */
 function selectOpenProsodyBookId(s: RootState): string | null {
   const stage = s.ui.stage as { kind: string; bookId?: string };
   const id = stage.bookId ?? null;
+  const { loadedBookId, loadedManuscriptId } = selectLoadedBook(s);
   return (stage.kind === 'confirm' || stage.kind === 'ready') &&
     id &&
-    s.manuscript.bookId === id &&
-    s.manuscript.manuscriptId
+    loadedBookId === id &&
+    loadedManuscriptId
     ? id
     : null;
 }
@@ -2834,7 +2836,9 @@ export function Layout() {
               onLinkPrior={
                 bookId
                   ? async (sourceId, targetBookId, targetCharacterId) => {
-                      const openBook = { manuscriptId: store.getState().manuscript.manuscriptId as string };
+                      const openBook = {
+                        manuscriptId: selectLoadedBook(store.getState()).loadedManuscriptId as string,
+                      };
                       const res = await api.linkPriorCharacter({
                         bookId,
                         sourceCharacterId: sourceId,

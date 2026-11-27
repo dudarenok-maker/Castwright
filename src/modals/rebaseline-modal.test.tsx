@@ -19,6 +19,7 @@ import { voicesSlice } from '../store/voices-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -157,6 +158,7 @@ function makeStore(
       account: accountSlice.reducer,
       config: configSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
     },
     preloadedState: {
       ui,
