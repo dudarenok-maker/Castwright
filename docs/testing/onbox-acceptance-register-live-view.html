@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="157" data-publish-id="e6d39191ade4"></div>
+  <div hidden data-published-as="158" data-publish-id="a598f8817b89"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">90</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">91</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->19<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->20<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1477,7 +1477,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">19 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">20 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1718,6 +1718,19 @@
         <li><strong>Re-pair from the player, then keep listening.</strong> Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.</li>
         </ul>
         <p><em>Needs:</em> a real Android phone with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. Batchable with PR B's row (chain B adds it). Clears when each observation is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E119</span><span class="iname">The companion&#8217;s idle and out-of-band saves never win a resume sync</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The player stamps <code>listenedAt</code> (the resume-sync last-write-wins key) only when the engine was playing since the previous save, and a played save is stamped with the last time audio was actually playing. The automated tests drive a fake engine. Nothing automated proves the behaviour of the real audio engine (<code>playing</code> and the position stream) or of the audio session&#8217;s own auto-pause on a headset unplug or Bluetooth disconnect. (<a href="https://github.com/dudarenok-maker/Castwright/issues/4650">#4650</a>)</p>
+        <ul>
+        <li><strong>Setup.</strong> Pair a phone with a server on the LAN and download or stream a book. Have a wired headset or a Bluetooth audio device.</li>
+        <li><strong>An idle open does not overwrite a web position.</strong> Listen to the book on the web to a later position than the phone&#8217;s. On the phone, open the book without pressing play, then background the app (switch to another app). On the server the book&#8217;s listen position is still the web&#8217;s, not the phone&#8217;s older one. Restart the phone app and open the book: it resumes at the web&#8217;s position.</li>
+        <li><strong>An out-of-band stop stamps the stop time.</strong> On the phone, play the book with the headset (or Bluetooth device) connected. Unplug the headset, or disconnect the Bluetooth device, so the player pauses itself without you touching the app. Wait several minutes, then background the app. The stored and server <code>listenedAt</code> for the book is the time the audio stopped, not the time you backgrounded the app (read it from the server&#8217;s listen-progress for the book, or compare against a web listen made in between: listen on the web after the unplug and before backgrounding the phone, and the server must keep the web position).</li>
+        <li><strong>A late pause after a finished chapter does not restamp.</strong> Download only the book&#8217;s last chapter (or play offline so the next chapter is not downloaded) and let it play to the end without touching the phone; the pane keeps showing a pause button. Wait several minutes, listen to the book on the web in the meantime, then tap pause or leave the player. The stored and server <code>listenedAt</code> is the time the chapter ended, not the time you tapped pause, and the web position survives the next sync.</li>
+        </ul>
+        <p><em>Needs:</em> an Android phone with the companion APK built from this branch&#8217;s merge (<code>npm run apk:companion</code>) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.</p>
       </div>
     </details>
 

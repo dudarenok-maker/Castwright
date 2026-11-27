@@ -1,6 +1,6 @@
 import 'dart:async';
 
-import 'package:flutter/foundation.dart' show visibleForTesting;
+import 'package:flutter/foundation.dart' show debugPrint, kDebugMode, visibleForTesting;
 
 import '../domain/listen_stats_accumulator.dart';
 import '../domain/playback_source.dart';
@@ -227,6 +227,23 @@ class PlayerController {
   double _boostDb = 0;
   DateTime? _lastSave;
 
+  /// True once the engine has been playing since the last persisted save — the
+  /// gate for stamping a fresh `listenedAt` (#4650).
+  bool _playedSinceSave = false;
+
+  /// The last moment audio was seen playing (a position tick while playing, or
+  /// the play edge — never the stop edge: a late `pause()` after a finished book
+  /// or a stall is not when audio stopped). A played save is stamped with this, not with the save's own
+  /// time: just_audio can stop itself (headset unplug, focus loss, a finished
+  /// book that leaves `playing` true) with nothing saving at that moment, and a
+  /// later save must not claim it was listening then (#4650).
+  DateTime? _lastPlayingAt;
+
+  /// The `listenedAt` last loaded for / persisted by the open book ('' = never
+  /// played). Held here so an idle save keeps the local stamp, not whatever a
+  /// resume-sync pull wrote to the store (#4650).
+  String _lastListenedAt = '';
+
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
@@ -307,12 +324,18 @@ class PlayerController {
     // cannot see a stale prior-book index when opening a different book.
     // The reset to -1 means _loadIndex captures prev=-1, which is excluded by
     // the `prev >= 0` guard — no spurious bookReplayedStream emit on switch.
-    if (_bookId != bookId) _index = -1;
+    if (_bookId != bookId) {
+      _index = -1;
+      _playedSinceSave = false; // the outgoing book's playback isn't this book's
+      _lastPlayingAt = null;
+      _lastListenedAt = '';
+    }
     _bookId = bookId;
     _bookTitle = bookTitle;
     _artPath = artPath;
     _playlist = await _loadPlaylist(bookId);
     final saved = await _store.loadPlayback(bookId);
+    _lastListenedAt = saved?.listenedAt ?? '';
     var index = 0;
     if (saved != null) {
       final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
@@ -465,9 +488,44 @@ class PlayerController {
     final book = _bookId;
     final uuid = currentChapterUuid;
     if (book == null || uuid == null) return;
-    await _store.savePlayback(
-        book, uuid, _engine.position.inMilliseconds, _now().toUtc().toIso8601String());
+    await _persist(book, uuid, _engine.position.inMilliseconds, _now());
     _lastSave = _now();
+  }
+
+  /// Write the resume point. `listenedAt` (the resume-sync last-write-wins key)
+  /// advances only when playback actually ran since the previous save (#4650);
+  /// an idle save — close the player, app background, re-pair flush, or a seek
+  /// while paused — writes the stamp this controller holds (loaded when the book
+  /// opened, updated by played saves) so it can never win a sync it hasn't
+  /// earned. The position is saved either way. A played save is stamped with the
+  /// last time audio was actually playing ([_lastPlayingAt]), not the save's own
+  /// time, so a save long after an out-of-band stop doesn't claim fresh listening.
+  ///
+  /// The idle stamp is the held [_lastListenedAt], never a store read-back: a
+  /// resume-sync pull may have put a remote stamp in the store, and re-stamping
+  /// the local position with it would make the next sync a tie. No await before
+  /// the write, so call order is preserved.
+  Future<void> _persist(
+      String book, String uuid, int positionMs, DateTime now) async {
+    final played = _playedSinceSave;
+    final prevStamp = _lastListenedAt;
+    final iso =
+        played ? (_lastPlayingAt ?? now).toUtc().toIso8601String() : prevStamp;
+    if (played) {
+      _playedSinceSave = false;
+      _lastListenedAt = iso;
+    }
+    try {
+      await _store.savePlayback(book, uuid, positionMs, iso);
+    } catch (_) {
+      // A failed write must not lose "played since the last save".
+      // Only for the book this save was for — it may have been switched away.
+      if (played && _bookId == book) {
+        _playedSinceSave = true;
+        _lastListenedAt = prevStamp;
+      }
+      rethrow;
+    }
   }
 
   /// Save the active book's position, then restore another book at its own
@@ -508,6 +566,10 @@ class PlayerController {
     // Re-broadcast first so the UI/media session update even when no accumulator
     // is wired (the early-return below is stats-only).
     if (!_playing.isClosed) _playing.add(isPlaying);
+    if (isPlaying) {
+      _playedSinceSave = true;
+      _lastPlayingAt = _now();
+    }
     // Accrual is gated on play/pause intent only. With app-10 LAN streaming
     // (setStreamUrl), a network stall can leave `playing` true while buffering,
     // slightly over-counting listen time — accepted as negligible for brief
@@ -543,6 +605,12 @@ class PlayerController {
         }
       }
     }
+    // Listening since the last save, whether or not this tick autosaves — so a
+    // pause/saveNow between autosaves stamps its own time (#4650).
+    if (_engine.playing && book != null) {
+      _playedSinceSave = true;
+      _lastPlayingAt = _now();
+    }
     // ── Autosave-throttle block (unchanged) ──────────────────────────────────
     final last = _lastSave;
     final now = _now();
@@ -551,9 +619,15 @@ class PlayerController {
       final uuid = currentChapterUuid;
       if (book != null && uuid != null) {
         _lastSave = now;
-        // Fire-and-forget; ordering preserved by the single-subscription stream.
-        _store.savePlayback(
-            book, uuid, position.inMilliseconds, now.toUtc().toIso8601String());
+        // Fire-and-forget; _persist reaches the store write with no await first,
+        // so call order matches the order of the saves.
+        // A failed write is logged, not leaked: _persist already restored
+        // "played", so the next save retries (#4650). saveNow still rethrows.
+        // debugPrint logs in release builds too, and a drift error carries the
+        // write's parameters, so it is gated on kDebugMode.
+        _persist(book, uuid, position.inMilliseconds, now).catchError((Object e) {
+          if (kDebugMode) debugPrint('autosave failed (will retry): $e');
+        });
         // fs-16: tick the accumulator and buffer any drained days.
         _tickStats(book);
       }

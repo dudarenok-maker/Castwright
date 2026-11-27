@@ -46,6 +46,11 @@ class _MovableEngine extends DemoAudioEngine {
   @override
   Duration get position => _pos;
   set position(Duration d) => _pos = d;
+  // Paused: DemoAudioEngine reports playing, which would hide an idle-save bug.
+  @override
+  bool get playing => false;
+  @override
+  Stream<bool> get playingStream => Stream<bool>.value(false);
   @override
   Future<void> dispose() async => await onDispose?.call();
 }
@@ -219,5 +224,75 @@ void main() {
     expect(engines, hasLength(2));
     expect(savedAtDispose, 440000,
         reason: 'the live position must be saved before the old database closes');
+  });
+
+  // #4650: the re-pair flush on a book that is NOT playing is an idle save — it
+  // must keep the previous listenedAt, or it would win the next resume sync.
+  testWidgets('a re-pair flush on a paused book keeps its listenedAt',
+      (tester) async {
+    final links = StreamController<Uri>();
+    addTearDown(links.close);
+    final engines = <_MovableEngine>[];
+    String? before;
+    String? atDispose;
+    int? posAtDispose;
+    CompanionRuntime? firstRuntime;
+
+    final service = PairingService(
+      fetchCa: (_) async => 'pem',
+      verifyTag: (_, _) => true,
+      redeem: (_, _, _) async =>
+          const RedeemResult(token: 'new-token', caFingerprint: 'f'),
+    );
+
+    await tester.pumpWidget(AudiobookCompanionApp(
+      store: _PairedStore(),
+      service: service,
+      deepLinks: links.stream,
+      runtimeFactory: (Connection c,
+          {CompanionAudioHandler? handler,
+          void Function()? onRepairNeeded}) async {
+        final engine = _MovableEngine();
+        final runtime = await buildDemoRuntime(
+            fs: InMemoryFileStore(), root: '/t', engine: engine);
+        engine.onDispose = () async {
+          final id = runtime.player.currentBookId;
+          if (engines.first != engine || id == null) return;
+          final saved = await runtime.library.loadPlayback(id);
+          atDispose = saved?.listenedAt;
+          posAtDispose = saved?.positionMs;
+        };
+        firstRuntime ??= runtime;
+        engines.add(engine);
+        return runtime;
+      },
+    ));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 200)));
+    await tester.pumpAndSettle();
+
+    await tester.tap(find.text('The Drowning Bell'));
+    await tester.pumpAndSettle();
+    // Paused: never press play. Record what the demo seeded, then move the
+    // position so the flush has something to save.
+    final rt = firstRuntime!;
+    final id = rt.player.currentBookId!;
+    await tester.runAsync(() async {
+      before = (await rt.library.loadPlayback(id))?.listenedAt;
+    });
+    expect(before, isNotEmpty, reason: 'the demo seeds a resume point');
+    engines.first.position = const Duration(milliseconds: 440000);
+
+    links.add(Uri.parse(
+        'https://www.castwright.ai/pair?h=192.168.1.5:8443&c=K7QF3M2P&f=J4XQ2A7BWZ9K3M5R'));
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('Pair'));
+    await tester.runAsync(() => Future<void>.delayed(
+        const Duration(milliseconds: 500)));
+    await tester.pumpAndSettle();
+
+    expect(atDispose, before,
+        reason: 'an idle flush must not re-stamp listenedAt');
+    expect(posAtDispose, 440000, reason: 'the flush still saved the position');
   });
 }

@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 20 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**91 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-26 (#4699, #4715), 92 → 90.** Rows **A126** and **B107** DISCHARGED and removed by on-box batch 2 (#4699). **A126** (a cold model load learns its own weights, a warm op learns nothing): all five bullets passed on a real RTX 4070 Laptop 8 GB with a real Qwen sidecar (run 2026-11-27, child #4710): the cold-load counter rose by exactly 1 per cold load to 5 with `learned_mb` 1745 (93% of the first load's `nvidia-smi` rise of 1873 MiB); warm 0.6B and 1.7B-Base renders (`POST /synthesize` only, 0 `/synthesize-batch`) recorded nothing; a Qwen cold load beside resident Coqui did not absorb Coqui's 2097 MiB (`learned_mb` unchanged); a cold reload after a long warm run fitted (rise 1796 MiB against 1745 + reserve, 0 OOM, 0 503); the mint key learned only from cold mints (5 samples, `learned_mb` 5468). Evidence: `docs/testing/onbox-batch-2-results/A126/`. **B107** (Ollama reasoning levels and Test attribution): all four bullets passed against a real Ollama 0.40.5 daemon (run 2026-11-26, child #4705): the non-thinking `llama3.1:8b` recorded `on`/`low`/`medium`/`high` rejected and `off`/`model-default` accepted; the thinking `qwen3.5:4b` recorded `low` accepted and offered only in its own row; a run with a rejected level fails before the first chapter naming the level and the Test date; a re-created tag's `scope:configured` Test dropped the earlier levels (the build change was made by re-creating a throwaway tag, not a remote re-pull). One copy observation is recorded in the batch-2 evidence and is not owed: a rejected level that is also not offered fails with copy that names the level but not the Test date. Evidence: `docs/testing/onbox-batch-2-results/B107/`. Group A 55 → 54, group B 11 → 10; the 13 other batch-2 rows stay owed with their KEEP verdicts unchanged. `next-id` markers untouched (allocate-once).
+> **Last change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-26 (#4699, #4715), 92 → 90.** Rows **A126** and **B107** DISCHARGED and removed by on-box batch 2 (#4699). **A126** (a cold model load learns its own weights, a warm op learns nothing): all five bullets passed on a real RTX 4070 Laptop 8 GB with a real Qwen sidecar (run 2026-11-27, child #4710): the cold-load counter rose by exactly 1 per cold load to 5 with `learned_mb` 1745 (93% of the first load's `nvidia-smi` rise of 1873 MiB); warm 0.6B and 1.7B-Base renders (`POST /synthesize` only, 0 `/synthesize-batch`) recorded nothing; a Qwen cold load beside resident Coqui did not absorb Coqui's 2097 MiB (`learned_mb` unchanged); a cold reload after a long warm run fitted (rise 1796 MiB against 1745 + reserve, 0 OOM, 0 503); the mint key learned only from cold mints (5 samples, `learned_mb` 5468). Evidence: `docs/testing/onbox-batch-2-results/A126/`. **B107** (Ollama reasoning levels and Test attribution): all four bullets passed against a real Ollama 0.40.5 daemon (run 2026-11-26, child #4705): the non-thinking `llama3.1:8b` recorded `on`/`low`/`medium`/`high` rejected and `off`/`model-default` accepted; the thinking `qwen3.5:4b` recorded `low` accepted and offered only in its own row; a run with a rejected level fails before the first chapter naming the level and the Test date; a re-created tag's `scope:configured` Test dropped the earlier levels (the build change was made by re-creating a throwaway tag, not a remote re-pull). One copy observation is recorded in the batch-2 evidence and is not owed: a rejected level that is also not offered fails with copy that names the level but not the Test date. Evidence: `docs/testing/onbox-batch-2-results/B107/`. Group A 55 → 54, group B 11 → 10; the 13 other batch-2 rows stay owed with their KEEP verdicts unchanged. `next-id` markers untouched (allocate-once).
 >
 > **Previous change: 2026-11-25 (#3268), owed count unchanged.** Row **E5** (the touch-flash smoke check) amended: the voice-library drag icon is struck from its target list, because #3268 resolved to remove the control (`VoiceCard`'s drag-icon branch is deleted, including the Voices page's use of it). The row's remaining owed targets are the continue-listening play badge and the "Add book" tile; the 09-19 note's premise is corrected in a dated note on the row. The row stays owed; no row added or removed; `next-id` unchanged.
 >
@@ -7525,7 +7527,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E119 -->
+<!-- next-id: E120 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -8419,6 +8421,17 @@ The automated tests pin the range list, the message text and the log write again
 > matters. No defect filed.
 >
 > **Row verdict: KEEP — still owed: bullet 8**
+
+### E119 · The companion's idle and out-of-band saves never win a resume sync ([#4650](https://github.com/dudarenok-maker/Castwright/issues/4650)) · **a real Android phone; no GPU needed**
+
+`PlayerController` stamps `listenedAt` (the resume-sync last-write-wins key) only when the engine was playing since the previous save, and a played save is stamped with the last time audio was actually playing. The automated tests drive a fake engine. Nothing automated proves the behaviour of the real `JustAudioEngine` (`playing` and the position stream) or of the audio session's own auto-pause on a headset unplug or Bluetooth disconnect.
+
+1. **Setup.** Pair a phone with a server on the LAN and download or stream a book. Have a wired headset or a Bluetooth audio device.
+2. **An idle open does not overwrite a web position.** Listen to the book on the web to a later position than the phone's. On the phone, open the book without pressing play, then background the app (switch to another app). On the server the book's listen position is still the web's, not the phone's older one. Restart the phone app and open the book: it resumes at the web's position.
+3. **An out-of-band stop stamps the stop time.** On the phone, play the book with the headset (or Bluetooth device) connected. Unplug the headset, or disconnect the Bluetooth device, so the player pauses itself without you touching the app. Wait several minutes, then background the app. The stored and server `listenedAt` for the book is the time the audio stopped, not the time you backgrounded the app (read it from the server's listen-progress for the book, or compare against a web listen made in between: listen on the web after the unplug and before backgrounding the phone, and the server must keep the web position).
+4. **A late pause after a finished chapter does not restamp.** Download only the book's last chapter (or play offline so the next chapter is not downloaded) and let it play to the end without touching the phone; the pane keeps showing a pause button. Wait several minutes, listen to the book on the web in the meantime, then tap pause or leave the player. The stored and server `listenedAt` is the time the chapter ended, not the time you tapped pause, and the web position survives the next sync.
+
+*Needs:* an Android phone with the companion APK built from this branch's merge (`npm run apk:companion`) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.
 
 ## Group G — GitHub Actions itself
 
