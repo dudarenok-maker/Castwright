@@ -63,6 +63,7 @@ import { continueListeningSlice } from './continue-listening-slice';
 import { scriptReviewSlice } from './script-review-slice';
 import { prosodySlice } from './prosody-slice';
 import { voiceLibrarySlice, installVoiceLibraryFocusListener } from './voice-library-slice';
+import { loadedBookSlice } from './loaded-book-slice';
 import { restructureGuardMiddleware } from './restructure-guard-middleware';
 import { persistenceMiddleware } from './persistence-middleware';
 import { castGateMiddleware } from './cast-gate';
@@ -216,6 +217,9 @@ export const store = configureStore({
     scriptReview: scriptReviewSlice.reducer,
     prosody: prosodySlice.reducer,
     voiceLibrary: voiceLibrarySlice.reducer,
+    /* #3519 — deliberately not wrapped in persistReducer: it describes this
+       tab's in-memory slices. */
+    loadedBook: loadedBookSlice.reducer,
   },
   middleware: (getDefault) =>
     getDefault({
