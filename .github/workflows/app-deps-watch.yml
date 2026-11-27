@@ -3,7 +3,8 @@ name: app-deps-watch
 
 # ops-17 / #790 — monthly pub-dependency watch for the Flutter companion.
 # Red when any DIRECT/DEV apps/android dep is behind `latest` (catch-up nudge).
-# The KGP-migration channel (A2) was retired in #4649 — #790 is tracked by hand.
+# The sticky comment posts on #4726 (#4696); #790 is the KGP issue, tracked by hand.
+# The KGP-migration channel (A2) was retired in #4649.
 # All logic is the unit-tested scripts/deps-watch.mjs; this just runs it.
 on:
   workflow_dispatch:

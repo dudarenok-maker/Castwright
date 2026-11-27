@@ -1,8 +1,9 @@
 // scripts/deps-watch.mjs
-// Pure helpers for the ops-17 deps-watch (#790). NO IO here. Unit-tested under
-// scripts/tests/deps-watch.test.mjs (npm run test:hooks). The KGP-plugin
-// signal was retired (#4649): #790 is tracked by hand; only the catch-up nudge
-// (direct/dev deps behind `latest`) remains.
+// Pure helpers for the ops-17 deps-watch. NO IO here. Unit-tested under
+// scripts/tests/deps-watch.test.mjs (npm run test:hooks). The sticky comment
+// lives on #4726 (#4696); #790 is the KGP issue, tracked by hand. The KGP-plugin
+// signal was retired (#4649): only the catch-up nudge (direct/dev deps behind
+// `latest`) remains.
 
 export const STICKY_MARKER = '<!-- ops-17-deps-watch -->';
 
@@ -57,9 +58,15 @@ export function exitCodeFor(behind) {
 }
 
 /** The single sticky comment (by marker), or null. Found even if a human
- *  commented after it — so the orchestrator never creates a duplicate. */
+ *  commented after it — so the orchestrator never creates a duplicate. Only a
+ *  github-actions[bot] comment that STARTS with the marker counts, so a human
+ *  quote-reply of it is never PATCHed. */
 export function findSticky(comments, marker = STICKY_MARKER) {
-  return comments.find((c) => (c.body || '').includes(marker)) || null;
+  return (
+    comments.find(
+      (c) => (c.body || '').startsWith(marker) && c.user?.login === 'github-actions[bot]',
+    ) || null
+  );
 }
 
 /** The gh-api REST request for refreshing the sticky: PATCH the existing

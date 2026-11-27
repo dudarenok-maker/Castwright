@@ -2,6 +2,7 @@
 // Discovered by `npm run test:hooks` (node --test scripts/tests/*.test.mjs).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
+import { readFileSync } from 'node:fs';
 import {
   STICKY_MARKER,
   compareSemver,
@@ -73,12 +74,43 @@ test('computeBehind: a direct dep ABSENT from the payload cannot be behind (abse
 test('findSticky: locates the marker comment even when a human commented later', () => {
   const comments = [
     { id: 1, body: 'a human note' },
-    { id: 2, body: '<!-- ops-17-deps-watch -->\nstatus' },
+    { id: 2, body: '<!-- ops-17-deps-watch -->\nstatus', user: { login: 'github-actions[bot]' } },
     { id: 3, body: 'a later human note' },
   ];
   assert.equal(findSticky(comments).id, 2);
   assert.equal(findSticky([{ id: 9, body: 'nothing here' }]), null);
   assert.equal(findSticky([]), null);
+});
+
+const BOT = { login: 'github-actions[bot]' };
+const QUOTE = { id: 5, body: '> <!-- ops-17-deps-watch -->\n> status', user: { login: 'human' } };
+
+test('findSticky: a human comment quoting the marker is skipped for the real bot sticky', () => {
+  const real = { id: 6, body: '<!-- ops-17-deps-watch -->\nstatus', user: BOT };
+  assert.equal(findSticky([QUOTE, real]).id, 6);
+});
+
+test('findSticky: a quoting human comment alone is not a sticky', () => {
+  assert.equal(findSticky([QUOTE]), null);
+});
+
+test('findSticky: a bot comment starting with the marker is found', () => {
+  assert.equal(findSticky([{ id: 7, body: '<!-- ops-17-deps-watch -->', user: BOT }]).id, 7);
+});
+
+test('findSticky: a HUMAN comment starting with the marker is not a sticky (login check)', () => {
+  const human = { id: 8, body: STICKY_MARKER + '\nstatus', user: { login: 'someone' } };
+  assert.equal(findSticky([human]), null);
+});
+
+test('findSticky: a bot comment with the marker NOT at the start is not a sticky (startsWith)', () => {
+  const mid = { id: 10, body: 'note\n' + STICKY_MARKER, user: BOT };
+  assert.equal(findSticky([mid]), null);
+});
+
+test('findSticky: finds what renderSticky writes (render -> find round trip)', () => {
+  const body = renderSticky({ behind: [], today: '2026-11-27' });
+  assert.equal(findSticky([{ id: 9, body, user: BOT }])?.id, 9);
 });
 
 test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', () => {
@@ -121,4 +153,12 @@ test('renderSummary lists behind deps in a table', () => {
   });
   assert.ok(md.includes('build_runner'));
   assert.ok(md.includes('2.16.0'));
+});
+
+test('deps-watch sticky posts on #4726 by default, not the KGP issue #790 (#4696)', () => {
+  // The IO orchestrator is not unit-tested (it shells out to gh), so pin its
+  // default issue number by reading its source.
+  const src = readFileSync(new URL('../deps-watch-run.mjs', import.meta.url), 'utf8');
+  assert.match(src, /process\.env\.OPS17_ISSUE \|\| '4726'/);
+  assert.doesNotMatch(src, /\|\| '790'/);
 });

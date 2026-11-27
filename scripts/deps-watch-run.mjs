@@ -1,6 +1,7 @@
 // scripts/deps-watch-run.mjs
-// ops-17 deps-watch IO orchestrator (#790). Pure logic lives in
-// scripts/deps-watch.mjs (unit-tested); this file does only IO:
+// ops-17 deps-watch IO orchestrator. The sticky comment lives on #4726 (the
+// dedicated deps-watch tracking issue; #790 is the KGP issue, tracked by hand).
+// Pure logic lives in scripts/deps-watch.mjs (unit-tested); this file does only IO:
 // read the pub-outdated JSON, fetch the existing sticky comment via
 // `gh api`, write the job summary, refresh the sticky comment, set exit code.
 // Exercised by the workflow_dispatch acceptance run, not by node --test.
@@ -23,7 +24,7 @@ import {
 const TOOLING_FAULT = 2;
 
 const repo = process.env.GITHUB_REPOSITORY;
-const issue = process.env.OPS17_ISSUE || '790';
+const issue = process.env.OPS17_ISSUE || '4726';
 const today = new Date().toISOString().slice(0, 10);
 const outdatedPath = process.argv[2] || 'outdated.json';
 
