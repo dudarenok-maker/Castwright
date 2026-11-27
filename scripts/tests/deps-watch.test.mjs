@@ -74,12 +74,28 @@ test('computeBehind: a direct dep ABSENT from the payload cannot be behind (abse
 test('findSticky: locates the marker comment even when a human commented later', () => {
   const comments = [
     { id: 1, body: 'a human note' },
-    { id: 2, body: '<!-- ops-17-deps-watch -->\nstatus' },
+    { id: 2, body: '<!-- ops-17-deps-watch -->\nstatus', user: { login: 'github-actions[bot]' } },
     { id: 3, body: 'a later human note' },
   ];
   assert.equal(findSticky(comments).id, 2);
   assert.equal(findSticky([{ id: 9, body: 'nothing here' }]), null);
   assert.equal(findSticky([]), null);
+});
+
+const BOT = { login: 'github-actions[bot]' };
+const QUOTE = { id: 5, body: '> <!-- ops-17-deps-watch -->\n> status', user: { login: 'human' } };
+
+test('findSticky: a human comment quoting the marker is skipped for the real bot sticky', () => {
+  const real = { id: 6, body: '<!-- ops-17-deps-watch -->\nstatus', user: BOT };
+  assert.equal(findSticky([QUOTE, real]).id, 6);
+});
+
+test('findSticky: a quoting human comment alone is not a sticky', () => {
+  assert.equal(findSticky([QUOTE]), null);
+});
+
+test('findSticky: a bot comment starting with the marker is found', () => {
+  assert.equal(findSticky([{ id: 7, body: '<!-- ops-17-deps-watch -->', user: BOT }]).id, 7);
 });
 
 test('stickyRequest: PATCH on the existing numeric id, else POST to the issue', () => {
