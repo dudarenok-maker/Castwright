@@ -244,6 +244,10 @@ class PlayerController {
   /// resume-sync pull wrote to the store (#4650).
   String _lastListenedAt = '';
 
+  /// The position last written to, restored from or adopted from the store —
+  /// what lets [switchBook] skip a save with nothing new in it (#4722).
+  ({String book, String uuid, int ms})? _lastSaved;
+
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
@@ -329,6 +333,7 @@ class PlayerController {
       _playedSinceSave = false; // the outgoing book's playback isn't this book's
       _lastPlayingAt = null;
       _lastListenedAt = '';
+      _lastSaved = null;
     }
     _bookId = bookId;
     _bookTitle = bookTitle;
@@ -346,6 +351,10 @@ class PlayerController {
     // which misses single-chapter books where index 0 == length-1 always.
     _bookFinishEmitted = false;
     await _loadIndex(index, seekMs: saved?.positionMs ?? 0, userInitiated: true);
+    if (saved != null && _bookId == bookId) {
+      _lastSaved =
+          (book: bookId, uuid: saved.chapterUuid, ms: saved.positionMs);
+    }
   }
 
   Future<bool> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
@@ -526,14 +535,30 @@ class PlayerController {
       }
       rethrow;
     }
+    if (_bookId == book) {
+      _lastSaved = (book: book, uuid: uuid, ms: positionMs);
+    }
   }
 
-  /// Save the active book's position, then restore another book at its own
-  /// resume point — per-book state is preserved across switches. [bookTitle]/
+  /// True only when nothing has played since the last save and the engine still
+  /// sits exactly at [_lastSaved]. Anything unknown reads as changed.
+  bool _unchangedSinceSave() {
+    final last = _lastSaved;
+    return !_playedSinceSave &&
+        last != null &&
+        last.book == _bookId &&
+        last.uuid == currentChapterUuid &&
+        last.ms == _engine.position.inMilliseconds;
+  }
+
+  /// Save the active book's position if it has changed, then restore another
+  /// book at its own resume point — per-book state is preserved across
+  /// switches. An unchanged position is not rewritten, so a pulled row the
+  /// player could not adopt survives the switch (#4722). [bookTitle]/
   /// [artPath] flow to the media session so the lock-screen/car metadata
   /// updates on every switch (app-21).
   Future<void> switchBook(String bookId, {String bookTitle = '', String? artPath}) async {
-    await saveNow();
+    if (!_unchangedSinceSave()) await saveNow();
     // fs-16: flush the prior book's accumulated stats before retargeting.
     final acc = _accumulator;
     if (acc != null) {
@@ -566,7 +591,13 @@ class PlayerController {
     if (i == _index) {
       await _engine.seek(Duration(milliseconds: saved.positionMs));
     } else {
-      await _loadIndex(i, seekMs: saved.positionMs, userInitiated: true);
+      final loaded =
+          await _loadIndex(i, seekMs: saved.positionMs, userInitiated: true);
+      if (!loaded) return;
+    }
+    if (_bookId == bookId) {
+      _lastSaved =
+          (book: bookId, uuid: saved.chapterUuid, ms: saved.positionMs);
     }
   }
 

@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="158" data-publish-id="a598f8817b89"></div>
+  <div hidden data-published-as="159" data-publish-id="9502d87dd041"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">91</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">92</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->20<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->21<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1477,7 +1477,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">20 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">21 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1731,6 +1731,19 @@
         <li><strong>A late pause after a finished chapter does not restamp.</strong> Download only the book&#8217;s last chapter (or play offline so the next chapter is not downloaded) and let it play to the end without touching the phone; the pane keeps showing a pause button. Wait several minutes, listen to the book on the web in the meantime, then tap pause or leave the player. The stored and server <code>listenedAt</code> is the time the chapter ended, not the time you tapped pause, and the web position survives the next sync.</li>
         </ul>
         <p><em>Needs:</em> an Android phone with the companion APK built from this branch&#8217;s merge (<code>npm run apk:companion</code>) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E120</span><span class="iname">The companion&#8217;s open player takes a newer position from another device only while paused</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>A resume-sync pull now re-seeks the book that is open in the phone&#8217;s player, only while it is paused, and a book switch with nothing new to save leaves the stored row alone. The automated tests drive a fake engine. Nothing automated proves that the real audio engine re-seeks without starting playback, or that its position stays put while paused so the switch skips the save. (<a href="https://github.com/dudarenok-maker/Castwright/issues/4722">#4722</a>)</p>
+        <ul>
+        <li><strong>Setup.</strong> Pair a phone with the server on the LAN and have a book with at least two chapters, plus a second book, available on both the web and the phone.</li>
+        <li><strong>Paused: the phone takes the newer place.</strong> With the server running, play the book on the web to a clearly later point (note the chapter and time), then pause it. On the phone, open that same book while the phone&#8217;s player is paused (a fresh open, or a book left paused, then background the app or reconnect Wi-Fi to trigger a sync). The phone&#8217;s player re-seeks to the web&#8217;s newer chapter and position without you pressing play. Then press play and pause on the phone: the older position is not pushed back (re-open the web: it still shows the later point, or the few seconds past it that the phone just played).</li>
+        <li><strong>Playing: the phone does not jump.</strong> Start the phone playing the book, listen on the web to a newer point, then trigger a sync (background the app, or reconnect Wi-Fi). The phone does not jump: playback continues where it was.</li>
+        <li><strong>A book switch keeps the pulled place.</strong> After the paused check, switch to another book on the phone and back. The first book resumes at the pulled position (plus anything you played in that check), not at the older local one.</li>
+        </ul>
+        <p><em>Needs:</em> a paired Android phone running the companion build from this branch (<code>npm run apk:companion</code>) and the LAN server (HTTPS, paired); no GPU. Clears when each observation is recorded.</p>
       </div>
     </details>
 

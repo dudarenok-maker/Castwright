@@ -1249,6 +1249,169 @@ void main() {
     });
   });
 
+  group('switchBook skips an unchanged save (#4722)', () {
+    const localStamp = '2026-06-01T10:00:00.000Z';
+    const pulledStamp = '2026-06-02T20:00:00.000Z';
+    const local = PlaybackPoint(
+        chapterUuid: 'u1', positionMs: 100000, listenedAt: localStamp);
+    // A chapter the loaded playlist does not have, so it cannot be adopted.
+    const unadoptable = PlaybackPoint(
+        chapterUuid: 'gone', positionMs: 900000, listenedAt: pulledStamp);
+    final books = {
+      'A': playlistB1,
+      'B': const [PlayableChapter(uuid: 'v1', path: '/b/v1/audio.mp3')],
+    };
+
+    test(
+        'unchanged since the open: a pulled row the player could not adopt is '
+        'not overwritten', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['A'] = local;
+      final pc = make(engine, store, playlists: books);
+      await pc.openBook('A');
+      store.map['A'] = unadoptable; // what a resume-sync pull writes
+      await pc.applyPulledResume('A');
+      await pc.switchBook('B');
+      expect(store.map['A']!.chapterUuid, 'gone',
+          reason: 'the row is still the pulled one');
+      expect(store.map['A']!.positionMs, 900000);
+      expect(store.map['A']!.listenedAt, pulledStamp);
+      expect(store.writes, isEmpty);
+      expect(pc.currentBookId, 'B');
+      await pc.dispose();
+    });
+
+    // The runActivateBook order: saveNow, then the sync pull, then switchBook.
+    test('unchanged since a saveNow: the pull that followed it survives',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      final pc = make(engine, store, playlists: books);
+      await pc.openBook('A');
+      await pc.seekTo(const Duration(seconds: 42));
+      await pc.saveNow();
+      store.map['A'] = unadoptable;
+      await pc.applyPulledResume('A');
+      await pc.switchBook('B');
+      expect(store.map['A']!.chapterUuid, 'gone',
+          reason: 'the row is still the pulled one');
+      expect(store.writes, ['42000@'], reason: 'only the explicit saveNow');
+      await pc.dispose();
+    });
+
+    // The position is back where the row has it, so only "played" can force
+    // the save.
+    test('played since the last save: saves with the played stamp', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['A'] = local;
+      var t = DateTime.utc(2026, 6, 6, 12);
+      final pc = make(engine, store, playlists: books, now: () => t);
+      await pc.openBook('A');
+      await pc.play();
+      await Future<void>.delayed(Duration.zero);
+      t = t.add(const Duration(seconds: 5));
+      engine.emit(const Duration(seconds: 100)); // under the throttle: no save
+      await Future<void>.delayed(Duration.zero);
+      await engine.pause(); // out-of-band stop
+      await Future<void>.delayed(Duration.zero);
+      expect(store.writes, isEmpty);
+      t = t.add(const Duration(hours: 1));
+      await pc.switchBook('B');
+      expect(store.writes, ['100000@2026-06-06T12:00:05.000Z']);
+      await pc.dispose();
+    });
+
+    test('position moved while paused: saves', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['A'] = local;
+      final pc = make(engine, store, playlists: books);
+      await pc.openBook('A');
+      await pc.seekTo(const Duration(seconds: 130));
+      await pc.switchBook('B');
+      expect(store.writes, ['130000@$localStamp']);
+      await pc.dispose();
+    });
+
+    test('chapter changed while paused, same position: saves', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()
+        ..map['A'] = const PlaybackPoint(
+            chapterUuid: 'u1', positionMs: 0, listenedAt: localStamp);
+      final pc = make(engine, store,
+          playlists: books, behavior: SkipButtonBehavior.chapter);
+      await pc.openBook('A');
+      await pc.skip(forward: true);
+      await pc.switchBook('B');
+      expect(store.writes, ['0@$localStamp']);
+      expect(store.map['A']!.chapterUuid, 'u2');
+      await pc.dispose();
+    });
+
+    test('a failed save does not count as saved: switchBook writes again',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['A'] = local;
+      final pc = make(engine, store, playlists: books);
+      await pc.openBook('A');
+      await pc.seekTo(const Duration(seconds: 130));
+      store.failNextSave = true;
+      await expectLater(pc.saveNow(), throwsStateError);
+      await pc.switchBook('B');
+      expect(store.writes, ['130000@$localStamp']);
+      await pc.dispose();
+    });
+
+    for (final uuid in ['u1', 'u2']) {
+      test('after adopting a pulled $uuid point: does not rewrite the row',
+          () async {
+        final engine = FakeAudioEngine();
+        final store = GatedStore()..map['A'] = local;
+        final pc = make(engine, store, playlists: books);
+        await pc.openBook('A');
+        final pulled = PlaybackPoint(
+            chapterUuid: uuid, positionMs: 900000, listenedAt: pulledStamp);
+        store.map['A'] = pulled;
+        await pc.applyPulledResume('A');
+        expect(pc.currentChapterUuid, uuid);
+        expect(engine.position, const Duration(seconds: 900));
+        await pc.switchBook('B');
+        expect(store.writes, isEmpty);
+        expect(store.map['A'], same(pulled));
+        await pc.dispose();
+      });
+    }
+
+    test('first open with no stored row: still saves', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore();
+      final pc = make(engine, store, playlists: books);
+      await pc.openBook('A');
+      await pc.switchBook('B');
+      expect(store.writes, ['0@']);
+      expect(store.map['A']!.chapterUuid, 'u1');
+      await pc.dispose();
+    });
+
+    // B's position equals A's last save, so only a per-book record keeps them
+    // apart.
+    test('one book\'s record never excuses another book\'s save', () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()
+        ..map['A'] = const PlaybackPoint(
+            chapterUuid: 'v1', positionMs: 0, listenedAt: localStamp);
+      final pc = make(engine, store, playlists: {
+        'A': books['B']!,
+        'B': books['B']!,
+      });
+      await pc.openBook('A');
+      await pc.switchBook('B'); // B has no row
+      await pc.switchBook('A');
+      expect(store.map['B']?.chapterUuid, 'v1');
+      expect(store.writes, ['0@']);
+      await pc.dispose();
+    });
+  });
+
   group('bookReplayedStream', () {
     test(
         'forward navigation ch0→ch1→ch2 does NOT emit bookReplayedStream',
