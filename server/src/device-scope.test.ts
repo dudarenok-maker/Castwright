@@ -115,12 +115,14 @@ describe('isPlainTarget', () => {
 // url.parse, which turns "\" into "/" before the query. The guard must not
 // approve a path Express will route differently (default-deny, #4720 pass 1).
 describe('device-scope backslash divergence', () => {
+  // Each path matches an allowlist row if the "\" is ignored, so it goes red
+  // when the deny is removed.
   it.each([
-    '/api/books/b\\exports/cover',
-    '/api/books/b\\exports/listen-progress',
-    '/api/books\\b/cover',
-    '/api/info\\',
-  ])('denies %s', (p) => {
-    expect(companionAllows('GET', p)).toBe(false);
+    ['GET', '/api/books/b\\exports/cover'],
+    ['GET', '/api/books/x\\y/cover'],
+    ['PUT', '/api/books/x\\y/listen-stats'],
+    ['POST', '/api/books/x\\y/shelf-status'],
+  ])('denies %s %s', (m, p) => {
+    expect(companionAllows(m, p)).toBe(false);
   });
 });
