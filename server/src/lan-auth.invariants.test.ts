@@ -30,20 +30,44 @@ function walk(dir: string): string[] {
     return e.isDirectory() ? walk(p) : [p];
   });
 }
-it('has exactly three createDevice( mint sites in production source, with pinned scopes', () => {
+/* Every `createDevice(` occurrence outside its definition is a site, whatever its
+   arguments look like; the 3rd argument is split at top-level commas so a
+   multi-line, nested or non-literal call is still found rather than skipped. */
+function collectMintSites(): { file: string; scopeArg: string }[] {
   const root = fileURLToPath(new URL('./', import.meta.url));
-  const found: [string, string][] = [];
+  const sites: { file: string; scopeArg: string }[] = [];
   for (const f of walk(root)) {
     if (!f.endsWith('.ts') || f.endsWith('.test.ts')) continue;
     const src = readFileSync(f, 'utf8');
-    // [^,]+ spans newlines (multi-line call); the definition is excluded by the "function " prefix.
-    const re = /(?<!function\s)\bcreateDevice\(\s*[^,]+,\s*[^,]+,\s*'(\w+)'/g;
-    for (const m of src.matchAll(re)) found.push([relative(root, f).split('\\').join('/'), m[1]]);
+    for (const m of src.matchAll(/(?<!function\s)\bcreateDevice\(/g)) {
+      const args: string[] = [];
+      let depth = 0;
+      let cur = '';
+      for (let i = m.index + m[0].length; i < src.length; i++) {
+        const c = src[i];
+        if (depth === 0 && (c === ',' || c === ')')) {
+          args.push(cur.trim());
+          cur = '';
+          if (c === ')') break;
+          continue;
+        }
+        if ('([{'.includes(c)) depth++;
+        if (')]}'.includes(c)) depth--;
+        cur += c;
+      }
+      sites.push({ file: relative(root, f).split('\\').join('/'), scopeArg: args[2] ?? '' });
+    }
   }
-  found.sort((a, b) => (a[0] + a[1]).localeCompare(b[0] + b[1]));
-  expect(found).toEqual([
-    ['routes/devices.ts', 'full'],
-    ['routes/pairing.ts', 'companion'],
-    ['routes/pairing.ts', 'full'],
+  return sites.sort((a, b) => (a.file + a.scopeArg).localeCompare(b.file + b.scopeArg));
+}
+it('has exactly three createDevice( mint sites in production source, with pinned scopes', () => {
+  expect(collectMintSites().map((s) => [s.file, s.scopeArg])).toEqual([
+    ['routes/devices.ts', "'full'"],
+    ['routes/pairing.ts', "'companion'"],
+    ['routes/pairing.ts', "'full'"],
   ]);
+});
+it('passes every createDevice( site a string-literal scope, never one derived at runtime', () => {
+  const nonLiteral = collectMintSites().filter((s) => !/^'(full|companion)'$/.test(s.scopeArg));
+  expect(nonLiteral).toEqual([]);
 });
