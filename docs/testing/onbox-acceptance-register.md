@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 20 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**91 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**90 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-28 (#4738), 91 → 90.** Row **E115** (Gemini config payload, #3084 wave 5b) DISCHARGED and removed; it owed only the rejected-value bullet (#4718). **2026-11-28 — #4718 fix on-box (`fix/server-4718-gemini-400-classify`), claude/claude:** Rejected value re-run — **PASS** on `f36e7873`, real Gemini key, `gemini-3.5-flash-lite`, the Coalfall fixture (3 chapters). This worktree's dev server on port 8130 (the worktree's own 8090 was held by another process), a throwaway `USER_SETTINGS_FILE`, TTS sidecar auto-start off; stdout was redirected to `logs/server.log`. Gemini answered the 400 on the first attempt. All three `chapter-failed` frames read `"code":"analyzer-request-rejected"` with the value `"[redacted]"`. `Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value'` counts 0 (also 0 in `logs/server.err.log`; each file has 6 `[redacted]` lines). On screen, the three Analysing failure cards end `"[redacted]"` and the probe value is not in the page HTML (the first-run Setup wizard opened first, so the route was opened by hash). Evidence: `docs/testing/onbox-4718-results/E115/`. The other three bullets passed on 2026-11-26 on `main` at `035ff80a` (#4700, `docs/testing/onbox-batch-2-results/E115/`; the output-cap label was read from the catalog API, not the browser) and were not re-run. **Row verdict: DISCHARGE** Group E 20 → 19. `next-id` markers untouched (allocate-once).
+>
+> **Previous change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-26 (#4699, #4715), 92 → 90.** Rows **A126** and **B107** DISCHARGED and removed by on-box batch 2 (#4699). **A126** (a cold model load learns its own weights, a warm op learns nothing): all five bullets passed on a real RTX 4070 Laptop 8 GB with a real Qwen sidecar (run 2026-11-27, child #4710): the cold-load counter rose by exactly 1 per cold load to 5 with `learned_mb` 1745 (93% of the first load's `nvidia-smi` rise of 1873 MiB); warm 0.6B and 1.7B-Base renders (`POST /synthesize` only, 0 `/synthesize-batch`) recorded nothing; a Qwen cold load beside resident Coqui did not absorb Coqui's 2097 MiB (`learned_mb` unchanged); a cold reload after a long warm run fitted (rise 1796 MiB against 1745 + reserve, 0 OOM, 0 503); the mint key learned only from cold mints (5 samples, `learned_mb` 5468). Evidence: `docs/testing/onbox-batch-2-results/A126/`. **B107** (Ollama reasoning levels and Test attribution): all four bullets passed against a real Ollama 0.40.5 daemon (run 2026-11-26, child #4705): the non-thinking `llama3.1:8b` recorded `on`/`low`/`medium`/`high` rejected and `off`/`model-default` accepted; the thinking `qwen3.5:4b` recorded `low` accepted and offered only in its own row; a run with a rejected level fails before the first chapter naming the level and the Test date; a re-created tag's `scope:configured` Test dropped the earlier levels (the build change was made by re-creating a throwaway tag, not a remote re-pull). One copy observation is recorded in the batch-2 evidence and is not owed: a rejected level that is also not offered fails with copy that names the level but not the Test date. Evidence: `docs/testing/onbox-batch-2-results/B107/`. Group A 55 → 54, group B 11 → 10; the 13 other batch-2 rows stay owed with their KEEP verdicts unchanged. `next-id` markers untouched (allocate-once).
 >
@@ -850,7 +852,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 > run here.
 >
 > **Prior change: 2026-10-30 (#3084 wave 5b, PR 5b), 71 → 73.** Rows **A119**
-> (custom payload on real servers) and **E115** (Gemini config payload) added from #3084 PR 5b's
+> (custom payload on real servers) and **E115** (discharged 2026-11-28 (#4738), removed from the register) (Gemini config payload) added from #3084 PR 5b's
 > run sheet (`3084-openai-analyzer-onbox-acceptance.md` §14–§15). Group A 40 → 41, E 15 → 16.
 > `next-id` bumped A119 → A120 and E115 → E116 in the same change. Rows are owed; not run here.
 >
@@ -8236,7 +8238,7 @@ This row does not by itself move Gemini's default: the spec gates that on attrib
 
 > **2026-11-26 — on-box batch 2 (#4699), claude lane (#4701):** Run on this worktree's server (`npm --prefix server run dev`, port 8130, `ANALYZER_GEMINI_STRUCTURED_OUTPUT=schema` in the server environment, real Gemini key), `main` at 035ff80a. Book: the Coalfall fixture, chapter 2 ("Chapter One — The Knock", 3,445 chars) re-analysed alone via `POST /api/manuscripts/mns_7IWcnMvyKF/analysis/chapters` with `chapterIds:[2]`. Both model ids exist on the key (`GET /api/analyzer/models` lists them with `structuredOutput.mode="schema"`, label `schema (partial)`). Evidence: [`onbox-batch-2-results/E112/`](onbox-batch-2-results/E112/).
 >
-> - **Setup finding.** The first run failed with Gemini `400 INVALID_ARGUMENT` on `safety_settings[0].category`: E115's bogus probe value was still saved in this worktree's `analyzerExtraParamsByEngine.gemini` (`gemma-run0-contaminated-by-E115-leftover-sse.txt`). That 400 is the stale custom parameter, not the schema. I cleared it (`PUT /api/user/settings {"analyzerExtraParamsByEngine":{}}`) and every run below is on clean settings.
+> - **Setup finding.** The first run failed with Gemini `400 INVALID_ARGUMENT` on `safety_settings[0].category`: E115 (discharged 2026-11-28 (#4738), removed from the register): its bogus probe value was still saved in this worktree's `analyzerExtraParamsByEngine.gemini` (`gemma-run0-contaminated-by-E115-leftover-sse.txt`). That 400 is the stale custom parameter, not the schema. I cleared it (`PUT /api/user/settings {"analyzerExtraParamsByEngine":{}}`) and every run below is on clean settings.
 > - **`gemini-3.5-flash-lite` — PASS (record).** Schema accepted, no HTTP 400. Debug line: `[gemini] gemini-3.5-flash-lite 1-ch2 schema adapter dropped: properties.characters.items.properties.color.minLength, …id.minLength, …name.minLength, …notLinkedTo.items.properties.bookId.minLength, …notLinkedTo.items.properties.characterId.minLength, …role.minLength` — identical, key for key, to the committed `gemini / stage1Chapter` snapshot (6 keys). First-attempt conformance: yes — 5 characters detected, `stream-timing firstChunkMs=1968`, and none of the stage runner's retry-path warnings (`failed to parse`, `produced no usable response`, `required JSON cleanup`) appear, so validation-retry count = 0 (`flash-sse.txt`, `flash-server-log.txt`).
 > - **`gemma-4-31b-it` — PARTIAL.** The same 6-key dropped list was logged for each of three runs (`gemma-run1-503-sse.txt`, `gemma-sse-2.txt`, `gemma-sse-3.txt`). No HTTP 400 appeared in any of the 9 attempts; every attempt ended `503 UNAVAILABLE` ("This model is currently experiencing high demand"), and the runner's own 3-attempt transient retry exhausted each time. So no reply was ever returned: whether Gemma accepts the adapted schema end to end, and whether its replies conform on the first attempt, were not observed. Not run: a `json`-mode control on `gemma-4-31b-it` to show the 503 is capacity and independent of `schema` mode.
 >
@@ -8276,27 +8278,6 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 > - **G1 — NOT RUN.** Needs a Gemma `on` run on a cap-exhausting chapter; Gemma returned `503` on every call, so no chapter run was attempted.
 >
 > **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash` and `gemma-4-31b-it`, A8, thought tokens (3.6-flash default vs high; Gemma off vs on), G1, and the Advanced settings row for stale `minimal` (browser); re-run when the Gemini API is not returning 503 for these models**
-
-### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
-
-The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that it accepts a payload `topK`, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.
-
-- **`topK`.** `{"config": {"topK": 40}}` completes a chapter.
-- **Output cap.** `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params".
-- **Rejected value.** `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
-- **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
-
-*Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
-
-> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4700):** Run on this worktree's server (
-pm --prefix server run dev, port 8130, `main` at 035ff80a), real Gemini key, `analysisEngine` set to gemini; the run used `gemini-3.5-flash-lite` (the saved default). Book: the Coalfall fixture, 15,657 bytes, 3 chapters, analysed whole (not a single chapter). Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/). The server ran in dev mode, so its stdout (`server-log-trimmed.txt`) stands in for `logs/server.log`.
->
-> - **`topK` — PASS.** `{"config":{"topK":40}}` saved (200) and the run completed: 3 chapters, 14 characters, no error event (`case1-topK-sse-trimmed.txt`; log `Chapter 3/3 cast done — 13 characters`). Control: the catalog label for that payload is `"+ custom params"` only.
-> - **Output cap — PASS.** With `{"config":{"maxOutputTokens":2048}}` `GET /api/analyzer/models` gives `requestControlLabelParts=["+ custom params","max output set by custom params"]` for `gemini-3.5-flash-lite`; with `topK` it is `"+ custom params"` alone (`step2-label.txt`). Read from the catalog API, not the browser label.
-> - **Rejected value — FAIL (bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718)).** The redaction part holds: Gemini answered `400 INVALID_ARGUMENT` and the probe value is `[redacted]` in every SSE `chapter-failed` message and every server log line. The string `castwright-onbox-probe-value` appears in neither, nor in `analysis-last-outcome.json`. But all three chapters were classified `"code":"unknown"` (remediation "Click Retry on this chapter…") and the run ended `cast_incomplete`. `analyzer-request-rejected` never appears (`case3-bogus.sse.txt`). The browser view was not opened.
-> - **Protected key — PASS.** Saving `{"config":{"httpOptions":{"baseUrl":"http://127.0.0.1:1"}}}` answered `400`: `Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.` (`step4-save-httpOptions.txt`).
->
-> **Row verdict: KEEP — still owed: rejected value (the error code is `unknown`, not `analyzer-request-rejected`; #4718)**
 
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 
