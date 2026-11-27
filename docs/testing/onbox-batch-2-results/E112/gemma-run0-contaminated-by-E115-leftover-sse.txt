@@ -1,0 +1,24 @@
+:ok
+
+data: {"kind":"log","phaseId":0,"message":"Re-analyzing 1 chapter via Gemma 4 31B."}
+
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 2 — Chapter One — The Knock: detecting cast…"}
+
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 2 cast FAILED — Chapter One — The Knock: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 400,\\n    \\\"message\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\",\\n    \\\"status\\\": \\\"INVALID_ARGUMENT\\\",\\n    \\\"details\\\": [\\n      {\\n        \\\"@type\\\": \\\"type.googleapis.com/google.rpc.BadRequest\\\",\\n        \\\"fieldViolations\\\": [\\n          {\\n            \\\"field\\\": \\\"safety_settings[0].category\\\",\\n            \\\"description\\\": \\\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\\"[redacted]\\\\\\\"\\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n\",\"code\":400,\"status\":\"Bad Request\"}}"}
+
+data: {"kind":"chapter-failed","chapterId":2,"message":"Gemma 4 31B returned 400 (Bad Request): {\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\"\n          }\n        ]\n      }\n    ]\n  }\n}\n","code":"unknown","remediation":"Click Retry on this chapter. If it keeps failing, check the server / voice engine logs for the full error and report it.","phase":"cast"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":0.9500000000000001,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"cast-update","characters":[]}
+
+data: {"kind":"phase","phaseId":0,"progress":1,"label":"Detecting characters","model":"gemma-4-31b-it"}
+
+data: {"kind":"log","phaseId":0,"message":"Cast retry done. 3 chapters still need a retry before Phase 1 can run."}
+
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 3 chapters still need cast detection (Chapter 1, Chapter One — The Knock, Chapter Two — The Pour). Retry to continue."}
+

@@ -1,0 +1,3 @@
+179dea53933f6e7b70dea745e7727c36f1e270c06c90b0a561047b59f9acecbb *Dup One/.audiobook/state.json
+179dea53933f6e7b70dea745e7727c36f1e270c06c90b0a561047b59f9acecbb *Dup Two/.audiobook/state.json
+8ac21140c7fd924438d0cd95c17dd95ada6e2f5580cc35c4b982dec86de0ba9b *A Throwaway Twin/.audiobook/state.json

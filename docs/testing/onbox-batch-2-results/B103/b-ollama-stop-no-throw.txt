@@ -1,0 +1,1 @@
+ollama stop qwen3.5:4b at 22:34:33 mid-Phase-1 (b-times.txt: 22:34:33.540390800 22:34:33.772639400 ); then ollama ps showed 1 model, UNTIL='Stopping...' for 80+ s and no chapter failed (the in-flight requests kept running).

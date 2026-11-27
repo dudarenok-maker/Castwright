@@ -1,0 +1,11 @@
+{
+  "started": "2026-11-27T09:12:17",
+  "box": {
+    "compute_apps": "24248, C:\\Program Files (x86)\\Steam\\steam.exe, [N/A]",
+    "gpu": "0, NVIDIA GeForce RTX 4070 Laptop GPU, 0 MiB, 8188 MiB"
+  },
+  "strand_exp2c_loadfail": false,
+  "strand_exp2b_renderoom": false,
+  "strand_exp2a_badvoice": false,
+  "finished": "2026-11-27T09:24:34"
+}

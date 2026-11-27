@@ -1,0 +1,19 @@
+# run 2 (book not on disk, 2026-11-26 22:22): pause landed 22:22:00.8; first Retry beat the Pause and was refused
+2026-11-26 22:22:00.784 [analysis-subset] request received manuscript="mns_QXdGJjgKv7" model="qwen3.5:4b" chapters=1
+2026-11-26 22:22:00.784 [analysis-subset] refused main_analysis_running manuscript="mns_QXdGJjgKv7"
+2026-11-26 22:22:00.832 [analysis] aborted mns_QXdGJjgKv7 (paused or displaced)
+2026-11-26 22:22:00.833 [analysis] main run drained manuscript=mns_QXdGJjgKv7
+2026-11-26 22:22:00.905 [analysis-subset] request received manuscript="mns_QXdGJjgKv7" model="qwen3.5:4b" chapters=1
+retry 2 http=200 t=0.221627
+retry 4 http=200 t=0.222757
+retry 6 http=200 t=0.217593
+HTTP/1.1 200 OK
+X-Powered-By: Express
+RateLimit-Policy: 1000;w=60
+RateLimit-Limit: 1000
+RateLimit-Remaining: 998
+RateLimit-Reset: 60
+Content-Type: text/event-stream
+Cache-Control: no-cache
+Con
+{"error":"main_analysis_running","draining":false,"message":"The analysis is still running on this book. Pause it first, then try again."}

@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (§12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
+> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
 
 ---
 
@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 (discharged 2026-11-26 (#4699), removed from the register) result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -140,11 +140,11 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
 
 ### Result
 
-Auto — Result:
+Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (also 3.7-flash 503, 3.5-flash daily quota); chapter was 19,928 chars.
 
-8192 baseline — Result:
+8192 baseline — Result: NOT RUN — same 503.
 
-Gemma split — Result:
+Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723).
 
 Run by / date / SHA:
 
@@ -202,26 +202,26 @@ Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfa
 Prerequisites: a real Ollama daemon with `qwen3.5:4b` pulled; no TTS engine resident.
 
 1. Default (`schema`): analyse chapter one. Note the validation retries (count `*.attempt1.raw.txt` files).
-   Result:
+   Result: chapter validated first attempt, 0 retries (no `*.attempt1.raw.txt`), 6 characters; request `format` was the schema object. Evidence: onbox-batch-2-results/B105/.
 2. Set `analyzer.ollama.structuredOutput` = `json`. Re-analyse chapter one. Confirm the inbox request had `format: "json"`. Note retries and outcome.
-   Result:
+   Result: request body had `format:"json"` (seen on the wire via a logging proxy; the inbox file holds prompt text only); 0 retries, validated, 6 characters.
 3. Set it to `off`. Re-analyse. Confirm the request had no `format` key. Note retries and outcome.
-   Result:
-4. Restore `schema`.
+   Result: request body had no `format` key; 0 retries, validated, 5 characters.
+4. Restore `schema`. Done: mode was set via server env only, nothing saved to restore.
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4704) / 2026-11-26 / fb95fffe (base; evidence commit on chore/ops-onbox-batch-2).
 
 ## 5. Gemini `schema` mode — register row E112
 
 Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
 
 1. Set `analyzer.gemini.structuredOutput` = `schema`. Analyse chapter one on `gemma-4-31b-it`. Record: HTTP 400 or accepted; the debug "schema adapter dropped" list; first-attempt conformance.
-   Result:
+   Result: not observed — 503 UNAVAILABLE (high demand) on all 9 attempts over 3 runs (2026-11-26 18:41–18:46); no HTTP 400 seen; "schema adapter dropped" list logged and matches the `gemini / stage1Chapter` snapshot (6 minLength keys). Evidence: onbox-batch-2-results/E112/.
 2. Repeat on `gemini-3.5-flash-lite`.
-   Result:
+   Result: accepted, no HTTP 400; dropped list = the 6 snapshot keys exactly; first attempt conformed (5 characters, 0 validation retries). Evidence: onbox-batch-2-results/E112/.
 3. Restore `json`.
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4701) / 2026-11-26 / 035ff80a (base; evidence commit on chore/ops-onbox-batch-2). Step 3: structuredOutput was set via server env only, nothing saved to restore.
 
 ## 6. Live structured output — register row A113
 
@@ -387,7 +387,7 @@ Probe at `on`: ___ label: ___ Result:
 
 Run by / date / SHA:
 
-## 12. Ollama reasoning levels and Test attribution — register row B107
+## 12. Ollama reasoning levels and Test attribution — register row B107 (discharged 2026-11-26 (#4699), removed from the register)
 
 **Hardware:** local Ollama only; one thinking tag (for example `qwen3.5:4b`) and one non-thinking tag.
 
@@ -412,13 +412,13 @@ Run by / date / SHA:
   Test that recorded it.
 - After the re-pull, the record keeps only the verdict this Test probed.
 
-Non-thinking verdicts: ___ Result:
+Non-thinking verdicts: llama3.1:8b — on/low/medium/high rejected, off/model-default accepted. Result: PASS
 
-Thinking-tag verdicts and rows: ___ Result:
+Thinking-tag verdicts and rows: qwen3.5:4b — low accepted; offered in its row, not in llama3.1:8b's. Result: PASS
 
-Refusal copy: ___ Result:
+Refusal copy: level `on`: "Model llama3.1:8b rejected reasoning=on when it was last tested (2026-11-26T10:15:25.431Z)…", before chapter 1. Result: PASS
 
-A2 record after re-pull: ___ Result:
+A2 record after re-pull: tag re-created (new digest) not re-pulled; stored reasoning is only {off: accepted}. Result: PASS
 
 Run by / date / SHA:
 
@@ -458,17 +458,17 @@ a day, and §1 and §2 also use it; run this on a different day.
 - If the Gemma `on` step is `rejected`, record it: the `on` fragment must drop `includeThoughts`, a
   decision to reopen.
 
-Test verdicts: ___ Result:
+Test verdicts: 3.6-flash all five levels accepted; 3.8-flash and gemma-4-31b-it NOT RUN (API 503 / thinking-window stop, 5 attempts each). Result: partial
 
-Thought tokens (`model-default` / `high`; Gemma `off` / `on`): ___ Result:
+Thought tokens (`model-default` / `high`; Gemma `off` / `on`): not measured (3.6-flash chapter run gave no answer inside 120 s). Result: NOT RUN
 
-A8, Gemma `on` step: ___ Result:
+A8, Gemma `on` step: no verdict (503 inconclusive). Result: STILL OWED
 
-G1, `on` vs default: ___ Result:
+G1, `on` vs default: not attempted (Gemma 503). Result: NOT RUN
 
-Stale `minimal` refusal and row: ___ Result:
+Stale `minimal` refusal and row: refusal PASS (analyzer-request-rejected, when=before-start); row display not opened in a browser. Result: partial
 
-Run by / date / SHA:
+Run by / date / SHA: claude lane (#4702) / 2026-11-26 / main 035ff80a; evidence docs/testing/onbox-batch-2-results/E114/
 
 ## 14. Custom payload on real servers — register row A119
 
@@ -542,12 +542,12 @@ Run by / date / SHA:
 - Step 3 returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
 - Step 4 is refused on save, naming `config.httpOptions`.
 
-topK chapter: ___ Result:
+topK chapter: 3 chapters, 14 characters, no error Result: PASS
 
-Label with `maxOutputTokens`: ___ Result:
+Label with `maxOutputTokens`: "+ custom params", "max output set by custom params" Result: PASS
 
-Rejected safetySettings, screen / `server.log`: ___ / ___ Result:
+Rejected safetySettings, screen / `server.log`: value [redacted], code unknown / value [redacted] Result: FAIL (code is unknown, not analyzer-request-rejected; #4718)
 
-`httpOptions` refusal: ___ Result:
+`httpOptions` refusal: 400 naming config.httpOptions Result: PASS
 
-Run by / date / SHA:
+Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main)

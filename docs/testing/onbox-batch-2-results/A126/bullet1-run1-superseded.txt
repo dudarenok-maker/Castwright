@@ -1,0 +1,17 @@
+baseline smi: 0
+{"process":{"rss_mb":1388.253184,"vms_mb":3087.908864,"private_mb":3087.908864,"committed_mb":3087.908864},"gc":{"counts":[111,0,8],"garbage":0,"tracked_objects":771860},"inflight_synth":0,"engines":{"qwen":{"base_loaded":false,"design_loaded":false,"base17_loaded":false,"prompt_cache_entries":0},"coqui":{"model_loaded":false},"kokoro":{"model_loaded":false},"whisper":{"model_loaded":false,"device":"cpu"}},"cuda":{"allocated_mb":0.0,"reserved_mb":0.0,"total_mb":8585.216,"host_pinned_owned_mb":0.0,"host_pinned_active_mb":0.0},"memory_stats":{"cuda:0":{"reserved":0,"allocated":0,"inactive_split":0,"num_alloc_retries":0}},"footprints":{"asr":{"seed_mb":400,"learned_mb":0,"sample_count":0},"asr.warm":{"seed_mb":128,"learned_mb":0,"sample_count":0},"coqui":{"seed_mb":3584,"learned_mb":0,"sample_count":0},"kokoro":{"seed_mb":1200,"learned_mb":0,"sample_count":0},"qwen":{"seed_mb":3072,"learned_mb":0,"sample_count":0},"qwen.1.7b":{"seed_mb":6144,"learned_mb":0,"sample_count":0},"qwen.1.7b.design":{"seed_mb":6144,"learned_mb":0,"sample_count":0},"qwen.1.7b.mint":{"seed_mb":6144,"learned_mb":0,"sample_count":0},"spk":{"seed_mb":200,"learned_mb":0,"sample_count":0},"spk.warm":{"seed_mb":128,"learned_mb":0,"sample_count":0}}}
+cycle 1: smi before=0 after=1873 rise=1873
+{"seed_mb": 3072, "learned_mb": 0, "sample_count": 1}
+health False False False
+cycle 2: smi before=113 after=1873 rise=1760
+{"seed_mb": 3072, "learned_mb": 0, "sample_count": 2}
+health False False False
+cycle 3: smi before=113 after=1873 rise=1760
+{"seed_mb": 3072, "learned_mb": 0, "sample_count": 3}
+health False False False
+cycle 4: smi before=113 after=1873 rise=1760
+{"seed_mb": 3072, "learned_mb": 0, "sample_count": 4}
+health False False False
+cycle 5: smi before=113 after=1873 rise=1760
+{"seed_mb": 3072, "learned_mb": 1745, "sample_count": 5}
+health False False False

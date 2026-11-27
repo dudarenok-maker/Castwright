@@ -1,0 +1,19 @@
+"message":"Discarded cached progress — starting from scratch.
+"message":"Manuscript: 652 words, 3,445 characters, 1 chapter
+"message":"Estimated total time: ~21s (refined after stage 1)
+"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemini 2.5 Flash…
+"message":"Running 1 chapter cast-detection with up to 2 in parallel.
+"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemini 2.5 Flash…
+"message":"Attributing 1 chapter with Gemini 2.5 Flash…
+"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)
+"message":"Running 1 chapter with up to 2 in parallel.
+"message":"Chapter 1/1 cast done — 6 characters in 20s
+"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+"message":"Quote-match tiers: verbatim=7, terminal-punct=1, segments=3.
+"message":"Detected 6 characters: Narrator, Master Oduvan, Maerin the reeve, Wren, Voice from down the lane, Coalfall
+"message":"1 chapter identified in 20s
+"message":"Chapter 1/1 — held back 20s to preserve 10-chapter roster lag.
+"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~1m 39s) via Gemini 2.5 Flash…
+"message":"Gemini 2.5 Flash returned 503 (Service Unavailable): {\n  \
+"message":"Gemini 2.5 Flash returned 503 (Service Unavailable): {\n  \
+"code":"analyzer-unreachable"

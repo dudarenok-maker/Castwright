@@ -1,0 +1,11 @@
+"message":"Discarded cached progress — starting from scratch.
+"message":"Manuscript: 652 words, 3,445 characters, 1 chapter
+"message":"Estimated total time: ~21s (refined after stage 1)
+"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 26B…
+"message":"Running 1 chapter cast-detection with up to 2 in parallel.
+"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 26B…
+"message":"Attributing 1 chapter with Gemma 4 26B…
+"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)
+"message":"Running 1 chapter with up to 2 in parallel.
+"message":"Gemma 4 26B spent its whole output budget reasoning on chapter \
+"code":"analyzer-reasoning-overflow"
