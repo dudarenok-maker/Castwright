@@ -8443,7 +8443,7 @@ Every companion token is now `scope: 'companion'` and reaches nine method+path p
 2. **The library works.** The library populates, **cover art appears** (row 3: a miss shows a placeholder with no error), a book downloads, a chapter plays offline.
 3. **Stream an undownloaded chapter** over LAN (row 5). It plays.
 4. **The waveform renders** (row 4: a miss shows a plain bar).
-5. **Position and status round-trip.** The listening position round-trips to the desktop Listen view (rows 6 and 7), and finishing a book updates its shelf status (row 9).
+5. **Position and status round-trip.** The listening position round-trips to the desktop Listen view (rows 6 and 7), the session's listening time shows on the desktop (row 8, `PUT listen-stats`; a miss is silent, so this is its only positive check), and finishing a book updates its shelf status (row 9).
 6. **Zero denials.** The desktop server log shows ZERO `[lan-auth] scope-denied` lines for the session. Any line is a missing allowlist row.
 7. **The legacy case.** Before upgrading the server, pair a phone and download a book fully. Upgrade to this build (the existing record has no scope, so it answers 401). Open the app on the LAN: it must reach the **pairing screen**, not report the computer offline (PR A's handshake fix, E118).
 8. **Re-pair once.** Steps 2-5 work again after ONE re-pair, not a loop.

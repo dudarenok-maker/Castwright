@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="159" data-publish-id="393207b19e88"></div>
+  <div hidden data-published-as="160" data-publish-id="7ed0404a79d9"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -1737,17 +1737,17 @@
       <summary><span class="num">E120</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Every companion token is now <code>scope: 'companion'</code> and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive <code>requireLanToken</code> against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail SILENTLY on the phone (spec §Q2), so a wrong allowlist row is close to invisible there. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR B)</p>
-        <ul>
+        <ol>
         <li><strong>Pair a fresh phone (QR).</strong> <code>device-tokens.json</code> holds <code>"scope":"companion"</code> and <code>"schema":3</code> for the new record.</li>
         <li><strong>The library works.</strong> The library populates, <strong>cover art appears</strong> (row 3: a miss shows a placeholder with no error), a book downloads, a chapter plays offline.</li>
         <li><strong>Stream an undownloaded chapter</strong> over LAN (row 5). It plays.</li>
         <li><strong>The waveform renders</strong> (row 4: a miss shows a plain bar).</li>
-        <li><strong>Position and status round-trip.</strong> The listening position round-trips to the desktop Listen view (rows 6 and 7), and finishing a book updates its shelf status (row 9).</li>
+        <li><strong>Position and status round-trip.</strong> The listening position round-trips to the desktop Listen view (rows 6 and 7), the session&#8217;s listening time shows on the desktop (row 8, <code>PUT listen-stats</code>; a miss is silent, so this is its only positive check), and finishing a book updates its shelf status (row 9).</li>
         <li><strong>Zero denials.</strong> The desktop server log shows ZERO <code>[lan-auth] scope-denied</code> lines for the session. Any line is a missing allowlist row.</li>
         <li><strong>The legacy case.</strong> Before upgrading the server, pair a phone and download a book fully. Upgrade to this build (the existing record has no scope, so it answers 401). Open the app on the LAN: it must reach the <strong>pairing screen</strong>, not report the computer offline (PR A&#8217;s handshake fix, E118).</li>
         <li><strong>Re-pair once.</strong> Steps 2-5 work again after ONE re-pair, not a loop.</li>
         <li><strong>Negative control.</strong> From a LAN browser on <code>https://castwright.local</code>, redeem a browser pairing: the full desktop UI still works (<code>/redeem-browser</code> mints <code>full</code>).</li>
-        </ul>
+        </ol>
         <p><em>Needs:</em> a real Android phone with an APK built from PR A installed, the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set, and for step 7 a <code>device-tokens.json</code> written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with PR A&#8217;s row, E118. No separate run sheet (like E117, this row has none). Clears when each observation is recorded.</p>
       </div>
     </details>
