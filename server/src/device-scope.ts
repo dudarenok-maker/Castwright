@@ -45,6 +45,10 @@ export function pathnameOf(originalUrl: string): string {
 /** Whether a companion-scoped device may call `method` on `pathname`. */
 export function companionAllows(method: string | undefined, pathname: string): boolean {
   if (!method) return false;
+  /* Express turns "\" into "/" (legacy url.parse, for a target containing #,
+     whitespace, U+00A0 or U+FEFF), so the guard and the router would read
+     different paths. No endpoint above contains one: deny, never normalise. */
+  if (pathname.includes('\\')) return false;
   let m = method.toUpperCase();
   if (m === 'HEAD') m = 'GET';
   return COMPANION_ALLOWLIST.some((r) => r.method === m && r.pattern.test(pathname));

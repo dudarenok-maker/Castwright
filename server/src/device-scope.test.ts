@@ -90,3 +90,17 @@ describe('device-scope companion allowlist', () => {
     expect(companionAllows('GET', '/api/info/')).toBe(false);
   });
 });
+
+// Express routes URLs containing # / whitespace / U+00A0 / U+FEFF through legacy
+// url.parse, which turns "\" into "/" before the query. The guard must not
+// approve a path Express will route differently (default-deny, #4720 pass 1).
+describe('device-scope backslash divergence', () => {
+  it.each([
+    '/api/books/b\\exports/cover',
+    '/api/books/b\\exports/listen-progress',
+    '/api/books\\b/cover',
+    '/api/info\\',
+  ])('denies %s', (p) => {
+    expect(companionAllows('GET', p)).toBe(false);
+  });
+});
