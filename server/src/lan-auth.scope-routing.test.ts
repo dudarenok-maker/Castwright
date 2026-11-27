@@ -99,6 +99,11 @@ describe('companion scope guard vs Express routing', () => {
     ['GET', '/api/books/{{{{/cover#X/exports/foo'],
     ['PUT', '/api/books/{{{{{{{{{/listen-progress#X/state'],
     ['POST', '/api/books/{{{{{{{{/shelf-status#XY/generation'],
+    /* `'` is admitted by isPlainTarget on purpose, so it is safe only because the whole
+       target (the `#` included) is checked, not just the pathname before it (pass 3). */
+    ['GET', "/api/books/''''/cover#X/exports/foo"],
+    ['PUT', "/api/books/'''''''''/listen-progress#X/state"],
+    ['POST', "/api/books/''''''''/shelf-status#XY/generation"],
   ])('denies %s %s, which the shifted router would run as another handler', async (m, target) => {
     ran.length = 0;
     const res = await raw(target, m);
