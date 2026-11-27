@@ -2,19 +2,115 @@
  * viewport or reachable from the nav drawer. Owner decision 2026-11-25: below
  * sm (640) Help / Theme / Account live in the drawer on every stage (the
  * analysing stage gets the hamburger too); at sm+ the inline copies stay.
+ * Owner decisions 2026-11-28 (#4691): from 640 to 1023 the book title in the
+ * bar truncates with an ellipsis and the version pill hides below lg, so Help /
+ * Theme / Account stay inline at every width from sm up; at xl (1280+) every
+ * inline nav tab fits instead of the middle strip clipping the last one.
  *
  * The in-viewport check enumerates every visible interactive element in the
  * header generically (not a hard-coded 3), so a future control that overflows
- * the 412px phone bar fails here with its own name in the message. Runs under
- * all three projects (responsive/* glob); phone-only and sm+-only assertions
- * are skipped by viewport width. */
+ * the bar fails here with its own name in the message. A control must sit inside
+ * the viewport AND inside every ancestor whose computed `overflow-x` is not
+ * `visible` (the bar's own `overflow-x-clip` row, the middle `overflow-x-auto`
+ * strip), so a control scrolled out of sight inside the tab strip fails too.
+ *
+ * Runs under all three projects (responsive/* glob). Phone-only and sm+-only
+ * assertions are skipped by viewport width; the dedicated-widths test at the
+ * bottom resizes the page itself, so it pins 640 to 1280 in every project.
+ *
+ * Stage variants beyond the plain routes, both driven in mock mode through the
+ * real reducers on `window.__store__`: "long title" (hydrateFromBookState with a
+ * title longer than "The Coalfall Commission") and "generate mid-render" (an
+ * open generation stream at 45% plus queued chapters, which is what renders the
+ * `Generating · 45%` status pill and the `Queue · N` chip). */
 import { test, expect, type Page } from '@playwright/test';
-import { goToAnalysing, waitForListenViewReady } from '../helpers';
+import { goToAnalysing, waitForLibraryViewReady, waitForListenViewReady } from '../helpers';
 
 type Stage = {
   name: string;
   open: (page: Page) => Promise<void>;
 };
+
+type StoreWindow = {
+  __store__: {
+    dispatch: (a: unknown) => void;
+    getState: () => {
+      manuscript: { manuscriptId: string | null };
+      chapters: { chapters: Array<Record<string, unknown>> };
+    };
+  };
+};
+
+const LONG_TITLE = 'The Coalfall Commission: A Very Long Subtitle That Cannot Fit In The Bar';
+
+/* "CH 01" only renders once the chapters slice has hydrated, and the status chip
+   reads "Revisions · 1" once the Solway Bay revisions have loaded — the same
+   anchors visual.spec.ts uses, so a header measured before hydration (no title,
+   a bare "Status" chip) can never pass for the real bar. */
+async function waitForSolwayBayHydrated(page: Page): Promise<void> {
+  await expect(page.getByText(/^CH 01$/)).toBeVisible({ timeout: 10_000 });
+  await expect(page.getByTestId('status-pill').first()).toHaveText('Revisions · 1');
+}
+
+async function openListen(page: Page): Promise<void> {
+  await page.goto('/#/books/sb/listen');
+  await waitForListenViewReady(page, /Solway Bay/i);
+  await expect(page.getByTestId('status-pill').first()).toHaveText('Revisions · 1');
+}
+
+async function openGenerate(page: Page): Promise<void> {
+  await page.goto('/#/books/sb/generate');
+  await waitForSolwayBayHydrated(page);
+}
+
+/* A generation stream 9/20 done with one chapter running and two queued: the
+   status pill becomes `Generating · 45%` and the `Queue · 3` chip appears. */
+async function startMidRender(page: Page): Promise<void> {
+  await page.evaluate(() => {
+    const store = (window as unknown as StoreWindow).__store__;
+    const chapters = store.getState().chapters.chapters;
+    store.dispatch({
+      type: 'chapters/setChapters',
+      payload: chapters.map((c, i) =>
+        i >= chapters.length - 3 ? { ...c, state: i === chapters.length - 3 ? 'in_progress' : 'queued' } : c,
+      ),
+    });
+    store.dispatch({
+      type: 'chapters/setActiveStream',
+      payload: {
+        streamKey: 'sb::*',
+        bookId: 'sb',
+        chapterId: null,
+        modelKey: 'qwen',
+        done: 9,
+        total: 20,
+        inProgress: 1,
+        lastTickAt: Date.now(),
+        halted: false,
+      },
+    });
+  });
+  await expect(page.getByTestId('status-pill').first()).toHaveText('Generating · 45%');
+  await expect(page.getByTestId('topbar-queue-chip')).toBeVisible();
+}
+
+async function setLongTitle(page: Page): Promise<void> {
+  await page.evaluate((title) => {
+    const store = (window as unknown as StoreWindow).__store__;
+    store.dispatch({
+      type: 'manuscript/hydrateFromBookState',
+      payload: {
+        state: {
+          bookId: 'sb',
+          manuscriptId: store.getState().manuscript.manuscriptId,
+          title,
+        },
+        sentences: null,
+      },
+    });
+  }, LONG_TITLE);
+  await expect(page.locator('header').getByText(LONG_TITLE)).toBeVisible();
+}
 
 const STAGES: Stage[] = [
   {
@@ -23,58 +119,92 @@ const STAGES: Stage[] = [
   },
   {
     name: 'listen',
-    open: async (page) => {
-      await page.goto('/#/books/sb/listen');
-      await waitForListenViewReady(page);
-    },
+    open: openListen,
   },
   {
     name: 'generate',
-    open: async (page) => {
-      await page.goto('/#/books/sb/generate');
-      await expect(page.locator('header').first()).toBeVisible({ timeout: 10_000 });
-    },
+    open: openGenerate,
   },
   {
     name: 'books home',
     open: async (page) => {
       await page.goto('/#/');
-      await expect(page.locator('header').first()).toBeVisible({ timeout: 10_000 });
+      await waitForLibraryViewReady(page);
+      await expect(page.getByTestId('status-pill').first()).toHaveText('Status');
+    },
+  },
+  {
+    name: 'listen, long title',
+    open: async (page) => {
+      await openListen(page);
+      await setLongTitle(page);
+    },
+  },
+  {
+    name: 'generate, mid-render',
+    open: async (page) => {
+      await openGenerate(page);
+      await startMidRender(page);
     },
   },
 ];
 
 /* Every visible button / link / role=button inside the top bar must sit fully
- * inside [0, viewport width] (+-1px). The label names the offender. */
+ * inside [0, viewport width] (+-1px) and inside every ancestor that clips
+ * horizontally. The label names the offender; the bar's own row must also not be
+ * overflowing (a control pushed into the row's padding is the early warning for
+ * a wider-font runner, e.g. Linux). */
 async function expectHeaderControlsInViewport(page: Page): Promise<void> {
   const vw = page.viewportSize()?.width ?? 0;
-  const controls = await page.locator('header').first().evaluate((header) => {
-    const out: { label: string; x: number; right: number }[] = [];
-    for (const el of Array.from(
-      header.querySelectorAll<HTMLElement>('button, a, [role=button]'),
-    )) {
-      // checkVisibility() honours display:none / visibility on ANCESTORS (the
-      // `hidden sm:inline-flex` wrapper spans), which getComputedStyle(el) misses.
-      const r = el.getBoundingClientRect();
-      if (!el.checkVisibility({ visibilityProperty: true }) || r.width === 0 || r.height === 0) {
-        continue;
+  const { controls, rowOverflow } = await page
+    .locator('header')
+    .first()
+    .evaluate((header) => {
+      const out: { label: string; x: number; right: number; clippedBy: string | null }[] = [];
+      for (const el of Array.from(
+        header.querySelectorAll<HTMLElement>('button, a, [role=button]'),
+      )) {
+        // checkVisibility() honours display:none / visibility on ANCESTORS (the
+        // `hidden sm:inline-flex` wrapper spans), which getComputedStyle(el) misses.
+        const r = el.getBoundingClientRect();
+        if (!el.checkVisibility({ visibilityProperty: true }) || r.width === 0 || r.height === 0) {
+          continue;
+        }
+        const label =
+          el.getAttribute('data-testid') ||
+          el.getAttribute('aria-label') ||
+          (el.textContent ?? '').trim().slice(0, 40) ||
+          el.tagName.toLowerCase();
+        // The control must also fit inside every ancestor that clips or scrolls
+        // horizontally (the clip box is the ancestor's padding box).
+        let clippedBy: string | null = null;
+        for (let p = el.parentElement; p && p !== header.parentElement; p = p.parentElement) {
+          if (getComputedStyle(p).overflowX === 'visible') continue;
+          const pr = p.getBoundingClientRect();
+          const left = pr.left + p.clientLeft;
+          const right = left + p.clientWidth;
+          if (r.x < left - 1 || r.right > right + 1) {
+            clippedBy = `${p.tagName.toLowerCase()}.${p.className.toString().split(/\s+/).slice(0, 4).join('.')} [${Math.round(left)}..${Math.round(right)}]`;
+            break;
+          }
+        }
+        out.push({ label, x: r.x, right: r.right, clippedBy });
       }
-      const label =
-        el.getAttribute('data-testid') ||
-        el.getAttribute('aria-label') ||
-        (el.textContent ?? '').trim().slice(0, 40) ||
-        el.tagName.toLowerCase();
-      out.push({ label, x: r.x, right: r.x + r.width });
-    }
-    return out;
-  });
+      const row = header.firstElementChild as HTMLElement;
+      return { controls: out, rowOverflow: row.scrollWidth - row.clientWidth };
+    });
   expect(controls.length, 'header has visible interactive controls').toBeGreaterThan(0);
   for (const c of controls) {
     expect(c.x, `top-bar control "${c.label}" clipped off the left (vw=${vw})`).toBeGreaterThanOrEqual(-1);
     expect(c.right, `top-bar control "${c.label}" clipped off the right (vw=${vw})`).toBeLessThanOrEqual(
       vw + 1,
     );
+    expect(
+      c.clippedBy,
+      `top-bar control "${c.label}" clipped by an overflow ancestor (vw=${vw})`,
+    ).toBeNull();
   }
+  expect(rowOverflow, `top-bar row overflows its own box by ${rowOverflow}px (vw=${vw})`).toBeLessThanOrEqual(1);
 }
 
 for (const stage of STAGES) {
@@ -132,6 +262,37 @@ test.describe('top-bar controls reachable — sm+ inline cluster unchanged', () 
       await expect(page.getByTestId('topbar-help'), 'inline Help').toBeVisible();
       await expect(page.getByTestId('theme-toggle'), 'inline Theme').toBeVisible();
       await expect(page.getByRole('button', { name: /^Account/ }), 'inline Account').toBeVisible();
+    });
+  }
+});
+
+/* The project viewports (412 / 834 / 1280) sample three widths; the owner's
+ * decisions cover the whole 640..1279 range, so each stage is opened once and
+ * the page is resized through the widths that bracket the sm / md / lg / xl
+ * breakpoints. Below xl no inline nav tab is rendered; at 1280 every tab must be
+ * fully visible (the clipping-ancestor check fails a tab cut off by the strip). */
+const WIDTHS = [640, 768, 834, 1024, 1279, 1280];
+test.describe('top-bar controls reachable — explicit widths 640 to 1280', () => {
+  for (const stage of STAGES) {
+    test(`every header control fits at ${WIDTHS.join(' / ')} px — ${stage.name}`, async ({
+      page,
+    }) => {
+      test.slow();
+      await stage.open(page);
+      for (const width of WIDTHS) {
+        await page.setViewportSize({ width, height: 800 });
+        // Let the layout settle after the breakpoint flip before measuring.
+        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+        await expectHeaderControlsInViewport(page);
+        if (width >= 1280 && !stage.name.startsWith('analysing') && stage.name !== 'books home') {
+          for (const tab of ['Cast', 'Manuscript', 'Generate', 'Listen', 'Log', 'Voices']) {
+            await expect(
+              page.locator('header nav').getByRole('button', { name: tab, exact: true }),
+              `inline tab "${tab}" visible at ${width}`,
+            ).toBeVisible();
+          }
+        }
+      }
     });
   }
 });
