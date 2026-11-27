@@ -352,6 +352,19 @@ describe('requireLanToken companion scope (#898)', () => {
     expect(res._res.statusCode).toBe(403);
   });
 
+  // Matching is raw: a case-folding mutant at the call site would grant this.
+  it('denies GET /API/INFO (no case folding)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { res, next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'GET',
+      originalUrl: '/API/INFO',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(403);
+  });
+
   // Invariant 3: the legacy shared secret is not scoped.
   it('invariant 3: the shared secret on a denied route passes', () => {
     const { next } = drive({
