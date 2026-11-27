@@ -60,6 +60,61 @@ function collectMintSites(): { file: string; scopeArg: string }[] {
   }
   return sites.sort((a, b) => (a.file + a.scopeArg).localeCompare(b.file + b.scopeArg));
 }
+/* The call-site scan above only sees the text `createDevice(`, so it needs the name to
+   stay un-aliased and un-passed-around. Pin that: createDevice is the only export of
+   device-tokens.ts that creates a record, so with these three checks every mint site is
+   one the scan sees. Pure over a { file: source } map so synthetic inputs can prove it. */
+const DEFINITION_FILE = 'workspace/device-tokens.ts';
+const MINTERS = ['routes/devices.ts', 'routes/pairing.ts'];
+const IMPORT_STATEMENT = /import\s*\{[^}]*\}\s*from\s*'[^']*';?/g;
+function mintAliasViolations(sources: Record<string, string>): string[] {
+  const out: string[] = [];
+  const importers: string[] = [];
+  for (const [file, src] of Object.entries(sources)) {
+    if (/\bcreateDevice\s+as\b|\bcreateDevice\s*:/.test(src)) out.push(`${file}: aliases or renames createDevice`);
+    if (file === DEFINITION_FILE || !/\bcreateDevice\b/.test(src)) continue;
+    importers.push(file);
+    // Outside the import specifier, every reference must be a direct call.
+    const rest = src.replace(IMPORT_STATEMENT, '');
+    for (const m of rest.matchAll(/\bcreateDevice\b(?!\()/g)) {
+      const line = rest.slice(0, m.index).split('\n').length;
+      out.push(`${file}: createDevice referenced other than as a direct call (stripped line ${line})`);
+    }
+  }
+  if (importers.sort().join() !== [...MINTERS].sort().join()) out.push(`importers: ${importers.join(', ')}`);
+  return out;
+}
+function productionSources(): Record<string, string> {
+  const root = fileURLToPath(new URL('./', import.meta.url));
+  const out: Record<string, string> = {};
+  for (const f of walk(root)) {
+    if (!f.endsWith('.ts') || f.endsWith('.test.ts')) continue;
+    out[relative(root, f).split('\\').join('/')] = readFileSync(f, 'utf8');
+  }
+  return out;
+}
+it('keeps createDevice un-aliased and imported only by the two minting routes', () => {
+  expect(mintAliasViolations(productionSources())).toEqual([]);
+});
+it.each([
+  ['an aliased import', { 'routes/devices.ts': "import { createDevice as mint } from 'x';\nmint(a, b, c);" }],
+  ['a renaming re-export', { 'routes/devices.ts': "export { createDevice as mintDevice } from 'x';" }],
+  ['a destructured rename', { 'routes/pairing.ts': "const { createDevice: mint } = await import('x');" }],
+  ['an assigned reference', { 'routes/pairing.ts': "import { createDevice } from 'x';\nconst mint = createDevice;" }],
+  ['.call', { 'routes/pairing.ts': "import { createDevice } from 'x';\ncreateDevice.call(null, a);" }],
+  ['an optional call', { 'routes/pairing.ts': "import { createDevice } from 'x';\ncreateDevice?.(a);" }],
+  ['a third importer', { 'routes/devices.ts': "import { createDevice } from 'x';", 'routes/pairing.ts': "import { createDevice } from 'x';", 'routes/other.ts': "import { createDevice } from 'x';" }],
+])('flags %s', (_name, sources) => {
+  expect(mintAliasViolations({ [DEFINITION_FILE]: 'export async function createDevice(', ...sources })).not.toEqual([]);
+});
+it('accepts a multi-line import and direct calls in exactly the two minting routes', () => {
+  expect(
+    mintAliasViolations({
+      'routes/devices.ts': "import {\n  createDevice,\n  other,\n} from 'x';\nawait createDevice(a, b, 'full');",
+      'routes/pairing.ts': "import { createDevice } from 'x';\nawait createDevice(a, b, 'companion');",
+    }),
+  ).toEqual([]);
+});
 it('has exactly three createDevice( mint sites in production source, with pinned scopes', () => {
   expect(collectMintSites().map((s) => [s.file, s.scopeArg])).toEqual([
     ['routes/devices.ts', "'full'"],
