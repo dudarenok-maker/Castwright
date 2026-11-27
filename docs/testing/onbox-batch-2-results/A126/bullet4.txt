@@ -1,0 +1,13 @@
+bullet4 pre-warm-run qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 6}
+warm std render: tts.log lines before=1577
+warm render stopped after >=27 lines: synthesize=27 synth-batch=0
+post-warm qwen {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 6}
+pre-reload health qwen/b17/design: False False False
+learned_mb before reload: {'seed_mb': 3072, 'learned_mb': 1745, 'sample_count': 6}
+smi just before reload: 2097
+smi peak during reload: 3893
+2026-11-27 08:37:15.530 [sidecar] Loading Qwen Base model=Qwen/Qwen3-TTS-12Hz-0.6B-Base on cuda:0 …
+2026-11-27 08:37:24.391 [sidecar] Qwen Base loaded.
+OOM lines: 0
+503 lines: 0
+post-reload qwen {'seed_mb': 3072, 'learned_mb': 1768, 'sample_count': 7}

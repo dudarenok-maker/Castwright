@@ -10,12 +10,15 @@
    modal) and are now exercised directly here. */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { render, screen, fireEvent, within } from '@testing-library/react';
+import { render, screen, fireEvent, within, waitFor } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import type { AppInfo } from '../lib/types';
 
-const appInfoH = vi.hoisted(() => ({ info: null as AppInfo | null, refresh: vi.fn(async () => {}) }));
+const appInfoH = vi.hoisted(() => ({
+  info: null as AppInfo | null,
+  refresh: vi.fn(async () => {}),
+}));
 vi.mock('../lib/use-app-info', () => ({
   useAppInfo: () => ({ info: appInfoH.info, error: null, refresh: appInfoH.refresh }),
 }));
@@ -46,6 +49,7 @@ import {
   type DesignPillData,
   type ExportPillData,
 } from './top-bar';
+import { LABELS } from './theme-toggle';
 import { uiSlice } from '../store/ui-slice';
 import { accountSlice } from '../store/account-slice';
 import { tourSlice } from '../store/tour-slice';
@@ -95,7 +99,9 @@ function renderWithStore(ui: React.ReactElement) {
       tour: tourSlice.reducer,
     },
   });
-  return render(<Provider store={store}>{ui}</Provider>);
+  /* #4567 tests assert on the store (theme cycle), so hand the store back
+     alongside the RTL helpers. */
+  return { store, ...render(<Provider store={store}>{ui}</Provider>) };
 }
 
 describe('TopBar — global nav', () => {
@@ -216,7 +222,9 @@ describe('TopBar — StatusPill (hover popover)', () => {
        off-screen, clipping it to "Revis". The pill must live in an
        always-visible shrink-0 slot, never inside an overflow-x-auto ancestor. */
     renderWithStore(
-      <TopBar {...makeProps({ stage: 'ready', view: 'listen', projectTitle: 'The Drowning Bell' })} />,
+      <TopBar
+        {...makeProps({ stage: 'ready', view: 'listen', projectTitle: 'The Drowning Bell' })}
+      />,
     );
     const pill = screen.getByTestId('status-pill');
     expect(pill.closest('.overflow-x-auto')).toBeNull();
@@ -419,14 +427,30 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
   });
 
   it('shows an Analysing rung for an active analysis sub-stage', () => {
-    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
-    expect(summarizeStatus({ ...base, analysisSubstage: { kind: 'prosody', percent: 40 } })).toMatchObject({
-      label: 'Analysing', detail: '40%', icon: 'spinner',
+    const base = {
+      analysis: null,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    };
+    expect(
+      summarizeStatus({ ...base, analysisSubstage: { kind: 'prosody', percent: 40 } }),
+    ).toMatchObject({
+      label: 'Analysing',
+      detail: '40%',
+      icon: 'spinner',
     });
   });
 
   it('sub-stage rung goes amber while the analyzer model is loading', () => {
-    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    const base = {
+      analysis: null,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    };
     expect(
       summarizeStatus({
         ...base,
@@ -436,7 +460,13 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
   });
 
   it('sub-stage rung goes amber when the Gemini fallback is active', () => {
-    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    const base = {
+      analysis: null,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    };
     expect(
       summarizeStatus({
         ...base,
@@ -446,7 +476,13 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
   });
 
   it('sub-stage rung stays the default peach tone while streaming normally', () => {
-    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    const base = {
+      analysis: null,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    };
     expect(
       summarizeStatus({
         ...base,
@@ -468,18 +504,44 @@ describe('summarizeStatus — dominant-state priority ladder (plan 120)', () => 
   });
 
   it('voice-engine states (Generating, Loading model) outrank Analysis and the sub-stage', () => {
-    const base = { analysis: null, generation: null, design: null, pendingRevisionsCount: 0, anyModelLoading: false };
+    const base = {
+      analysis: null,
+      generation: null,
+      design: null,
+      pendingRevisionsCount: 0,
+      anyModelLoading: false,
+    };
     // Generating is the heaviest — always wins:
-    expect(summarizeStatus({ ...base, generation: { state: 'running', percent: 10 } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
-      .toMatchObject({ label: 'Generating' });
+    expect(
+      summarizeStatus({
+        ...base,
+        generation: { state: 'running', percent: 10 } as never,
+        analysisSubstage: { kind: 'review', percent: 90 },
+      }),
+    ).toMatchObject({ label: 'Generating' });
     // Loading model now outranks a real analysis pass AND a sub-stage (regrouped ladder):
-    expect(summarizeStatus({ ...base, anyModelLoading: true, analysis: { state: 'running', percent: 12, kind: 'full' } as never }))
-      .toMatchObject({ label: 'Loading model' });
-    expect(summarizeStatus({ ...base, anyModelLoading: true, analysisSubstage: { kind: 'review', percent: 90 } }))
-      .toMatchObject({ label: 'Loading model' });
+    expect(
+      summarizeStatus({
+        ...base,
+        anyModelLoading: true,
+        analysis: { state: 'running', percent: 12, kind: 'full' } as never,
+      }),
+    ).toMatchObject({ label: 'Loading model' });
+    expect(
+      summarizeStatus({
+        ...base,
+        anyModelLoading: true,
+        analysisSubstage: { kind: 'review', percent: 90 },
+      }),
+    ).toMatchObject({ label: 'Loading model' });
     // Real analysis still outranks its own sub-stage:
-    expect(summarizeStatus({ ...base, analysis: { state: 'running', percent: 12, kind: 'full' } as never, analysisSubstage: { kind: 'review', percent: 90 } }))
-      .toMatchObject({ detail: '12%' });
+    expect(
+      summarizeStatus({
+        ...base,
+        analysis: { state: 'running', percent: 12, kind: 'full' } as never,
+        analysisSubstage: { kind: 'review', percent: 90 },
+      }),
+    ).toMatchObject({ detail: '12%' });
   });
 
   it('shows "Exporting" with a rounded percent while an export runs and nothing else outranks it', () => {
@@ -592,7 +654,21 @@ describe('DesignPill', () => {
   });
 
   it('DesignPill shows the phase for a single design', () => {
-    render(<DesignPill data={{ state: 'running', done: 0, total: 1, percent: 30, skipped: 0, failureCount: 0, currentName: 'Aria', phase: 'rendering', onClick: () => {} }} />);
+    render(
+      <DesignPill
+        data={{
+          state: 'running',
+          done: 0,
+          total: 1,
+          percent: 30,
+          skipped: 0,
+          failureCount: 0,
+          currentName: 'Aria',
+          phase: 'rendering',
+          onClick: () => {},
+        }}
+      />,
+    );
     expect(screen.getByText(/Aria/)).toBeInTheDocument();
     expect(screen.getByText(/rendering audition/i)).toBeInTheDocument();
   });
@@ -645,7 +721,12 @@ describe('AnalysisPill (B3 sticky analysis)', () => {
   it('renders the running variant with the phase label and percent', () => {
     render(
       <AnalysisPill
-        data={{ state: 'running', phaseLabel: 'Detecting characters', percent: 42, onClick: vi.fn() }}
+        data={{
+          state: 'running',
+          phaseLabel: 'Detecting characters',
+          percent: 42,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -697,7 +778,12 @@ describe('AnalysisPill (B3 sticky analysis)', () => {
   it("renders the paused variant without a percent (paused work doesn't tick)", () => {
     render(
       <AnalysisPill
-        data={{ state: 'paused', phaseLabel: 'Detecting characters', percent: 30, onClick: vi.fn() }}
+        data={{
+          state: 'paused',
+          phaseLabel: 'Detecting characters',
+          percent: 30,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -779,7 +865,12 @@ describe('AnalysisPill subset variant (plan 32 D2)', () => {
   it('renders the main variant ("Analysing") when kind is undefined or "main"', () => {
     render(
       <AnalysisPill
-        data={{ state: 'running', phaseLabel: 'Detecting characters', percent: 30, onClick: vi.fn() }}
+        data={{
+          state: 'running',
+          phaseLabel: 'Detecting characters',
+          percent: 30,
+          onClick: vi.fn(),
+        }}
       />,
     );
     const pill = screen.getByTestId('analysis-pill');
@@ -846,9 +937,7 @@ describe('GenerationPill', () => {
 
   it('fires onClick when clicked', () => {
     const onClick = vi.fn();
-    render(
-      <GenerationPill data={{ state: 'running', done: 1, total: 5, percent: 20, onClick }} />,
-    );
+    render(<GenerationPill data={{ state: 'running', done: 1, total: 5, percent: 20, onClick }} />);
     fireEvent.click(screen.getByTestId('generation-pill'));
     expect(onClick).toHaveBeenCalledTimes(1);
   });
@@ -856,7 +945,9 @@ describe('GenerationPill', () => {
 
 describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
   it('renders the hamburger trigger on a book stage and on global stages', () => {
-    const { unmount } = renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    const { unmount } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />,
+    );
     const toggle = screen.getByTestId('topbar-nav-toggle');
     expect(toggle.tagName).toBe('BUTTON');
     expect(toggle.className).toMatch(/xl:hidden/);
@@ -865,9 +956,28 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     expect(screen.getByTestId('topbar-nav-toggle')).toBeInTheDocument();
   });
 
-  it('does NOT render the hamburger on a stage with no nav (e.g. upload)', () => {
-    renderWithStore(<TopBar {...makeProps({ stage: 'upload', view: null })} />);
-    expect(screen.queryByTestId('topbar-nav-toggle')).not.toBeInTheDocument();
+  it('renders the hamburger on no-nav stages (upload/analysing/confirm) phone-only — sm:hidden, not xl:hidden (#4567)', () => {
+    for (const stage of ['upload', 'analysing', 'confirm'] as const) {
+      const { unmount } = renderWithStore(<TopBar {...makeProps({ stage, view: null })} />);
+      const toggle = screen.getByTestId('topbar-nav-toggle');
+      expect(toggle.className).toMatch(/sm:hidden/);
+      expect(toggle.className).not.toMatch(/xl:hidden/);
+      unmount();
+    }
+  });
+
+  it('no-nav stage: the drawer Admin row has no divider/top padding (it is the first child, #4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const admin = screen.getByTestId('nav-drawer-link-admin');
+    expect(admin.className).not.toMatch(/border-t/);
+    expect(admin.className).not.toMatch(/\bpt-3\b/);
+  });
+
+  it('nav stage: the drawer Admin row keeps the divider above it (#4567)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-admin').className).toMatch(/border-t/);
   });
 
   it('keeps the drawer unmounted until the trigger is clicked (duplicate-selector safety)', () => {
@@ -901,7 +1011,11 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
 
     // Inline strip (hidden xl:flex, but present in the DOM under jsdom).
     const inlineNav = screen.getByRole('button', { name: 'Cast' }).closest('nav')!;
-    expect(within(inlineNav).getAllByRole('button').map((b) => b.textContent)).toEqual(expected);
+    expect(
+      within(inlineNav)
+        .getAllByRole('button')
+        .map((b) => b.textContent),
+    ).toEqual(expected);
 
     // Hamburger drawer follows the same order — the first six menuitems (the
     // seventh is the phone-only Admin row, #916).
@@ -923,8 +1037,9 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen' })} />);
     fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
     const rows = within(screen.getByTestId('topbar-nav-drawer')).getAllByRole('menuitem');
-    /* 6 per-book tabs + the phone-only Admin row (#916). */
-    expect(rows.length).toBe(7);
+    /* 6 per-book tabs + the phone-only Admin row (#916) + the five phone-only
+       Help/Tour/Screen-tour/Theme/Account rows (#4567). */
+    expect(rows.length).toBe(12);
     for (const r of rows) expect(r.className).toMatch(/min-h-\[44px\]/);
   });
 
@@ -979,8 +1094,8 @@ describe('TopBar — responsive nav drawer (<xl hamburger)', () => {
 /* #916 — phone inline-chrome trim. The responsive nav's 44px hamburger pushed
    the right cluster (Help / Theme / Account) ~120px past the 412px phone
    viewport, where overflow-x-clip hid them. The fix reclaims width by hiding the
-   wordmark text on phone and moving the Admin pill into the drawer on nav stages
-   (it stays inline where there is no drawer, and inline at sm+). jsdom can't see
+   wordmark text on phone and moving the Admin pill into the drawer on every
+   stage (#4567: the drawer now exists on no-nav stages too; inline at sm+). jsdom can't see
    the pixel clip, so these lock the responsive-class intent + drawer reachability;
    the geometry itself is gated by e2e/responsive/topbar-nav.spec.ts at Pixel-7. */
 describe('TopBar — #916 phone inline-chrome trim', () => {
@@ -999,12 +1114,34 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     expect(wrap.className).toMatch(/sm:inline-flex/);
   });
 
-  it('keeps the inline Admin pill on phone for a no-nav stage (upload) so it is never stranded', () => {
-    renderWithStore(<TopBar {...makeProps({ stage: 'upload', view: null })} />);
-    const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
-    expect(wrap.className).not.toMatch(/hidden/);
-    expect(wrap.className).toMatch(/inline-flex/);
-  });
+  it.each(['upload', 'analysing', 'confirm'] as const)(
+    'hides the inline Admin pill below sm on the no-nav %s stage (the drawer carries it, #4567)',
+    (kind) => {
+      renderWithStore(<TopBar {...makeProps({ stage: kind, view: null })} />);
+      const wrap = screen.getByTestId('topbar-admin-link').parentElement!;
+      expect(wrap.className).toMatch(/\bhidden\b/);
+      expect(wrap.className).toMatch(/sm:inline-flex/);
+    },
+  );
+
+  it.each(['books', 'upload', 'analysing'] as const)(
+    'hides the inline Help / Theme / Account below sm on the %s stage (#4567)',
+    (kind) => {
+      renderWithStore(
+        <TopBar
+          {...makeProps({ stage: kind, view: kind === 'books' ? makeProps().view : null })}
+        />,
+      );
+      const help = screen.getByTestId('topbar-help').closest('span.hidden');
+      const theme = screen.getByTestId('theme-toggle').closest('span.hidden');
+      const account = screen.getByRole('button', { name: /^Account/ }).closest('span.hidden');
+      for (const wrap of [help, theme, account]) {
+        expect(wrap).not.toBeNull();
+        expect(wrap!.className).toMatch(/\bhidden\b/);
+        expect(wrap!.className).toMatch(/sm:inline-flex/);
+      }
+    },
+  );
 
   it('surfaces Admin as a phone-only drawer row that fires onOpenAdmin and closes the drawer', () => {
     const onOpenAdmin = vi.fn();
@@ -1015,6 +1152,143 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     fireEvent.click(row);
     expect(onOpenAdmin).toHaveBeenCalledTimes(1);
     expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+  });
+});
+
+/* #4567 — the drawer exists on EVERY stage below `sm` so the three controls
+   overflow-x-clip hides at the 412px phone viewport (Help, Theme, Account)
+   stay reachable from the drawer on upload/analysing/confirm too. jsdom
+   cannot evaluate sm:/xl: media, so these assert on classes, testids and
+   DOM presence; the geometry itself is #4654's paired e2e at Pixel-7. */
+describe('TopBar — #4567 drawer on every stage (phone-only Help/Theme/Account)', () => {
+  const PHONE_ROWS = ['help', 'tour', 'screen-tour', 'theme', 'account'] as const;
+
+  it('keeps the trigger xl:hidden on nav stages (ready/books unchanged)', () => {
+    const { unmount } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />,
+    );
+    expect(screen.getByTestId('topbar-nav-toggle').className).toMatch(/xl:hidden/);
+    unmount();
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('topbar-nav-toggle').className).toMatch(/xl:hidden/);
+  });
+
+  it.each(['analysing', 'confirm'] as const)(
+    'opening the drawer on %s shows the five phone rows plus a phone-only Admin row, and no nav rows',
+    (kind) => {
+      renderWithStore(<TopBar {...makeProps({ stage: kind, view: null })} />);
+      fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+      const d = within(screen.getByTestId('topbar-nav-drawer'));
+      for (const id of PHONE_ROWS) {
+        expect(d.getByTestId(`nav-drawer-link-${id}`)).toBeInTheDocument();
+      }
+      expect(d.getByTestId('nav-drawer-link-admin').className).toMatch(/sm:hidden/);
+      /* no Cast/Books destination rows leak onto a no-nav stage */
+      expect(d.queryByTestId('nav-drawer-link-cast')).not.toBeInTheDocument();
+      expect(d.queryByTestId('nav-drawer-link-books')).not.toBeInTheDocument();
+    },
+  );
+
+  it('on ready the drawer shows the nav rows, the Admin row, and the five phone rows', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'cast' })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const d = within(screen.getByTestId('topbar-nav-drawer'));
+    expect(d.getByTestId('nav-drawer-link-cast')).toBeInTheDocument();
+    expect(d.getByTestId('nav-drawer-link-admin')).toBeInTheDocument();
+    for (const id of PHONE_ROWS) {
+      expect(d.getByTestId(`nav-drawer-link-${id}`)).toBeInTheDocument();
+    }
+  });
+
+  it('Help row links to #/help and closes the drawer', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = screen.getByTestId('nav-drawer-link-help');
+    expect(row).toHaveAttribute('href', '#/help');
+    fireEvent.click(row);
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+  });
+
+  it('Take-the-tour row starts the linear tour and closes the drawer', async () => {
+    const { store } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'analysing', view: null })} />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    fireEvent.click(screen.getByTestId('nav-drawer-link-tour'));
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+    await waitFor(() => expect(store.getState().tour.active).toBe(true), { timeout: 5000 });
+  });
+
+  it('Show-me-this-screen row is disabled on a stage screenForStage cannot map (analysing)', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-screen-tour')).toBeDisabled();
+  });
+
+  it('Show-me-this-screen row starts the screen tour when screenForStage resolves (ready)', () => {
+    const { store } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'ready', view: 'manuscript' })} />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = screen.getByTestId('nav-drawer-link-screen-tour');
+    expect(row).toBeEnabled();
+    fireEvent.click(row);
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+    expect(store.getState().tour.active).toBe(true);
+    expect(store.getState().tour.tourId).toBe('manuscript');
+  });
+
+  it('Theme row cycles ui.themeOverride, keeps the drawer open, and its label tracks the mode', () => {
+    const { store } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'analysing', view: null })} />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = screen.getByTestId('nav-drawer-link-theme');
+    expect(store.getState().ui.themeOverride).toBeNull();
+    fireEvent.click(row);
+    /* system → light (same cycle + LABELS as the inline toggle, plan 41) */
+    expect(store.getState().ui.themeOverride).toBe('light');
+    expect(screen.getByTestId('topbar-nav-drawer')).toBeInTheDocument();
+    expect(screen.getByTestId('nav-drawer-link-theme').textContent).toMatch(/light/i);
+  });
+
+  it('Theme row shows the short label as text, keeps the full LABELS string as aria-label, and both track a click', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'analysing', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    const row = () => screen.getByTestId('nav-drawer-link-theme');
+    expect(row().textContent).toBe('Theme: System');
+    expect(row()).toHaveAttribute('aria-label', LABELS.system);
+    fireEvent.click(row());
+    expect(row().textContent).toBe('Theme: Light');
+    expect(row()).toHaveAttribute('aria-label', LABELS.light);
+  });
+
+  it('Account row fires onOpenAccount, closes the drawer, and is aria-current on the account stage', () => {
+    const onOpenAccount = vi.fn();
+    const { unmount } = renderWithStore(
+      <TopBar {...makeProps({ stage: 'analysing', view: null, onOpenAccount })} />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-account')).not.toHaveAttribute('aria-current');
+    fireEvent.click(screen.getByTestId('nav-drawer-link-account'));
+    expect(onOpenAccount).toHaveBeenCalledTimes(1);
+    expect(screen.queryByTestId('topbar-nav-drawer')).not.toBeInTheDocument();
+    unmount();
+    renderWithStore(<TopBar {...makeProps({ stage: 'account', view: null })} />);
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-account')).toHaveAttribute('aria-current', 'page');
+  });
+
+  it('Account row carries the display name (same labelling as the avatar)', () => {
+    renderWithStore(
+      <TopBar
+        {...makeProps({ stage: 'analysing', view: null, userDisplayName: 'Captain Picard' })}
+      />,
+    );
+    fireEvent.click(screen.getByTestId('topbar-nav-toggle'));
+    expect(screen.getByTestId('nav-drawer-link-account').textContent).toMatch(
+      /account — captain picard/i,
+    );
   });
 });
 

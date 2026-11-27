@@ -528,7 +528,7 @@ describe('install job routes collapse step/error on the real app (#4446/#4498, r
 
 /* ---- #4446: unauthenticated GET /cert/root.crt 404 `probed` paths ---- */
 
-describe('GET /cert/root.crt 404 probed paths collapse on the real app (#4446, real-app test)', () => {
+describe('GET /cert/root.crt 404 probed paths: absolute on loopback, scrubbed to <path> for LAN (#4572, builds on #4446; real-app test)', () => {
   const envKeys = ['MKCERT_CAROOT', 'LOCALAPPDATA', 'XDG_DATA_HOME', 'PATH'];
   const prev: Record<string, string | undefined> = {};
   beforeAll(() => {
@@ -554,12 +554,11 @@ describe('GET /cert/root.crt 404 probed paths collapse on the real app (#4446, r
   });
 
   describe.skipIf(!lanIp)('from a LAN address', () => {
-    it('collapses home to ~ in every probed field and leaks neither the fake home nor the real username', async () => {
-      const lo = await getJson('127.0.0.1', '/cert/root.crt');
+    it('scrubs every probed path to <path> and leaks neither the fake home nor the real username (#4572)', async () => {
       const lan = await getJson(lanIp!, '/cert/root.crt');
       expect(lan.status).toBe(404);
-      expect(lan.body.probed.env).toBe('~' + lo.body.probed.env.slice(home.length));
-      expect(lan.body.probed.defaultForPlatform).toBe('~' + lo.body.probed.defaultForPlatform.slice(home.length));
+      expect(lan.body.probed.env).toBe('<path>');
+      expect(lan.body.probed.defaultForPlatform).toBe('<path>');
       expect(lan.body.probed.mkcertCli).toBeNull();
       const raw = JSON.stringify(lan.body);
       expect(raw).not.toContain(home);

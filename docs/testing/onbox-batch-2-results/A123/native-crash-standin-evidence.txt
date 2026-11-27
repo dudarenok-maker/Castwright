@@ -1,0 +1,9 @@
+07:19:34 stand-in node pid=38436 (120s timer, exit code -1073740791)
+07:19:34 npm run tts:sidecar launcher pid=23428
+07:21:52 launcher exited after 138s
+07:21:53 sidecar port 9050 listening: False
+07:21:53 [supervisor] sidecar exited with code 45.
+07:21:53 2026-11-27 07:19:39.138 [sidecar] parent watch armed: server pid=38436 (start_ms=None, grace 15s)
+07:21:53 2026-11-27 07:21:34.278 [sidecar] server pid=38436 exited with code 3221226505 = 0xC0000409 (fast-fail / STATUS_STACK_BUFFER_OVERRUN, a native crash)
+07:21:53 2026-11-27 07:21:49.281 [sidecar] no new server within 15s; sidecar exiting
+07:21:53 launcher cmd still present: False

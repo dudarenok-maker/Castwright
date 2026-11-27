@@ -1,0 +1,107 @@
+# E115 evidence - server stdout of 'npm --prefix server run dev' (dev mode, so this stands in for logs/server.log), [analysis]/[gemini] lines only; boot 18:28, case 1 = 18:30:03, case 3 = 18:33:58 (the 18:33:42 run is a cached resume, not a case).
+2026-11-26 18:30:03.142 [analysis] request received manuscript="mns_7IWcnMvyKF" model="(saved/default)" fresh=false
+2026-11-26 18:30:03.154 [analysis] start manuscript="mns_7IWcnMvyKF" engine=gemini model="gemini-3.5-flash-lite"
+2026-11-26 18:30:03.208 [analysis] mns=mns_7IWcnMvyKF phase=0 Manuscript: 2,890 words, 15,554 characters, 3 chapters
+2026-11-26 18:30:03.209 [analysis] mns=mns_7IWcnMvyKF phase=0 Estimated total time: ~1m 33s (refined after stage 1)
+2026-11-26 18:30:03.215 [analysis] mns=mns_7IWcnMvyKF phase=0 Detecting cast chapter-by-chapter across 3 chapters via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:03.216 [analysis] mns=mns_7IWcnMvyKF phase=0 Running 3 chapter cast-detections with up to 2 in parallel.
+2026-11-26 18:30:03.217 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 1/3 cast — Chapter 1 (38 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:03.221 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 2/3 cast — Chapter One — The Knock (3,445 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:03.222 [analysis] mns=mns_7IWcnMvyKF phase=1 Attributing 3 chapters with Gemini 3.5 Flash Lite…
+2026-11-26 18:30:03.246 [analysis] mns=mns_7IWcnMvyKF phase=1 Estimated stage time: ~1m 18s (pre-flight estimate, refined after stage 1)
+2026-11-26 18:30:03.246 [analysis] mns=mns_7IWcnMvyKF phase=1 Running 3 chapters with up to 2 in parallel.
+2026-11-26 18:30:06.633 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2776 firstAnswerMs=2777 thoughtPartsBeforeAnswer=0
+2026-11-26 18:30:06.670 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 1/3 cast done — 1 character in 3s
+2026-11-26 18:30:06.672 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 3/3 cast — Chapter Two — The Pour (12,067 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:10.165 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2895 firstAnswerMs=2895 thoughtPartsBeforeAnswer=0
+2026-11-26 18:30:19.234 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=3733 firstAnswerMs=3733 thoughtPartsBeforeAnswer=0
+2026-11-26 18:30:19.280 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 2/3 cast done — 5 characters in 11s
+2026-11-26 18:30:22.072 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 3/3 cast done — 13 characters in 13s
+2026-11-26 18:30:22.092 [analysis] mns=mns_7IWcnMvyKF phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping).
+2026-11-26 18:30:23.341 [analysis] mns=mns_7IWcnMvyKF phase=0 Dropped 1 fabricated quote on wren (e.g. ""Where?" Wren asked.").
+2026-11-26 18:30:23.770 [analysis] mns=mns_7IWcnMvyKF phase=0 Quote-match tiers: verbatim=32, terminal-punct=1, segments=3.
+2026-11-26 18:30:53.144 [analysis] mns=mns_7IWcnMvyKF phase=0 Detected 14 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Oduvan, Pell Hollis, Widow Casper, Brann, Berrin, Father Lessom, Ivo, Sela, Hart
+2026-11-26 18:30:53.147 [analysis] mns=mns_7IWcnMvyKF phase=0 3 chapters identified in 50s
+2026-11-26 18:30:53.152 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 1/3 — held back 50s to preserve 10-chapter roster lag.
+2026-11-26 18:30:53.153 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 2/3 — held back 50s to preserve 10-chapter roster lag.
+2026-11-26 18:30:53.155 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 1/3 — Chapter 1 (38 chars, ~2s) via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:53.162 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 2/3 — Chapter One — The Knock (3,445 chars, ~55s) via Gemini 3.5 Flash Lite…
+2026-11-26 18:30:56.979 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=3238 firstAnswerMs=3238 thoughtPartsBeforeAnswer=0
+2026-11-26 18:31:02.905 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 1/3 done — 1 sentences in 10s
+2026-11-26 18:31:02.912 [analysis] mns=mns_7IWcnMvyKF phase=1 Refined pace — 256.6s per 1,000 chars · ~66m 20s remaining over 2 chapters.
+2026-11-26 18:31:02.929 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 3/3 — Chapter Two — The Pour (12,067 chars, ~51m 36s) via Gemini 3.5 Flash Lite…
+2026-11-26 18:31:07.159 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2778 firstAnswerMs=2778 thoughtPartsBeforeAnswer=0
+2026-11-26 18:31:10.666 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=1551 firstAnswerMs=1551 thoughtPartsBeforeAnswer=0
+2026-11-26 18:31:10.989 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 2/3 done — 58 sentences in 18s
+2026-11-26 18:31:11.000 [analysis] mns=mns_7IWcnMvyKF phase=1 Refined pace — 7.9s per 1,000 chars · ~1m 36s remaining over 1 chapter.
+2026-11-26 18:32:03.543 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=1439 firstAnswerMs=1440 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:20.547 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2529 firstAnswerMs=2529 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:21.630 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=661 firstAnswerMs=661 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:23.785 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=1999 firstAnswerMs=1999 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:24.759 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:29.613 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2829 firstAnswerMs=2829 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:32.916 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=3076 firstAnswerMs=3076 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:40.571 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=6882 firstAnswerMs=6882 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:42.784 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2184 firstAnswerMs=2184 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:45.622 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2653 firstAnswerMs=2653 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:48.068 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2428 firstAnswerMs=2428 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:51.617 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=3036 firstAnswerMs=3036 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:54.597 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2956 firstAnswerMs=2956 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:56.635 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=2030 firstAnswerMs=2030 thoughtPartsBeforeAnswer=0
+2026-11-26 18:32:56.655 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 3/3 — attributed in 2 sections.
+2026-11-26 18:32:56.703 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 3/3 done — 253 sentences in 1m 54s
+2026-11-26 18:32:56.705 [analysis] mns=mns_7IWcnMvyKF phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping).
+2026-11-26 18:32:56.705 [analysis] mns=mns_7IWcnMvyKF phase=1 Attributed 312 sentences across 3 chapters
+2026-11-26 18:32:56.706 [analysis] mns=mns_7IWcnMvyKF phase=1 Narrator: 154 lines
+2026-11-26 18:32:56.706 [analysis] mns=mns_7IWcnMvyKF phase=1 Coalfall: 33 lines
+2026-11-26 18:32:56.706 [analysis] mns=mns_7IWcnMvyKF phase=1 Oduvan: 21 lines
+2026-11-26 18:32:56.707 [analysis] mns=mns_7IWcnMvyKF phase=1 Pell Hollis: 15 lines
+2026-11-26 18:32:56.707 [analysis] mns=mns_7IWcnMvyKF phase=2 No library matches yet (voice library matching is not wired up for this slice).
+2026-11-26 18:32:57.210 [analysis] main run drained manuscript=mns_7IWcnMvyKF
+2026-11-26 18:33:42.568 [analysis] request received manuscript="mns_7IWcnMvyKF" model="(saved/default)" fresh=false
+2026-11-26 18:33:42.575 [analysis] start manuscript="mns_7IWcnMvyKF" engine=gemini model="gemini-3.5-flash-lite"
+2026-11-26 18:33:42.616 [analysis] mns=mns_7IWcnMvyKF phase=0 Manuscript: 2,890 words, 15,554 characters, 3 chapters
+2026-11-26 18:33:42.635 [analysis] mns=mns_7IWcnMvyKF phase=0 Estimated total time: ~1m 33s (refined after stage 1)
+2026-11-26 18:33:42.641 [analysis] mns=mns_7IWcnMvyKF phase=0 Resuming — Phase 0 already complete (14 characters cached).
+2026-11-26 18:33:42.670 [analysis] mns=mns_7IWcnMvyKF phase=0 Quote-match tiers: verbatim=32, terminal-punct=1, segments=3.
+2026-11-26 18:33:42.762 [analysis] mns=mns_7IWcnMvyKF phase=1 Attributing 3 chapters with Gemini 3.5 Flash Lite…
+2026-11-26 18:33:42.774 [analysis] mns=mns_7IWcnMvyKF phase=1 Estimated stage time: ~1m 18s (pre-flight estimate, refined after stage 1)
+2026-11-26 18:33:42.774 [analysis] mns=mns_7IWcnMvyKF phase=1 Resuming — 3 of 3 chapters already cached.
+2026-11-26 18:33:42.790 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 1/3 — Chapter 1: cached (1 sentences), skipping.
+2026-11-26 18:33:42.790 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 2/3 — Chapter One — The Knock: cached (58 sentences), skipping.
+2026-11-26 18:33:42.791 [analysis] mns=mns_7IWcnMvyKF phase=1 Chapter 3/3 — Chapter Two — The Pour: cached (253 sentences), skipping.
+2026-11-26 18:33:42.791 [analysis] mns=mns_7IWcnMvyKF phase=1 Running 0 chapters with up to 2 in parallel.
+2026-11-26 18:33:42.791 [analysis] mns=mns_7IWcnMvyKF phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 18:33:42.792 [analysis] mns=mns_7IWcnMvyKF phase=1 Attributed 312 sentences across 3 chapters
+2026-11-26 18:33:42.792 [analysis] mns=mns_7IWcnMvyKF phase=1 Narrator: 154 lines
+2026-11-26 18:33:42.792 [analysis] mns=mns_7IWcnMvyKF phase=1 Coalfall: 33 lines
+2026-11-26 18:33:42.793 [analysis] mns=mns_7IWcnMvyKF phase=1 Oduvan: 21 lines
+2026-11-26 18:33:42.806 [analysis] mns=mns_7IWcnMvyKF phase=1 Pell Hollis: 15 lines
+2026-11-26 18:33:42.821 [analysis] mns=mns_7IWcnMvyKF phase=2 No library matches yet (voice library matching is not wired up for this slice).
+2026-11-26 18:33:43.207 [analysis] main run drained manuscript=mns_7IWcnMvyKF
+2026-11-26 18:33:58.233 [analysis] request received manuscript="mns_7IWcnMvyKF" model="(saved/default)" fresh=true
+2026-11-26 18:33:58.241 [analysis] start manuscript="mns_7IWcnMvyKF" engine=gemini model="gemini-3.5-flash-lite"
+2026-11-26 18:33:58.284 [analysis] mns=mns_7IWcnMvyKF phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 18:33:58.321 [analysis] mns=mns_7IWcnMvyKF phase=0 Manuscript: 2,890 words, 15,554 characters, 3 chapters
+2026-11-26 18:33:58.321 [analysis] mns=mns_7IWcnMvyKF phase=0 Estimated total time: ~1m 33s (refined after stage 1)
+2026-11-26 18:33:58.347 [analysis] mns=mns_7IWcnMvyKF phase=0 Detecting cast chapter-by-chapter across 3 chapters via Gemini 3.5 Flash Lite…
+2026-11-26 18:33:58.347 [analysis] mns=mns_7IWcnMvyKF phase=0 Running 3 chapter cast-detections with up to 2 in parallel.
+2026-11-26 18:33:58.348 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 1/3 cast — Chapter 1 (38 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:33:58.349 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 2/3 cast — Chapter One — The Knock (3,445 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:33:58.349 [analysis] mns=mns_7IWcnMvyKF phase=1 Attributing 3 chapters with Gemini 3.5 Flash Lite…
+2026-11-26 18:33:58.373 [analysis] mns=mns_7IWcnMvyKF phase=1 Estimated stage time: ~1m 18s (pre-flight estimate, refined after stage 1)
+2026-11-26 18:33:58.389 [analysis] mns=mns_7IWcnMvyKF phase=1 Running 3 chapters with up to 2 in parallel.
+2026-11-26 18:33:58.791 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 18:33:58.791 [analysis] mns=mns_7IWcnMvyKF phase=0 ❌ Chapter 1/3 cast FAILED — Chapter 1: {"error":{"message":"{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": \"Invalid va ...[trimmed]
+2026-11-26 18:33:58.792 [analysis] mns=mns_7IWcnMvyKF phase=0 Continuing without chapter 1 in the cast roster (0s spent). Re-run analysis to retry.
+2026-11-26 18:33:58.797 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 18:33:58.797 [analysis] mns=mns_7IWcnMvyKF phase=0 ❌ Chapter 2/3 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\" ...[trimmed]
+2026-11-26 18:33:58.798 [analysis] mns=mns_7IWcnMvyKF phase=0 Continuing without chapter 2 in the cast roster (0s spent). Re-run analysis to retry.
+2026-11-26 18:33:58.807 [analysis] mns=mns_7IWcnMvyKF phase=0 Chapter 3/3 cast — Chapter Two — The Pour (12,067 chars) via Gemini 3.5 Flash Lite…
+2026-11-26 18:33:59.055 [gemini] stream-timing model=gemini-3.5-flash-lite firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 18:33:59.056 [analysis] mns=mns_7IWcnMvyKF phase=0 ❌ Chapter 3/3 cast FAILED — Chapter Two — The Pour: {"error":{"message":"{\n  \"error\": {\n    \"code\": 400,\n    \"message\": \"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\"[redacted]\\\"\",\n    \"status\": \"INVALID_ARGUMENT\",\n    \"details\": [\n      {\n        \"@type\": \"type.googleapis.com/google.rpc.BadRequest\",\n        \"fieldViolations\": [\n          {\n            \"field\": \"safety_settings[0].category\",\n            \"description\": ...[trimmed]
+2026-11-26 18:33:59.056 [analysis] mns=mns_7IWcnMvyKF phase=0 Continuing without chapter 3 in the cast roster (0s spent). Re-run analysis to retry.
+2026-11-26 18:33:59.073 [analysis] mns=mns_7IWcnMvyKF phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping).
+2026-11-26 18:33:59.075 [analysis] mns=mns_7IWcnMvyKF phase=0 Phase 0 paused — 3 chapters still need cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-26 18:33:59.075 [analysis] mns=mns_7IWcnMvyKF phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2). — only 0 of K=2 ran at once; the app pool never filled (few chapters left, or calls finished before overlapping).
+2026-11-26 18:33:59.077 [analysis] main run drained manuscript=mns_7IWcnMvyKF

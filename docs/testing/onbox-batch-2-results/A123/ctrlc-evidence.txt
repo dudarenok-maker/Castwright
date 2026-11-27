@@ -1,0 +1,12 @@
+07:27:12 console host cmd pid=17416
+07:27:43 ready=True
+07:27:44 sidecar pid=41936; sending CTRL_C_EVENT to console of pid 17416
+07:27:44 AttachConsole=True
+07:27:44 GenerateConsoleCtrlEvent=True
+07:28:08 server port 8130 listening: False; sidecar 41936 alive: False; 9050 listening: False
+07:28:08 --- terminal output (SIGINT / process exit lines) ---
+07:28:08 Terminate batch job (Y/N)? 
+07:28:08 --- tts.err.log new lines ---
+07:28:08 2026-11-27 07:27:44.950 [sidecar] server pid=41080 exited with code 1 = 0x00000001 (taskkill, a Node child.kill() (tsx restart, concurrently -k) or process.exit(1))
+07:28:08 INFO:     Shutting down
+07:28:10 teardown 8130/9050 held: False

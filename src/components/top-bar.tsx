@@ -1,20 +1,30 @@
 import { useEffect, useLayoutEffect, useRef, useState, type ReactNode } from 'react';
 import { createPortal } from 'react-dom';
-import { IconArrowLeft, IconSpinner, IconClock, IconWarning, IconMenu, IconCheck, CastwaveMark } from '../lib/icons';
+import {
+  IconArrowLeft,
+  IconSpinner,
+  IconClock,
+  IconWarning,
+  IconMenu,
+  IconCheck,
+  CastwaveMark,
+} from '../lib/icons';
 import { Avatar } from './primitives';
-import { ThemeToggleButton } from './theme-toggle';
+import { ThemeToggleButton, nextMode, LABELS, SHORT_LABELS } from './theme-toggle';
 import { useAppInfo } from '../lib/use-app-info';
 import { useDismissedVersion, shouldShowUpdateNotice } from '../lib/update-notice';
 import { buildInfo } from '../lib/build-info';
 import { StatusPopover } from './status-popover';
 import { AdminPill } from './admin-pill';
 import type { AnalyzerCatalog, Stage, View } from '../lib/types';
-import { useAppDispatch } from '../store';
+import { useAppDispatch, useAppSelector } from '../store';
+import { uiActions } from '../store/ui-slice';
 import { startLinearTour, startScreenTour } from '../store/tour-slice';
 import { screenForStage } from '../lib/tour-steps';
 import { type DesignPhase } from '../lib/design-phase';
 import type { AnalysisEngine } from '../lib/model-id';
 import type { SetupReadiness } from '../lib/api';
+import type { ThemePreference } from '../lib/use-theme';
 
 export type GenerationPillState = 'running' | 'stalled' | 'halted';
 export interface GenerationPillData {
@@ -165,7 +175,12 @@ export function summarizeStatus({
   )
     return { label: 'Stalled', tone: 'amber', icon: 'clock' };
   if (generation?.state === 'running')
-    return { label: 'Generating', tone: 'peach', icon: 'spinner', detail: `${generation.percent}%` };
+    return {
+      label: 'Generating',
+      tone: 'peach',
+      icon: 'spinner',
+      detail: `${generation.percent}%`,
+    };
   if (anyModelLoading) return { label: 'Loading model', tone: 'amber', icon: 'spinner' };
   if (analysis?.state === 'running')
     return {
@@ -177,7 +192,10 @@ export function summarizeStatus({
   if (analysisSubstage)
     return {
       label: 'Analysing',
-      tone: analysisSubstage.activityState === 'loading' || analysisSubstage.fallbackActive ? 'amber' : 'peach',
+      tone:
+        analysisSubstage.activityState === 'loading' || analysisSubstage.fallbackActive
+          ? 'amber'
+          : 'peach',
       icon: 'spinner',
       detail: `${analysisSubstage.percent}%`,
     };
@@ -191,7 +209,8 @@ export function summarizeStatus({
       detail: exportPill.percent != null ? `${Math.round(exportPill.percent * 100)}%` : undefined,
     };
   if (analysis?.state === 'paused') return { label: 'Paused', tone: 'neutral', icon: 'clock' };
-  if (analysis?.state === 'needs-action') return { label: 'Needs action', tone: 'neutral', icon: 'clock' };
+  if (analysis?.state === 'needs-action')
+    return { label: 'Needs action', tone: 'neutral', icon: 'clock' };
   if (pendingRevisionsCount > 0)
     return {
       label: 'Revisions',
@@ -331,10 +350,12 @@ export function TopBar({
   onOpenQueue,
 }: TopBarProps) {
   const showGlobalNav = stage === 'books' || stage === 'voices' || stage === 'changelog';
-  /* The hamburger drawer renders only when there's nav to host (#916). On phone
-     the Admin pill moves into that drawer to reclaim the ~120px the right
-     cluster needs; on a no-nav stage (upload/analysing/confirm) there's no
-     drawer, so the inline pill stays visible there instead of being stranded. */
+  /* #4567 — the drawer now renders on EVERY stage, so hasNav only decides WHAT
+     it hosts: nav rows on a nav stage (ready / global), the phone-only
+     Admin/Help/Theme/Account group everywhere. On phone the Admin pill moves
+     into the drawer on every stage (incl. upload/analysing/confirm) to
+     reclaim the ~120px the right cluster needs, so Admin is reachable and
+     never double-shown. */
   const hasNav = stage === 'ready' || showGlobalNav;
   const onGlobal = (id: 'books' | 'voices' | 'changelog') => {
     if (id === 'books') onHome();
@@ -369,7 +390,8 @@ export function TopBar({
           only on the Linux mobile-chrome runner, where font metrics render
           wider than Windows/macOS); the middle strip already scrolls. Paired
           with hiding the redundant VersionPill on phone (below) so the clip is
-          pure insurance and never cuts a visible control. clip (not hidden)
+          pure insurance and never cuts a visible control (Admin, Help, Theme and
+          Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
       <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
@@ -378,9 +400,11 @@ export function TopBar({
           view={view}
           setView={setView}
           onGlobal={onGlobal}
-          showGlobalNav={showGlobalNav}
+          hasNav={hasNav}
           onOpenAdmin={onOpenAdmin}
           adminActive={stage === 'admin'}
+          onOpenAccount={onOpenAccount}
+          userDisplayName={userDisplayName}
         />
         <button
           onClick={onHome}
@@ -398,7 +422,9 @@ export function TopBar({
             className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors min-w-0 min-h-[44px] shrink-0"
           >
             <span className="text-ink/40 shrink-0">/</span>
-            <span className="font-medium text-ink truncate max-w-[140px] sm:max-w-none">{projectTitle}</span>
+            <span className="font-medium text-ink truncate max-w-[140px] sm:max-w-none">
+              {projectTitle}
+            </span>
             <IconArrowLeft className="w-3.5 h-3.5 text-ink/40 shrink-0 hidden sm:inline" />
           </button>
         )}
@@ -445,10 +471,11 @@ export function TopBar({
           </div>
         )}
         <div className="flex items-center gap-3 shrink-0">
-          {/* On phone, a nav-stage Admin pill moves into the hamburger drawer
-              (#916) to reclaim width; on a no-nav stage (no drawer) it stays
-              inline so Admin is never unreachable. sm+ always shows it inline. */}
-          <span className={hasNav ? 'hidden sm:inline-flex' : 'inline-flex'}>
+          {/* On phone the Admin pill moves into the hamburger drawer (#916) on
+              EVERY stage (#4567: the drawer now exists on no-nav stages too, and
+              its trigger would otherwise push an inline pill off-screen). sm+
+              always shows it inline. */}
+          <span className="hidden sm:inline-flex">
             <AdminPill onClick={onOpenAdmin} active={stage === 'admin'} />
           </span>
           {(queueCount ?? 0) > 0 && onOpenQueue && (
@@ -469,16 +496,25 @@ export function TopBar({
           <span className="hidden sm:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
-          <HelpMenu stage={stage} view={view} />
-          <ThemeToggleButton />
-          <button
-            type="button"
-            onClick={onOpenAccount}
-            aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
-            className={`inline-flex items-center justify-center min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
-          >
-            <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
-          </button>
+          {/* Below sm, Help / Theme / Account live in the drawer rows on every
+              stage (#4567), so the inline copies are hidden to stop the right
+              cluster overflowing the 412px viewport. sm+ is unchanged. */}
+          <span className="hidden sm:inline-flex" data-testid="topbar-help-wrap">
+            <HelpMenu stage={stage} view={view} />
+          </span>
+          <span className="hidden sm:inline-flex" data-testid="topbar-theme-wrap">
+            <ThemeToggleButton />
+          </span>
+          <span className="hidden sm:inline-flex" data-testid="topbar-account-wrap">
+            <button
+              type="button"
+              onClick={onOpenAccount}
+              aria-label={`Account — ${userDisplayName || 'unnamed user'}`}
+              className={`inline-flex items-center justify-center min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full transition-transform hover:scale-105 focus:outline-hidden focus:ring-2 focus:ring-magenta/40 ${stage === 'account' ? 'ring-2 ring-magenta/60' : ''}`}
+            >
+              <Avatar name={userDisplayName || 'You'} color="halloran" size={32} />
+            </button>
+          </span>
         </div>
       </div>
     </header>
@@ -490,29 +526,44 @@ export function TopBar({
    SAME destinations. Mirrors HelpMenu: local open state, portal-to-body,
    outside-click + Escape, and — crucially — unmounted when closed so jsdom
    never sees the drawer rows alongside the inline strip (no duplicate
-   selectors). Renders nothing on stages with no nav. */
+   selectors). #4567: the trigger now exists on EVERY stage — `xl:hidden` on
+   nav stages (unchanged), `sm:hidden` on no-nav stages (upload / analysing /
+   confirm), where the drawer hosts the phone-only Help / Theme / Account
+   rows in place of inline controls the 412px viewport clips. */
 function NavDrawer({
   stage,
   view,
   setView,
   onGlobal,
-  showGlobalNav,
+  hasNav,
   onOpenAdmin,
   adminActive,
+  onOpenAccount,
+  userDisplayName,
 }: {
   stage: Stage['kind'];
   view: View | null;
   setView: (v: View) => void;
   onGlobal: (id: 'books' | 'voices' | 'changelog') => void;
-  showGlobalNav: boolean;
+  hasNav: boolean;
   onOpenAdmin: () => void;
   adminActive: boolean;
+  onOpenAccount: () => void;
+  userDisplayName: string;
 }) {
+  const dispatch = useAppDispatch();
   const [open, setOpen] = useState(false);
   const triggerRef = useRef<HTMLButtonElement>(null);
   const panelRef = useRef<HTMLDivElement>(null);
 
-  const hasNav = stage === 'ready' || showGlobalNav;
+  /* #4567 — the phone-only Theme row must agree with the inline toggle, so
+     the effective-mode read and the cycle logic are IMPORTED from
+     theme-toggle.tsx (plan 41), never duplicated: same override??account
+     read, same LABELS, same nextMode. */
+  const themeOverride = useAppSelector((s) => s.ui.themeOverride);
+  const accountDefault = useAppSelector((s) => s.account.defaultThemePreference ?? 'system');
+  const currentMode: ThemePreference = themeOverride ?? accountDefault;
+  const screen = screenForStage(stage, view);
 
   /* Focus the first row when the drawer opens (HelpMenu parity). */
   useEffect(() => {
@@ -545,10 +596,10 @@ function NavDrawer({
     };
   }, [open]);
 
-  if (!hasNav) return null;
-
-  const rows: Array<{ id: string; label: string; active: boolean; run: () => void }> =
-    stage === 'ready'
+  /* hasNav semantics kept for the destinations: a no-nav stage hosts no
+     Cast/Books rows — its drawer is only the phone cluster below (#4567). */
+  const rows: Array<{ id: string; label: string; active: boolean; run: () => void }> = hasNav
+    ? stage === 'ready'
       ? TABS.map((t) => ({
           id: t.id,
           label: t.label,
@@ -560,7 +611,8 @@ function NavDrawer({
           label: t.label,
           active: stage === t.id,
           run: () => onGlobal(t.id),
-        }));
+        }))
+    : [];
 
   const select = (run: () => void) => {
     run();
@@ -577,7 +629,7 @@ function NavDrawer({
         aria-expanded={open}
         data-testid="topbar-nav-toggle"
         onClick={() => setOpen((s) => !s)}
-        className="xl:hidden shrink-0 inline-flex items-center justify-center w-11 h-11 min-h-[44px] min-w-[44px] rounded-full text-ink/70 hover:bg-ink/10 transition-colors"
+        className={`${hasNav ? 'xl:hidden' : 'sm:hidden'} shrink-0 inline-flex items-center justify-center w-11 h-11 min-h-[44px] min-w-[44px] rounded-full text-ink/70 hover:bg-ink/10 transition-colors`}
       >
         <IconMenu className="w-5 h-5" />
       </button>
@@ -588,14 +640,14 @@ function NavDrawer({
             <div
               data-testid="topbar-nav-scrim"
               onClick={() => setOpen(false)}
-              className="xl:hidden fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in"
+              className={`${hasNav ? 'xl:hidden' : 'sm:hidden'} fixed inset-x-0 top-16 bottom-0 bg-ink/30 z-40 fade-in`}
             />
             <div
               ref={panelRef}
               data-testid="topbar-nav-drawer"
               role="menu"
               aria-label="Navigation"
-              className="xl:hidden fixed top-16 bottom-0 left-0 w-[min(80vw,320px)] bg-canvas shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-left p-2"
+              className={`${hasNav ? 'xl:hidden' : 'sm:hidden'} fixed top-16 bottom-0 left-0 w-[min(80vw,320px)] bg-canvas shadow-drawer z-50 overflow-y-auto scrollbar-thin slide-in-left p-2`}
             >
               {rows.map((r) => (
                 <button
@@ -615,20 +667,91 @@ function NavDrawer({
               ))}
               {/* Admin lives inline at sm+ but moves here on phone (#916). Phone
                   -only (sm:hidden) so tablet/desktop keep the single inline pill
-                  and never double-show it. */}
+                  and never double-show it. #4567: rendered on every stage, since
+                  the inline pill is hidden below sm on every stage. */}
               <button
                 type="button"
                 role="menuitem"
                 data-testid="nav-drawer-link-admin"
                 aria-current={adminActive ? 'page' : undefined}
                 onClick={() => select(onOpenAdmin)}
-                className={`sm:hidden mt-1 pt-3 border-t border-ink/10 w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                className={`sm:hidden ${rows.length > 0 ? 'mt-1 pt-3 border-t border-ink/10 ' : ''}w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
                   adminActive ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
                 }`}
               >
                 <span>Admin</span>
                 {adminActive && <IconCheck className="w-4 h-4 shrink-0" />}
               </button>
+              {/* #4567 — phone-only replacement cluster for the three controls
+                  overflow-x-clip hides below `sm` on every stage: Help (same
+                  rows as HelpMenu), Theme (plan 41 logic imported from
+                  theme-toggle.tsx; the row deliberately does NOT close the
+                  drawer so the mode flip stays visible) and Account. At sm+
+                  the inline cluster fits and this whole group is hidden
+                  (#4653 owns hiding the inline side). */}
+              <div className="sm:hidden mt-1 pt-3 border-t border-ink/10">
+                <a
+                  href="#/help"
+                  role="menuitem"
+                  data-testid="nav-drawer-link-help"
+                  onClick={() => setOpen(false)}
+                  className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5"
+                >
+                  Help
+                </a>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="nav-drawer-link-tour"
+                  onClick={() => {
+                    dispatch(startLinearTour());
+                    setOpen(false);
+                  }}
+                  className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5"
+                >
+                  Take the tour
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="nav-drawer-link-screen-tour"
+                  disabled={!screen}
+                  onClick={() => {
+                    if (screen) {
+                      dispatch(startScreenTour(screen));
+                      setOpen(false);
+                    }
+                  }}
+                  className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5 disabled:opacity-40 disabled:cursor-default"
+                >
+                  Show me this screen
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="nav-drawer-link-theme"
+                  aria-label={LABELS[currentMode]}
+                  onClick={() => {
+                    dispatch(uiActions.setThemeOverride(nextMode(currentMode)));
+                  }}
+                  className="w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors text-ink/70 hover:bg-ink/5"
+                >
+                  {SHORT_LABELS[currentMode]}
+                </button>
+                <button
+                  type="button"
+                  role="menuitem"
+                  data-testid="nav-drawer-link-account"
+                  aria-current={stage === 'account' ? 'page' : undefined}
+                  onClick={() => select(onOpenAccount)}
+                  className={`w-full min-h-[44px] flex items-center justify-between gap-3 px-4 py-2.5 rounded-xl text-sm font-medium text-left transition-colors ${
+                    stage === 'account' ? 'bg-ink/6 text-ink' : 'text-ink/70 hover:bg-ink/5'
+                  }`}
+                >
+                  <span>Account — {userDisplayName || 'unnamed user'}</span>
+                  {stage === 'account' && <IconCheck className="w-4 h-4 shrink-0" />}
+                </button>
+              </div>
             </div>
           </>,
           document.body,
@@ -680,7 +803,10 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
       setOpen(false);
     }
     function onKey(e: KeyboardEvent) {
-      if (e.key === 'Escape') { setOpen(false); triggerRef.current?.focus(); }
+      if (e.key === 'Escape') {
+        setOpen(false);
+        triggerRef.current?.focus();
+      }
     }
     document.addEventListener('mousedown', onDocMouseDown);
     document.addEventListener('keydown', onKey);
@@ -707,49 +833,59 @@ function HelpMenu({ stage, view }: { stage: Stage['kind']; view: View | null }) 
       >
         ?
       </button>
-      {open && typeof document !== 'undefined' && createPortal(
-        <div
-          ref={menuRef}
-          role="menu"
-          tabIndex={-1}
-          aria-label="Help menu"
-          onMouseDown={(e) => e.stopPropagation()}
-          onClick={(e) => e.stopPropagation()}
-          className="fixed z-50 bg-white border border-ink/15 rounded-xl shadow-float py-1 min-w-[160px]"
-          style={{
-            top: pos?.top ?? 0,
-            left: pos?.left ?? 0,
-            visibility: pos ? 'visible' : 'hidden',
-          }}
-        >
-          <a
-            href="#/help"
-            role="menuitem"
-            onClick={() => setOpen(false)}
-            className="flex items-center px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors"
+      {open &&
+        typeof document !== 'undefined' &&
+        createPortal(
+          <div
+            ref={menuRef}
+            role="menu"
+            tabIndex={-1}
+            aria-label="Help menu"
+            onMouseDown={(e) => e.stopPropagation()}
+            onClick={(e) => e.stopPropagation()}
+            className="fixed z-50 bg-white border border-ink/15 rounded-xl shadow-float py-1 min-w-[160px]"
+            style={{
+              top: pos?.top ?? 0,
+              left: pos?.left ?? 0,
+              visibility: pos ? 'visible' : 'hidden',
+            }}
           >
-            Help
-          </a>
-          <button
-            type="button"
-            role="menuitem"
-            onClick={() => { dispatch(startLinearTour()); setOpen(false); }}
-            className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left"
-          >
-            Take the tour
-          </button>
-          <button
-            type="button"
-            role="menuitem"
-            disabled={!screen}
-            onClick={() => { if (screen) { dispatch(startScreenTour(screen)); setOpen(false); } }}
-            className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left disabled:opacity-40 disabled:cursor-default"
-          >
-            Show me this screen
-          </button>
-        </div>,
-        document.body,
-      )}
+            <a
+              href="#/help"
+              role="menuitem"
+              onClick={() => setOpen(false)}
+              className="flex items-center px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors"
+            >
+              Help
+            </a>
+            <button
+              type="button"
+              role="menuitem"
+              onClick={() => {
+                dispatch(startLinearTour());
+                setOpen(false);
+              }}
+              className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left"
+            >
+              Take the tour
+            </button>
+            <button
+              type="button"
+              role="menuitem"
+              disabled={!screen}
+              onClick={() => {
+                if (screen) {
+                  dispatch(startScreenTour(screen));
+                  setOpen(false);
+                }
+              }}
+              className="flex items-center w-full px-4 py-2.5 min-h-[44px] fine-pointer:min-h-0 text-sm text-ink hover:bg-ink/5 transition-colors text-left disabled:opacity-40 disabled:cursor-default"
+            >
+              Show me this screen
+            </button>
+          </div>,
+          document.body,
+        )}
     </>
   );
 }
@@ -1012,7 +1148,10 @@ export function AnalysisPill({ data }: { data: AnalysisPillData }) {
           ? `${v.label} · ${haltTrim}`
           : `${v.label} · ${state === 'running' && isSubset ? subsetSecondary : phaseLabel}`}
         {state === 'running' && ` · ${percent}%`}
-        {(state === 'halted' || state === 'needs-action') && !needsActionSubsetWithReason && haltTrim && ` · ${haltTrim}`}
+        {(state === 'halted' || state === 'needs-action') &&
+          !needsActionSubsetWithReason &&
+          haltTrim &&
+          ` · ${haltTrim}`}
       </span>
     </button>
   );

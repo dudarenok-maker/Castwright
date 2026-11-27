@@ -1048,7 +1048,7 @@ Status key: **P** present, **F** fixed, **Pt** partly fixed, **N** newly found.
 | N1 | **The fsck resurrects an excluded chapter's audio** | N | Exclude leaves `.previous.mp3`; fsck case 1 never reads `state.json` |
 | N2 | A pending entry survives exclude; Reject restores audio onto an excluded chapter | N | — |
 | N3 | `completedSlugs` misses `.ogg` and counts a lone `.previous.mp3` | **F** (#4166, fixed by #4206) | `book-state.ts:782-789` |
-| N4 | **Windows, verified on NTFS by pass 1's probe.** An ffmpeg reader of the live file (m4b build, clip cut) makes rename-away fail EBUSY, rename-onto fail EPERM, and unlink fail EBUSY. A Node `openSync` holder makes rename-onto fail EPERM only. Preserve swallows its failure, so today a commit during an export can leave old audio + new segments, or **two live files** on a format switch. | N, NTFS confirmed; OneDrive owed (row Q) | probe (PR #4189, pass 1); `preserve-previous-audio.ts:42-51`; finalize `:776-777` |
+| N4 | **Windows, verified on NTFS by pass 1's probe.** An ffmpeg reader of the live file (m4b build, clip cut) makes rename-away fail EBUSY, rename-onto fail EPERM, and unlink fail EBUSY. A Node `openSync` holder makes rename-onto fail EPERM only. Preserve swallows its failure, so today a commit during an export can leave old audio + new segments, or **two live files** on a format switch. | N, NTFS and OneDrive confirmed (row Q, OneDrive 2026-11-26) | probe (PR #4189, pass 1; OneDrive §5.A Windows); `preserve-previous-audio.ts:42-51`; finalize `:776-777` |
 | N5 | Finalize tmp leaked on a throw | **F** (#4167, fixed by #4211; a crash still leaves it, and the sweep unlinks it) | `:188-206,242-244` |
 | N6 | `splice_complete`/QA-repair completion always send `hasPreviousAudio: true` | N (minor) | `chapter-splice.ts:600`, `chapter-qa-repair.ts:921` |
 | N7 | Scoring files verdicts and attempted markers under whichever take is live; QA repair's Edit 6b writes embeddings and verdicts after finalize, unfenced | N | `aggregate.ts:631,667,672,1077`; `chapter-qa-repair.ts:870,~876-905` |
@@ -2962,8 +2962,35 @@ What the protocol does with each:
 - Every rename is `renameWithRetry`, with its full budget (`RENAME_RETRY_WORST_CASE_MS`, ~3.6 s,
   `atomic-rename.ts:22-26`, #915). Revision 2's 1 s cap stays removed. No span deadline replaces it
   (E2).
-- **Row Q's NTFS cells are recorded** above. The OneDrive-backed cells, and real span timings, are
-  still owed on the box (§7).
+- **Row Q's NTFS cells are recorded** above, and the **OneDrive cells** below. Real span timings
+  and waiter outcomes are still owed on the box (§7); they need Phase 2's code to measure.
+
+**Row Q on OneDrive (recorded 2026-11-26, this box).** Same probe, same Windows 11 26300, ffmpeg
+8.1.1 and Node 24.22.3, on a scratch folder inside a syncing OneDrive Personal root. Each live file
+was tested only once OneDrive had taken it in, i.e. carried the cloud-files reparse tag
+(`0x9000601a` on this box, which arrived 3.7–8.9 s after the write, median 6.2 s). The new take was written
+0.5 s before the rename, untagged, as a commit sees it. Three trials per cell, all identical:
+
+| Holder | rename-away | rename-onto | unlink, then rename |
+|---|---|---|---|
+| none | OK | OK | OK |
+| Node `openSync` | OK | **EPERM** | OK |
+| Node read stream (`createReadStream`, paused) | OK | **EPERM** | OK |
+| `ffmpeg -re -i … -c copy -id3v2_version 4` (export read) | **EBUSY** | **EPERM** | unlink **EBUSY** |
+| `ffmpeg -re -ss … -t … -i … -c copy` (clip cut) | **EBUSY** | **EPERM** | unlink **EBUSY** |
+| ffmpeg holding a hard-link snapshot (#4224's m4b staging) | OK | OK | OK |
+
+- **OneDrive adds no blocking of its own.** Every cell matches NTFS. A Node holder still blocks only
+  rename-onto, so a commit never waits during playback and OD7 stands (§8.4).
+- **The scan window (R9-2).** 30 just-written parts, and 30 just-renamed ones (both names), were
+  polled every 2 ms for 8 s each. No part was absent at any poll, and all 30 were tagged inside
+  the window, so OneDrive did process them while they were watched. The transient `ENOENT` the
+  helper's header describes (`atomic-rename.ts:7-9`) did not occur on this box; the re-probe
+  schedule is kept as the guard against it.
+- **The probe's own control.** The same script on plain NTFS reproduced pass 1's cells exactly. An
+  earlier run the same morning was discarded: OneDrive had not synced a new file since 2026-10-09
+  (a junction into a 75 GB code tree had stalled its scan), so its files were never tagged and the
+  run had measured NTFS.
 
 **Lock order.**
 - No new class. The module uses existing edges only: `book-op → book → state-json` (the stamp) and
@@ -3840,7 +3867,7 @@ book.
 8. e2e: m4a A/B.
 
 **Phase 2: commit protocol.** PR at `high` review depth. Row Q's OneDrive cells must be recorded
-first.
+first (recorded 2026-11-26, §5.A Windows).
 1. `prepareTake`: staging every part with the non-creating writer, the signal checks and
    `liveStaging`; QA repair's Edit 6b embeddings and verdict patches as staged inputs.
 2. `commitTake`: the journal with its review inputs, role-tagged discards (no unlink before
@@ -3957,10 +3984,9 @@ first.
    edits by sentence-id range and does not recover a renumbering (#4227, J13).
 2. Reject and `restore-unrecorded` refuse `book_busy` during an export (OD7).
 3. On-box register rows on all three surfaces:
-   - **Row Q, the Windows matrix.** The NTFS cells are recorded from pass 1's probe (§5.A
-     Windows). Still owed:
-     - the same three columns on a **OneDrive-mounted** workspace, with each holder (ffmpeg export
-       read, ffmpeg clip cut, Node read stream, none);
+   - **Row Q, the Windows matrix.** The NTFS cells are recorded from pass 1's probe, and the
+     OneDrive cells (each holder, the hard-link snapshot and the R9-2 scan window) on 2026-11-26
+     (§5.A Windows). Still owed:
      - real commit-span timings, scoring's per-character spans included (no deadline, E2; R7-8),
        to check the 30 s waiter retry bound (R4-10);
      - **recorded 2026-11-16, NTFS, this box:** with ffmpeg holding a hard-link snapshot of a
@@ -3968,10 +3994,7 @@ first.
        renaming the live file away to `.previous` succeeds too (revision 7 records the second half).
        With ffmpeg holding the live file directly, the controls fail EPERM and EBUSY respectively.
        Commit step 5 opens with the rename-away, so the second half is the one #4224's m4b case
-       rests on. The OneDrive cells for both are still owed;
-     - **the OneDrive scan window (R9-2):** a part probed while OneDrive has it in its own
-       staging, to confirm the re-probe schedule outlasts the absence `atomic-rename.ts:7-9`
-       describes;
+       rests on. OneDrive gave the same cells for both (2026-11-26);
      - waiter outcomes (autosave, job registration) while an export holds a live file and while a
        slow commit runs.
    - **An m4a book on real hardware:** render → splice → reject → accept, with the files listed
@@ -4083,7 +4106,7 @@ What is owed here is a measurement on the box, recorded before Phase 2, as §7's
 The design's answer holds as written. Only a measurement that contradicts it would reopen anything,
 and that would go through a new ticket.
 
-- **Row Q, OneDrive cells and timings** (§7 Phase 4). If OneDrive also blocks a rename-away under a
-  Node holder, a commit would also wait during playback. The retry path covers it, but OD7 would
-  then need revisiting. If real commit spans routinely exceed R4-10's 30 s waiter bound, that bound
+- **Row Q, OneDrive cells and timings** (§7 Phase 4). The OneDrive cells were recorded 2026-11-26
+  (§5.A Windows): OneDrive does **not** block a rename-away under a Node holder, so OD7 stands, and
+  no transient absence was seen in the scan window. Timings are still owed. If real commit spans routinely exceed R4-10's 30 s waiter bound, that bound
   is revisited. The deadline is not reinstated (E2).

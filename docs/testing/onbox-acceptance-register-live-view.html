@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="152" data-publish-id="58a71abc02a2"></div>
+  <div hidden data-published-as="159" data-publish-id="393207b19e88"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">94</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">92</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,13 +209,13 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->55<!-- END GENERATED:glance:A --></td></tr>
-      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->11<!-- END GENERATED:glance:B --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->54<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->20<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->21<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
-      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real CJK manuscript (full-length Han, and full-length all-kana ja) this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->2<!-- END GENERATED:glance:H --></td></tr>
+      <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
   </table>
   </div>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">55 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">54 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -921,20 +921,6 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A126</span><span class="iname">A cold model load learns its own weights, and a warm op learns nothing</span><span class="risk">single 8 GB card, real Qwen sidecar with the 1.7B-Base installed</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Child 1&#39;s pytest proves the arithmetic and the cold-only predicate with a fake <code>torch</code> and stand-in engines. It does not prove that real CUDA counters on a real card behave that way with several engines in one process, that the cold-only gate fires on the real engines (in particular Qwen&#39;s four models), that warm ops really leave a key&#39;s samples alone, or that the cold-learned bookings still fit a cold reload. Only a real GPU and a real sidecar show these. The observable surface is <code>GET /debug/memory</code>, whose <code>footprints</code> block has per-key <code>seed_mb</code>, <code>learned_mb</code> (0 below 5 samples) and <code>sample_count</code>; <code>learned_mb</code> is the p95 of the last 64 samples. <code>POST /load</code> and <code>POST /unload</code> take <code>{"engine": "qwen" | "coqui" | "kokoro"}</code>; <code>/unload</code> also takes <code>"model":"1.7b"</code> to drop the 1.7B-Base, and <code>/unload qwen</code> without it leaves the 1.7B-Base resident. Before every cold-load step, confirm on <code>GET /health</code> that <code>qwen_loaded</code>, <code>qwen_base17_loaded</code> and <code>qwen_design_resident</code> are all false (the one exception is the Quality render in bullet 2, which says so). Run every PowerShell command in this row from the repo root: the log path is relative, and <code>APP_LOG_DIR</code> moves the log. Use a book in which no character is set to Quality for the standard renders in bullets 2 and 4: a standard run lifts a Quality-set character to the 1.7B-Base, and that warm load records nothing. The Quality chapter in bullet 2 is made Quality by the render&#39;s own tier choice, not by a per-character setting. Setup, once, before bullet 1: put <code>QWEN_BATCH_SIZE=1</code> in <code>server/.env</code> and restart the server, so every line goes through <code>/synthesize</code> (the <code>batchSize > 1</code> check in <code>synthesise-chapter.ts</code> gates batching for both tiers, so <code>QWEN_BATCH_SIZE_17B</code> is not needed). Use the <code>.env</code> line as instructed: it wins over any saved value. (Setting <code>tts.batch.size</code> in Advanced Settings now also works, since the server reads it at each chapter start, but the <code>.env</code> line is the method to follow here.) Remove the <code>.env</code> line after the row. With <code>autoStartSidecar</code> on, the server restart also restarts the sidecar, and footprints live in the sidecar&#39;s memory only: a restart between bullets resets <code>sample_count</code> and leaves <code>learned_mb</code> at 0. So after this setup nothing in bullets 1 to 4 restarts the server or the sidecar, and bullet 4&#39;s <code>learned_mb</code> comes from 6 cold samples (5 from bullet 1, 1 from bullet 3) learned in the same sidecar process. Bullet 5 restarts only the sidecar, and learns its own key from scratch.</p>
-        <ul>
-        <li><strong>A cold load counts its own weights, and only cold loads record.</strong> Start a fresh sidecar with nothing loaded on the GPU. Note <code>nvidia-smi</code> used memory, run <code>POST /load {"engine":"qwen"}</code>, and note it again. Run four more <code>POST /unload {"engine":"qwen"}</code> / <code>POST /load {"engine":"qwen"}</code> cycles, reading <code>GET /debug/memory</code> after each one. Observe: <code>footprints.qwen.sample_count</code> rises by exactly 1 per cold load and ends at 5; <code>learned_mb</code> is at least 75% of the first load&#39;s <code>nvidia-smi</code> rise (that rise also counts the CUDA context, so somewhat below it is expected) and is not near 0. Record both figures.</li>
-        <li><strong>Warm ops record nothing.</strong> With the batch size at 1 from the setup, every line goes through <code>/synthesize</code>. A multi-line slice goes to <code>/synthesize-batch</code>, which takes no reservation and so books and records nothing on this branch and on <code>main</code> alike, and it would make this bullet pass without testing anything. Confirm in the sidecar&#39;s uvicorn access log, which goes to stdout and so lands in <code>logs/tts.log</code> (not <code>logs/tts.err.log</code>), that each rendered line shows as a <code>POST /synthesize</code> and none as <code>POST /synthesize-batch</code>. That file is append-only and its lines carry no timestamps, so older renders (batch size 32) are still in it: before each render, record its line count with <code>$n = @(Get-Content logs/tts.log).Count</code>, and after the render read only what was appended, <code>$new = @(Get-Content logs/tts.log | Select-Object -Skip $n)</code>. Check <code>@($new | Select-String &#39;POST /synthesize-batch&#39;).Count</code> is 0, and, as the positive control, <code>@($new | Select-String &#39;POST /synthesize &#39;).Count</code> is at least 1 (the trailing space excludes <code>/synthesize-batch</code>), otherwise you are reading the wrong file and the absence of <code>/synthesize-batch</code> proves nothing. If any new line went to the batch route, the bullet has not run. Do this for each of the two renders below. With the 0.6B loaded from bullet 1, render a standard chapter of at least 25 lines. Observe: <code>footprints.qwen.sample_count</code> and <code>learned_mb</code> are exactly as bullet 1 left them (on <code>main</code> <code>sample_count</code> would be up by one per line, 25 or more). Before the Quality render, confirm on <code>GET /health</code> that <code>qwen_base17_loaded</code> and <code>qwen_design_resident</code> are false, and run <code>POST /unload {"engine":"qwen","model":"1.7b"}</code> if either is not (a resident 1.7B-Base would make the first Quality line warm and the count 0). <code>qwen_loaded</code> is expected to be true at this point: this render is the one exception to the all-false rule above, because the server&#39;s run-start reconcile drops the 0.6B inside the render. Then render a Quality chapter of at least 25 lines. A pure Quality chapter needs no 0.6B, so before it the server&#39;s run-start reconcile unloads the Qwen 0.6B, and the first Quality line is a genuine cold load of the 1.7B-Base. Observe: <code>footprints["qwen.1.7b"].sample_count</code> is exactly 1, that one cold load, and stays 1 through the rest of the chapter (on <code>main</code> it would be one per line, 25 or more); <code>footprints.qwen</code> is untouched. Record both counts. (A mixed chapter would keep both tiers loaded and give 0, but a pure Quality chapter is the simpler setup and still tells the build from <code>main</code>.) Finish with <code>POST /unload {"engine":"qwen","model":"1.7b"}</code>, because <code>/unload qwen</code> without a model leaves the 1.7B-Base resident. After this the 0.6B is already gone (the reconcile unloaded it) and the 1.7B is gone, so nothing Qwen is resident, which is what bullet 3 starts from; its <code>/unload qwen</code> is then a no-op.</li>
-        <li><strong>A cold load beside another engine excludes that engine.</strong> <code>POST /load {"engine":"coqui"}</code>, and note the <code>nvidia-smi</code> rise. Then <code>POST /unload {"engine":"qwen"}</code> (confirm that <code>GET /health</code> shows <code>qwen_loaded</code>, <code>qwen_base17_loaded</code> and <code>qwen_design_resident</code> all false) and <code>POST /load {"engine":"qwen"}</code>. Confirm on <code>GET /debug/memory</code> that <code>engines.coqui.model_loaded</code> is still true after the Qwen load; if Coqui was evicted to fit Qwen, nothing was measured, so record that and stop. Observe: <code>footprints.qwen.sample_count</code> goes up by 1, and <code>learned_mb</code> does not rise by more than 10% over bullet 1&#39;s figure. It must not rise by anything near Coqui&#39;s rise. Record both figures.</li>
-        <li><strong>A cold reload after a long warm run still fits.</strong> With the batch size still 1, render another standard chapter of at least 25 lines (the 0.6B is still loaded from bullet 3, so these are warm lines) (check only the <code>logs/tts.log</code> lines appended during the render, with the line count and the <code>POST /synthesize</code> positive control exactly as in bullet 2; they show <code>POST /synthesize</code> only). Then <code>POST /unload {"engine":"qwen"}</code> (with the same <code>/health</code> check as bullet 3; the book has no Quality-set character, so the 1.7B-Base is not resident and this leaves nothing Qwen loaded, but if <code>qwen_base17_loaded</code> is true, also <code>POST /unload {"engine":"qwen","model":"1.7b"}</code> first) and render one more standard line, which is the cold reload. Read <code>footprints.qwen.learned_mb</code> before the reload (bullet 3 left it learned from 6 cold samples: 5 from bullet 1 plus 1 from bullet 3; bullet 2 added none to <code>qwen</code>) and note <code>nvidia-smi</code> used memory just before and at its peak during the reload. Observe: the rise is at most <code>learned_mb</code> plus the card&#39;s reserve (5% of its VRAM, capped by <code>GPU_RESERVE_MB</code>, default 500, so about 400 MB on an 8 GB card), with no <code>CUDA out of memory</code> in <code>logs/tts.err.log</code> and no <code>noCapacity</code> answer. A rise above that sum means the booking is under-sized: record both figures and the error.</li>
-        <li><strong>The mint key learns only from a mint with no Qwen model present (the #4102 interaction).</strong> Restart the sidecar (not the server; the batch-size setting stays), so that no Qwen model is loaded (check <code>/health</code> as in bullet 3). Mint one variant of a previously designed voice (<code>POST /qwen/mint-variant</code>). Note the <code>nvidia-smi</code> rise, then read <code>footprints["qwen.1.7b.mint"].sample_count</code> (expect 1). Mint a second variant immediately, with the 1.7B-Base still resident. Observe: <code>sample_count</code> is still 1. Then repeat the cold mint four more times, each after <code>POST /unload {"engine":"qwen"}</code> and <code>POST /unload {"engine":"qwen","model":"1.7b"}</code> and a <code>/health</code> check that <code>qwen_design_resident</code> is false again (the VoiceDesign model frees itself after <code>QWEN_DESIGN_IDLE_TTL</code>, 120 s by default), noting each <code>nvidia-smi</code> rise. With 5 samples <code>learned_mb</code> is no longer 0. Observe: <code>footprints["qwen.1.7b.mint"].learned_mb</code> is at least 75% of the median of those five rises (the same tolerance as bullet 1) and not near 0. The seed it replaces is 6144 MB (the <code>qwen.1.7b.mint</code> entry of <code>SEED_FOOTPRINTS_MB</code> in <code>main.py</code>, sized from a measured on-box mint peak of about 5654 MB). Record the five rises and <code>learned_mb</code>.</li>
-        </ul>
-        <p class="src">a single 8 GB card with a real Qwen sidecar &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4163">#4163</a> &#183; criteria in this row</p>
-      </div>
-    </details>
-    <details class="item">
       <summary><span class="num">A124</span><span class="iname">The next silent server death leaves its evidence</span><span class="risk">Windows GPU box, any launcher</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Since #4054 the server turns on Node&#39;s diagnostic report on a fatal error as the first step of its boot. It creates <code>logs/node-reports/</code> (<code>&lt;APP_LOG_DIR&gt;/node-reports/</code> when that is set) and logs where it writes. Row A123 owes the sidecar&#39;s exit-code line. The automated tests pin the settings and the boot wiring. Only a real silent death shows what evidence it actually leaves. A report is written only for a V8 fatal error (out of memory, a failed internal assertion), never for a native crash such as 0xC0000409 or 0xC0000005. So an empty folder after a death is evidence too: read it together with the exit code.</p>
@@ -1077,7 +1063,7 @@
   <!-- B -->
   <section class="group" id="gb">
     <header>
-      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">11 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">B</span> Local Ollama analyzer only <span class="gcount">10 rows</span></h3>
       <p class="setup">
         A real Ollama daemon and a long (~110k-char) chapter. No TTS engine resident. B1 has a
         <strong>CPU-only sub-case</strong> — the analogous B2-step-7 CPU-only case retired to
@@ -1172,19 +1158,6 @@
           <li><b>Reload:</b> reload (or close and reopen the app) mid-run, then open the book again — the run starts again, because it marked the book <code>false</code> as it started.</li>
         </ul>
         <p class="src">Local Ollama, a real analysed book, a TTS engine only for (c) · plan <code>287</code> “On-box acceptance owed” item 3 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3435">#3435</a></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">B107</span><span class="iname">Ollama reasoning levels and Test attribution</span><span class="risk">local Ollama; a thinking and a non-thinking tag</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Ollama accepts a reasoning level only on a model that thinks, so the Test must record each level per model and the editor must offer only what that model&#39;s own Test accepted. Only a real daemon shows which levels a real tag takes, and whether a re-pulled tag drops the verdicts of its old build.</p>
-        <ul>
-        <li>Non-thinking tag: Test (<code>scope: all</code>) records <code>on</code>, <code>low</code>, <code>medium</code> and <code>high</code> <code>rejected</code>; <code>off</code> and <code>model-default</code> <code>accepted</code>.</li>
-        <li>Thinking tag (e.g. <code>qwen3.5:4b</code>): <code>low</code> is <code>accepted</code> and then appears in that model&#39;s own row of Advanced settings&#39; Ollama reasoning list, and not in the non-thinking tag&#39;s row.</li>
-        <li>A run with a <code>rejected</code> level fails before the first chapter, with copy naming the level and the date of the Test that recorded that verdict.</li>
-        <li>A2: after a Test (<code>scope: all</code>), re-pull the same tag so its build changes (<code>ollama pull &lt;tag&gt;</code>; <code>ollama list</code> shows a new digest), then Test <code>scope: configured</code>: the stored record keeps only the verdict this Test probed; the earlier levels are gone rather than carried onto a different build.</li>
-        </ul>
-        <p class="src">local Ollama with a thinking and a non-thinking tag &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;12</p>
       </div>
     </details>
     <details class="item">
@@ -1504,7 +1477,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">20 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">21 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1536,9 +1509,10 @@
       <summary><span class="num">E5</span><span class="iname">fe-39 touch press-feedback — DevTools smoke-check</span><span class="risk low">Minutes, any machine</span><span class="chev">›</span></summary>
       <div class="body">
         <p>The behavioural touch-flash is confirmed by construction but not by an automated test (jsdom cannot compile the variant); a one-time DevTools touch-emulation check is the spec's accepted proof.</p>
-        <p>Four controls: continue-listening play badge, “Add book” tile, wizard “Review ›” chip, voice-library drag icon.</p>
+        <p>Four controls: continue-listening play badge, “Add book” tile, wizard “Review ›” chip, <s>voice-library drag icon</s> (struck 2026-11-25: control removed, see #3268 note below).</p>
         <div class="flag"><b>Wave-4 step 5d, 2026-08-21 — 1 of 4 DISCHARGED, shrinks.</b> The wizard "Review ›" chip is <b>DISCHARGED</b> via real synthesized touch (CDP <code>Input.dispatchTouchEvent</code>, <code>hasTouch:true</code>). The other three controls (continue-listening play badge, "Add book" tile, voice-library drag icon) are <b>STILL OWED</b> — this worktree's workspace has 0 books, a genuine environment limitation, not a missing control.</div>
         <div class="flag"><b>2026-09-19 — narrows to 2 of 3 remaining controls.</b> Re-verified in source: the voice-library drag icon is structurally unreachable from any current caller (both real <code>&lt;VoiceLibraryPanel</code> call sites pass <code>onTapAssign</code> unconditionally). Filed <a href="https://github.com/dudarenok-maker/Castwright/issues/3268">#3268</a> naming the decision (remove the dead branch, or justify keeping it) per the incidental-findings protocol. This row's remaining touch smoke-check targets are the 2 controls not in question — continue-listening play badge and "Add book" tile — pending #3268's decision on the drag icon.</div>
+        <div class="flag"><b>2026-11-25 — #3268 resolved to "remove"; the drag icon is struck from this row.</b> <code>VoiceCard</code>'s drag-icon branch deleted (PR for #3268), including the Voices page, which the 09-19 grep missed (<code>src/views/voices.tsx</code> rendered the icon at &gt;=768px, so that note's "no other call site omits <code>onTapAssign</code>" premise was wrong). The drag icon is no longer a smoke-check target; E5's remaining owed targets are the continue-listening play badge and the "Add book" tile.</div>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/pull/1795">#1795</a></p>
       </div>
     </details>
@@ -1747,7 +1721,20 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E119</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <summary><span class="num">E119</span><span class="iname">The companion&#8217;s idle and out-of-band saves never win a resume sync</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The player stamps <code>listenedAt</code> (the resume-sync last-write-wins key) only when the engine was playing since the previous save, and a played save is stamped with the last time audio was actually playing. The automated tests drive a fake engine. Nothing automated proves the behaviour of the real audio engine (<code>playing</code> and the position stream) or of the audio session&#8217;s own auto-pause on a headset unplug or Bluetooth disconnect. (<a href="https://github.com/dudarenok-maker/Castwright/issues/4650">#4650</a>)</p>
+        <ul>
+        <li><strong>Setup.</strong> Pair a phone with a server on the LAN and download or stream a book. Have a wired headset or a Bluetooth audio device.</li>
+        <li><strong>An idle open does not overwrite a web position.</strong> Listen to the book on the web to a later position than the phone&#8217;s. On the phone, open the book without pressing play, then background the app (switch to another app). On the server the book&#8217;s listen position is still the web&#8217;s, not the phone&#8217;s older one. Restart the phone app and open the book: it resumes at the web&#8217;s position.</li>
+        <li><strong>An out-of-band stop stamps the stop time.</strong> On the phone, play the book with the headset (or Bluetooth device) connected. Unplug the headset, or disconnect the Bluetooth device, so the player pauses itself without you touching the app. Wait several minutes, then background the app. The stored and server <code>listenedAt</code> for the book is the time the audio stopped, not the time you backgrounded the app (read it from the server&#8217;s listen-progress for the book, or compare against a web listen made in between: listen on the web after the unplug and before backgrounding the phone, and the server must keep the web position).</li>
+        <li><strong>A late pause after a finished chapter does not restamp.</strong> Download only the book&#8217;s last chapter (or play offline so the next chapter is not downloaded) and let it play to the end without touching the phone; the pane keeps showing a pause button. Wait several minutes, listen to the book on the web in the meantime, then tap pause or leave the player. The stored and server <code>listenedAt</code> is the time the chapter ended, not the time you tapped pause, and the web position survives the next sync.</li>
+        </ul>
+        <p><em>Needs:</em> an Android phone with the companion APK built from this branch&#8217;s merge (<code>npm run apk:companion</code>) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E120</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Every companion token is now <code>scope: 'companion'</code> and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive <code>requireLanToken</code> against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail SILENTLY on the phone (spec §Q2), so a wrong allowlist row is close to invisible there. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR B)</p>
         <ul>
@@ -1811,8 +1798,8 @@
   <!-- H -->
   <section class="group is-soft" id="gh">
     <header>
-      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real CJK manuscript this corpus lacks <span class="gcount">2 rows</span></h3>
-      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists. Both rows NARROWED 2026-09-19, neither discharged — see the register's own changelog.</p>
+      <h3 class="gtitle"><span class="gtag">H</span> No hardware — a real all-kana Japanese manuscript this corpus lacks <span class="gcount">1 row</span></h3>
+      <p class="setup">Not a hardware prerequisite at all: the blocker is a real-book fixture. <code>detectManuscriptLanguageFromChapters</code> is a pure function over chapter text — no GPU, no sidecar, no analyzer. Runnable on any machine the moment the right book exists. H1 was NARROWED 2026-09-19, not discharged. Row H2 (the Han book) is DISCHARGED 2026-11-26 on an excerpt: 《紅樓夢》 chapters 1-21 of 120 measured gate N = 112,304 tokens, V = 3,336, R = 9.9547 against the floor of 3 (raw pre-dedupe Han counts: 115,515 characters, 3,348 distinct); the bound that closes the row at book scale is in the register (#4672) — see the register's own changelog.</p>
     </header>
     <details class="item">
       <summary><span class="num">H1</span><span class="iname">Kana-trigram richness gate holds at real-book scale for an all-kana (no kanji) Japanese manuscript (#2256 round 3, finding 3(b)/C5)</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
@@ -1821,17 +1808,6 @@
         <p>What to observe, once a real all-kana Japanese manuscript is available (a children's book or early-reader text with no kanji at all is the realistic shape): run its chapters through <code>detectManuscriptLanguageFromChapters</code>, record the result, separately call <code>guiraudR</code> on the same deduped winning sample against <code>LEXICAL_RICHNESS_FLOOR</code> (3), and note the total combined character count the gate actually saw — the margin at real scale is the thing this row exists to confirm.</p>
         <p class="flag"><b>NARROWED 2026-09-19, not discharged.</b> A real, genuinely all-kana fixture is now in the tree — the first 50 poems of the Ogura Hyakunin Isshu (小倉百人一首, 13th century, public domain), sourced from Wikisource, rendered in the standard all-hiragana karuta reading-card form. Detection confirms <code>{ language: 'ja', supported: true, fallback: false }</code>, the sample is genuinely kanji-free, and <code>guiraudR</code> measures <b>≈ 29.015</b> at <b>1,572 combined kana characters</b> — comfortably above the floor of 3. <b>An initial pass of this same PR discharged H1 outright; a pr-review-gate pass caught that 1,572 characters is too small a sample to answer this row's real question</b> — flipping <code>KANA_NGRAM_SIZE</code> from 3 to 2 makes the pre-existing finding-3(b) test fail while this new test stays green, meaning the sample doesn't lock in the same richness-decay regression finding B4 already found insufficient at small scale. Corrected before merge: this row stays owed, narrowed rather than discharged.</p>
         <p class="src">A real, legally usable all-kana Japanese manuscript at real book scale (thousands to tens of thousands of kana characters, not a few dozen poems). No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 3, finding 3(b)/C5</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">H2</span><span class="iname">Richness floor on a full-length real Han book</span><span class="risk">Narrowed 2026-09-19 — book scale still unconfirmed</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p><code>voteLanguage</code> measures both gates over the whole joined sample with <b>no length cap</b>. Round 2 added one; round 3 removed it because the cap made the verdict chapter-<i>order</i>-dependent. Removing it is right for that reason — which is measured. What is <b>not</b> measured is the thing the cap was added for: Guiraud's R is <code>V / √N</code>, and V saturates while N keeps growing, so R decays with book length.</p>
-        <p class="flag">Round 3 justified the removal with "the corpus's 815k-char worst case → R ≈ 4.4". <b>Round 4 could not reproduce that number from anything in this repo, and it was deleted rather than restated.</b> This row is what replaces it.</p>
-        <p>What this repo could reach before 2026-09-19: the two real Coalfall translations measure R = <b>12.078</b> (zh, 4,425 Han characters, 795 distinct) and <b>27.302</b> (ja mixed). There is no synthetic substitute — a 30-word-pool zh narrative at 21,711 characters measures R = <b>1.581</b> and is <i>refused</i>, because a hand-authored pool reaches ~250 distinct Han characters where real Chinese prose reaches thousands. A synthetic large-N fixture measures its own vocabulary, not the gate.</p>
-        <p class="flag"><b>NARROWED 2026-09-19, not discharged.</b> A larger real fixture now in the tree — 13 chapters of the Analects (論語), sourced verbatim from Wikisource, public domain — measures <b>9,948 combined Han characters, 1,096 distinct, R ≈ 10.97</b>, roughly 2.25× the prior largest real sample. Detection confirms <code>{ language: 'zh', supported: true, fallback: false }</code> at this scale. Note the two samples compared (R 12.078→10.97, V 795→1,096 at 4,425→9,948 chars) are a modern translation and a ~5th-century-BCE classical text respectively — different genres, not two points on one book's growth curve — so this pair is cited only as the two largest real samples reachable, not as evidence of a length-decay trend. Still one to two orders of magnitude short of book scale (N ~400,000) — the vocabulary-growth question this row exists to answer remains open.</p>
-        <p><b>What to observe, once a genuinely full-length (100k+ character) real Chinese manuscript is available:</b> import it, confirm <code>{ language: 'zh', supported: true, fallback: false }</code>, and record the joined sample's combined character count alongside the observed <code>guiraudR</code> against the floor of 3. Vocabulary growth is the thing being checked: at chapter scale V still outruns √N, so R <i>rises</i> — the exposure is only in the saturation regime.</p>
-        <p class="src">A full-length real Chinese book. No GPU, sidecar or analyzer · <a href="https://github.com/dudarenok-maker/Castwright/issues/2256">#2256</a> round 4, finding B3</p>
       </div>
     </details>
   </section>

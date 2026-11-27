@@ -1,0 +1,3 @@
+step1 offline play (emulator; wifi+mobile data disabled)
+playback state (dumpsys media_session):
+PLAYING(3), position=5817ms, item 'Chapter One - The Knock', The Coalfall Commission

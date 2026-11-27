@@ -1,0 +1,30 @@
+:ok
+
+data: {"kind":"log","phaseId":0,"message":"Re-analyzing 1 chapter via Ollama (qwen3.5:4b)."}
+
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"qwen3.5:4b"}
+
+data: {"kind":"log","phaseId":0,"message":"Chapter 2 — Chapter 2 — The Knock, part 2: detecting cast…"}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2,"receivedBytes":417,"charsPerSec":177,"elapsedMs":2356,"sinceLastChunkMs":78}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2,"receivedBytes":920,"charsPerSec":210,"elapsedMs":4383,"sinceLastChunkMs":49}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2,"receivedBytes":1305,"charsPerSec":204,"elapsedMs":6392,"sinceLastChunkMs":15}
+
+:ka
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2,"receivedBytes":1807,"charsPerSec":215,"elapsedMs":8406,"sinceLastChunkMs":16}
+
+data: {"kind":"heartbeat","phaseId":0,"chapterIndex":2,"receivedBytes":2170,"charsPerSec":208,"elapsedMs":10412,"sinceLastChunkMs":15}
+

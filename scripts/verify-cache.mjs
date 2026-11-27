@@ -285,11 +285,6 @@ export const STEPS = [
         // server audit script's --omit-dev pin); same #1847 trap, and without
         // it a server/package.json-only diff skips the guard's CI leg (#4380).
         'server/package.json',
-        // deps-watch.test.mjs reads these two at RUNTIME (the KGP-plugin pin
-        // must equal the lock, #790); no module-graph edge, same #1847 trap,
-        // and a pin- or lock-only diff otherwise scores step_test_hooks=false.
-        'apps/android/pubspec.yaml',
-        'apps/android/pubspec.lock',
         'scripts/validate-commit-msg.mjs',
         'scripts/preflight-ffmpeg.cjs',
         'RELEASE_NOTES.md',

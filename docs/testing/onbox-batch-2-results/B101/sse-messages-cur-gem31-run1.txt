@@ -1,0 +1,18 @@
+"message":"Discarded cached progress — starting from scratch.
+"message":"Manuscript: 652 words, 3,445 characters, 1 chapter
+"message":"Estimated total time: ~21s (refined after stage 1)
+"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+"message":"Running 1 chapter cast-detection with up to 2 in parallel.
+"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 31B…
+"message":"Attributing 1 chapter with Gemma 4 31B…
+"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)
+"message":"Running 1 chapter with up to 2 in parallel.
+"message":"❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {\
+"message":"Continuing without chapter 1 in the cast roster (1m 2s spent). Re-run analysis to retry.
+"message":"Gemma 4 31B returned 503 (Service Unavailable): {\n  \
+"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+"message":"Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2).
+"message":"Phase 0 paused — 1 chapter still needs cast detection (Chapter One — The Knock). Retry to continue.
+"code":"analyzer-unreachable"
+"code":"cast_incomplete"

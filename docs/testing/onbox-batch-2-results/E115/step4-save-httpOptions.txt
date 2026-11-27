@@ -1,0 +1,14 @@
+400 
+{
+  "error": "Invalid user settings.",
+  "issues": [
+    {
+      "code": "custom",
+      "path": [
+        "analyzerExtraParamsByEngine",
+        "gemini"
+      ],
+      "message": "Gemini custom parameters: Gemini \u0022config\u0022 accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions."
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+topK(control) gemini-3.5-flash-lite requestControlLabelParts="+ custom params"
+maxOutputTokens=2048 gemini-3.5-flash-lite requestControlLabelParts=["+ custom params","max output set by custom params"]
+cleared(control) gemini-3.5-flash-lite requestControlLabelParts=["+ custom params","max output set by custom params"]

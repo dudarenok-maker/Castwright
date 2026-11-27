@@ -31,15 +31,6 @@ for (const path of [
   });
 }
 
-// #790 — deps-watch.test.mjs reads the app's pubspec and lock at runtime, so a
-// pin- or lock-only diff must still schedule test:hooks.
-for (const path of ['apps/android/pubspec.yaml', 'apps/android/pubspec.lock']) {
-  test(`computeScopes routes ${path} to test:hooks (#790)`, () => {
-    const scopes = computeScopes([path], { eventName: 'pull_request' });
-    assert.equal(scopes.step_test_hooks, true, `${path} must run test:hooks`);
-  });
-}
-
 // #4226 — the frontend suite readFileSync()s the shared attribution-eval
 // fixtures, so a server-core + fixture-only diff must still schedule step_test.
 test('computeScopes routes a shared attribution-eval fixture diff to the frontend test step (#4226)', () => {

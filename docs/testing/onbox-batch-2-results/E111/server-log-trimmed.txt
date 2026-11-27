@@ -1,0 +1,141 @@
+2026-11-26 19:20:57.849 [tts:catalog] gemini: 14 described voice(s) are never chosen by the picker (orphan entries): Achird, Alnilam, Autonoe, Enceladus, Erinome, Fenrir, Gacrux, Laomedeia, Pulcherrima, Rasalgethi, Sadaltager, Schedar, Umbriel, Zubenelgenubi
+2026-11-26 19:21:51.252 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemini-3.6-flash" fresh=true
+2026-11-26 19:21:51.259 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemini-3.6-flash"
+2026-11-26 19:21:51.270 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:21:51.296 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:21:51.297 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:21:51.297 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…
+2026-11-26 19:21:51.298 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:21:51.299 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…
+2026-11-26 19:21:51.302 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemini 3.6 Flash…
+2026-11-26 19:21:51.302 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:21:51.303 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:22:36.753 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemini 3.6 Flash in 45s, still waiting.
+2026-11-26 19:23:22.228 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemini 3.6 Flash in 1m 31s, still waiting.
+2026-11-26 19:23:37.304 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:23:38.906 [analysis] mns=mns_u4-dsOlJKO phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailabl
+2026-11-26 19:23:38.906 [analysis] mns=mns_u4-dsOlJKO phase=0 Continuing without chapter 1 in the cast roster (1m 48s spent). Re-run analysis to retry.
+2026-11-26 19:23:38.914 [analysis] mns=mns_u4-dsOlJKO phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:23:38.914 [analysis] mns=mns_u4-dsOlJKO phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-26 19:23:38.915 [analysis] mns=mns_u4-dsOlJKO phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:23:38.917 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:26:17.115 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemini-3.6-flash" fresh=true
+2026-11-26 19:26:17.118 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemini-3.6-flash"
+2026-11-26 19:26:17.126 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:26:17.131 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:26:17.131 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:26:17.132 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…
+2026-11-26 19:26:17.132 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:26:17.132 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…
+2026-11-26 19:26:17.133 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemini 3.6 Flash…
+2026-11-26 19:26:17.133 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:26:17.134 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:26:22.016 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:26:29.144 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:27:02.561 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemini 3.6 Flash in 45s, still waiting.
+2026-11-26 19:27:08.018 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:27:08.018 [analysis] mns=mns_u4-dsOlJKO phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailabl
+2026-11-26 19:27:08.018 [analysis] mns=mns_u4-dsOlJKO phase=0 Continuing without chapter 1 in the cast roster (51s spent). Re-run analysis to retry.
+2026-11-26 19:27:08.024 [analysis] mns=mns_u4-dsOlJKO phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:27:08.024 [analysis] mns=mns_u4-dsOlJKO phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-26 19:27:08.025 [analysis] mns=mns_u4-dsOlJKO phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:27:08.025 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:27:15.442 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemma-4-31b-it" fresh=true
+2026-11-26 19:27:15.445 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemma-4-31b-it"
+2026-11-26 19:27:15.451 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:27:15.455 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:27:15.456 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:27:15.456 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+2026-11-26 19:27:15.457 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:27:15.457 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemma 4 31B…
+2026-11-26 19:27:15.458 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemma 4 31B…
+2026-11-26 19:27:15.458 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:27:15.458 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:27:16.686 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:28:00.868 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-26 19:28:36.830 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=19925 firstAnswerMs=none thoughtPartsBeforeAnswer=3
+2026-11-26 19:28:36.833 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:29:05.747 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemma-4-31b-it" fresh=true
+2026-11-26 19:29:05.751 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemma-4-31b-it"
+2026-11-26 19:29:05.758 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:29:05.763 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:29:05.764 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:29:05.764 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+2026-11-26 19:29:05.765 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:29:05.765 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemma 4 31B…
+2026-11-26 19:29:05.766 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemma 4 31B…
+2026-11-26 19:29:05.766 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:29:05.767 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:29:17.077 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:29:51.224 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-26 19:30:36.632 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting.
+2026-11-26 19:30:42.169 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=25110 firstAnswerMs=none thoughtPartsBeforeAnswer=3
+2026-11-26 19:30:42.170 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:32:48.482 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemini-3.6-flash" fresh=true
+2026-11-26 19:32:48.485 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemini-3.6-flash"
+2026-11-26 19:32:48.493 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:32:48.498 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:32:48.499 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:32:48.499 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…
+2026-11-26 19:32:48.499 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:32:48.500 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…
+2026-11-26 19:32:48.501 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemini 3.6 Flash…
+2026-11-26 19:32:48.501 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:32:48.502 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:32:52.495 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:33:33.818 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemini 3.6 Flash in 45s, still waiting.
+2026-11-26 19:34:19.172 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 — no response from Gemini 3.6 Flash in 1m 31s, still waiting.
+2026-11-26 19:34:47.335 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:34:53.316 [analysis] mns=mns_u4-dsOlJKO phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailabl
+2026-11-26 19:34:53.317 [analysis] mns=mns_u4-dsOlJKO phase=0 Continuing without chapter 1 in the cast roster (2m 5s spent). Re-run analysis to retry.
+2026-11-26 19:34:53.323 [analysis] mns=mns_u4-dsOlJKO phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:34:53.323 [analysis] mns=mns_u4-dsOlJKO phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-26 19:34:53.323 [analysis] mns=mns_u4-dsOlJKO phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:34:53.324 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:34:58.163 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemini-3.7-flash" fresh=true
+2026-11-26 19:34:58.166 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemini-3.7-flash"
+2026-11-26 19:34:58.174 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:34:58.178 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:34:58.179 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:34:58.179 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via gemini-3.7-flash…
+2026-11-26 19:34:58.180 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:34:58.180 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via gemini-3.7-flash…
+2026-11-26 19:34:58.180 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with gemini-3.7-flash…
+2026-11-26 19:34:58.181 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:34:58.181 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:35:12.650 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:35:16.884 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:35:26.925 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:35:26.926 [analysis] mns=mns_u4-dsOlJKO phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailabl
+2026-11-26 19:35:26.926 [analysis] mns=mns_u4-dsOlJKO phase=0 Continuing without chapter 1 in the cast roster (29s spent). Re-run analysis to retry.
+2026-11-26 19:35:26.950 [analysis] mns=mns_u4-dsOlJKO phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:35:26.964 [analysis] mns=mns_u4-dsOlJKO phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-26 19:35:26.979 [analysis] mns=mns_u4-dsOlJKO phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:35:26.995 [analysis] main run drained manuscript=mns_u4-dsOlJKO
+2026-11-26 19:35:32.209 [analysis] request received manuscript="mns_u4-dsOlJKO" model="gemini-3.5-flash" fresh=true
+2026-11-26 19:35:32.225 [analysis] start manuscript="mns_u4-dsOlJKO" engine=gemini model="gemini-3.5-flash"
+2026-11-26 19:35:32.231 [analysis] mns=mns_u4-dsOlJKO phase=0 Discarded cached progress — starting from scratch.
+2026-11-26 19:35:32.236 [analysis] mns=mns_u4-dsOlJKO phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-26 19:35:32.236 [analysis] mns=mns_u4-dsOlJKO phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-26 19:35:32.236 [analysis] mns=mns_u4-dsOlJKO phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.5 Flash…
+2026-11-26 19:35:32.237 [analysis] mns=mns_u4-dsOlJKO phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-26 19:35:32.237 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.5 Flash…
+2026-11-26 19:35:32.238 [analysis] mns=mns_u4-dsOlJKO phase=1 Attributing 1 chapter with Gemini 3.5 Flash…
+2026-11-26 19:35:32.238 [analysis] mns=mns_u4-dsOlJKO phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-26 19:35:32.238 [analysis] mns=mns_u4-dsOlJKO phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-26 19:36:21.771 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=20673 firstAnswerMs=36466 thoughtPartsBeforeAnswer=12
+2026-11-26 19:36:21.793 [analysis] mns=mns_u4-dsOlJKO phase=0 Chapter 1/1 cast done — 13 characters in 50s
+2026-11-26 19:36:21.800 [analysis] mns=mns_u4-dsOlJKO phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-26 19:36:21.806 [analysis] mns=mns_u4-dsOlJKO phase=0 Quote-match tiers: verbatim=21, terminal-punct=2, segments=3.
+2026-11-26 19:36:21.820 [analysis] mns=mns_u4-dsOlJKO phase=0 Detected 13 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Sela, Hart
+2026-11-26 19:36:21.821 [analysis] mns=mns_u4-dsOlJKO phase=0 1 chapter identified in 50s
+2026-11-26 19:36:21.821 [analysis] mns=mns_u4-dsOlJKO phase=1 Chapter 1/1 — held back 50s to preserve 10-chapter roster lag.
+2026-11-26 19:36:21.823 [analysis] mns=mns_u4-dsOlJKO phase=1 Chapter 1/1 — Chapter One — The Knock (19,928 chars, ~4m 8s) via Gemini 3.5 Flash…
+2026-11-26 19:37:44.944 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=2098 firstAnswerMs=66746 thoughtPartsBeforeAnswer=49
+2026-11-26 19:37:48.778 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:39:11.435 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=10084 firstAnswerMs=51982 thoughtPartsBeforeAnswer=32
+2026-11-26 19:39:16.425 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:39:46.375 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:42:04.395 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=37324 firstAnswerMs=113336 thoughtPartsBeforeAnswer=55
+2026-11-26 19:42:04.616 [gemini] stream-timing model=gemini-3.5-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-26 19:42:04.626 [analysis] main run drained manuscript=mns_u4-dsOlJKO

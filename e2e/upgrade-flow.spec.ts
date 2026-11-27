@@ -37,7 +37,9 @@ test.describe('fs-1 — in-app upgrade flow', () => {
     /* The staged candidate must be a DIFFERENT version from the running one —
        a regression that stages the running version itself would render a
        no-op "vX → vX" dialog and still satisfy the bare format match above. */
-    const delta = /v(\d+\.\d+\.\d+)\s*→\s*v(\d+\.\d+\.\d+)/.exec(
+    /* The running version may carry a prerelease suffix (the pinned e2e stamp is
+       "0.0.0-e2e"), so each side allows a "-tag" tail before the arrow. */
+    const delta = /v(\d+\.\d+\.\d+(?:-[\w.]+)?)\s*→\s*v(\d+\.\d+\.\d+(?:-[\w.]+)?)/.exec(
       (await confirm.textContent()) ?? '',
     );
     expect(delta, 'confirm dialog shows a "vX → vY" version delta').not.toBeNull();
