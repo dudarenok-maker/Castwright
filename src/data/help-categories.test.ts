@@ -28,4 +28,8 @@ describe('help categories', () => {
     expect(topic?.category).toBe('voices');
     expect(topic?.body).toContain('Clone a voice');
   });
+  it('does not tell a working Coqui install to press Repair (#4868 review)', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('Repair');
+  });
 });

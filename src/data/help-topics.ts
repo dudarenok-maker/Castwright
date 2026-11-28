@@ -151,8 +151,7 @@ export const HELP_TOPICS: HelpTopic[] = [
       'voice to read: you can cast a clone as any character, in any book, but it sounds most like ' +
       'its owner in the language you recorded, and Castwright warns you (it never blocks you) if ' +
       'you cast it into a book in another language. Both voice engines render clones, Qwen3-TTS ' +
-      'and Coqui XTTS. If Coqui was already installed before cloning arrived, press Repair on its ' +
-      'row in Models (Admin → Model Manager) once to pick up what cloning needs. The recording and ' +
+      'and Coqui XTTS. The recording and ' +
       'the voice built from it stay on your machine — nothing is uploaded or shared. Revoke a voice ' +
       'from its card in My voices whenever you like, and Castwright erases the recording and ' +
       'everything made from it.',
