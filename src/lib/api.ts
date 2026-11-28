@@ -7325,6 +7325,10 @@ export interface SidecarHealth {
      emit this field, so the frontend tolerates absence and falls back
      to a generic "unreachable" message. */
   proxy?: 'node' | 'sidecar';
+  /* #4961 — the server's boot-time Coqui text-splitting auto-install (spacy,
+     SudachiPy). Present only when it ran; also on `unreachable` replies, since
+     it runs before the sidecar is spawned. */
+  coquiExtras?: { status: 'installing' | 'installed' | 'failed'; message: string };
   /* Load-state surface added when the sidecar grew /load + /unload endpoints
      (see server/tts-sidecar/main.py). Older sidecars don't ship these, so
      the proxy defaults them to `false` / `null` and the UI can treat them

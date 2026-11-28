@@ -38,6 +38,7 @@ import {
   runShutdownSequence,
   bootWarmUserSettings,
   bootStartSidecarSupervisor,
+  bootStartSidecarAfterCoquiExtras,
   bootRepairDuplicateBookIds,
   type ShutdownDeps,
 } from './index.js';
@@ -288,6 +289,30 @@ describe('main() boot order (#3713, PR #4004)', () => {
 
   it('starts the restructure edits journal replay only after the sweep (#4227)', () => {
     expect(at('await bootRepairDuplicateBookIds();')).toBeLessThan(at('void replayAllRestructureEditsJournals()'));
+  });
+});
+
+describe('bootStartSidecarAfterCoquiExtras (#4961)', () => {
+  it('runs the extras check BEFORE the sidecar supervisor starts', async () => {
+    const order: string[] = [];
+    const supervisor = { start: vi.fn(async () => void order.push('start')) };
+    await bootStartSidecarAfterCoquiExtras(supervisor, async () => {
+      order.push('ensure');
+    });
+    expect(order).toEqual(['ensure', 'start']);
+  });
+
+  it('a throwing extras check still starts the sidecar (Coqui keeps working as today)', async () => {
+    const supervisor = { start: vi.fn(async () => {}) };
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      await bootStartSidecarAfterCoquiExtras(supervisor, async () => {
+        throw new Error('probe blew up');
+      });
+      expect(supervisor.start).toHaveBeenCalledTimes(1);
+    } finally {
+      warnSpy.mockRestore();
+    }
   });
 });
 

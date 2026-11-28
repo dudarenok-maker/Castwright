@@ -58,7 +58,7 @@ A row another lane published to the live view has to be carried by every later p
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 47 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 48 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
 | **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 0 |
@@ -68,12 +68,12 @@ A row another lane published to the live view has to be carried by every later p
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 0 |
 
-**75 owed.** Oldest: **2026-06-01** (plan 161, row A11).
+**76 owed.** Oldest: **2026-06-01** (plan 161, row A11).
 
 ---
 ## Group A — the GPU box
 
-<!-- next-id: A135 -->
+<!-- next-id: A136 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -901,6 +901,23 @@ The automated tests prove the keep set `evictIdleQwenBase` hands the tier reconc
 **Setup:** The single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and Coqui.
 
 **Criteria:** This row. Clears when each bullet is recorded with the log line it produced. Issue [#4533](https://github.com/dudarenok-maker/Castwright/issues/4533) (closed 2026-11-20).
+
+### A135 · A pre-1.15 Coqui install gets its text-splitting packages at server start, before the sidecar ([#4961](https://github.com/dudarenok-maker/Castwright/issues/4961)) · **the GPU box (Windows), a real sidecar venv with Coqui installed; no GPU needed for the install itself**
+
+At server start, before it spawns the sidecar, the server runs `python server/tts-sidecar/text_split_deps.py` in the venv (a real import of `spacy`, `sudachipy` and `sudachidict_core`). If Coqui is installed and any is missing, it runs `node server/tts-sidecar/scripts/install-coqui.mjs --extras-only` (the same pip step the full installer runs, no weights, no sidecar hold) and then starts the sidecar. The automated tests prove the trigger with injected fakes (fires once when missing, not when present, not without auto-start, not with a sidecar already listening, a failure still starts the sidecar) and the notice. They cannot prove a real pip install into a real venv. Logs: `logs/server.log` (lines starting `[coqui-extras]`) and `logs/tts.err.log`.
+
+**Owed:**
+
+- **Make the venv look pre-1.15.** Stop the app. Run `server\tts-sidecar\.venv\Scripts\python.exe -m pip uninstall -y spacy sudachipy sudachidict-core`, then confirm `server\tts-sidecar\.venv\Scripts\python.exe server\tts-sidecar\text_split_deps.py` prints the missing names and exits 1. Coqui itself (`TTS`, the weights) stays installed.
+- **The install runs before the sidecar, once.** Start with `npm start`. `logs/server.log` must show `[coqui-extras] Coqui is installed but its text-splitting packages ... missing; installing before the sidecar starts.`, then `[coqui-extras] text-splitting packages installed.`, and only then the sidecar's boot lines. While it runs, `GET /api/sidecar/health` must carry `coquiExtras.status: "installing"` and the app must show the amber "Adding the Coqui text-splitting packages" line under the top bar; afterwards it must read `installed` (emerald). Record how long boot was delayed (about a minute is expected). The probe script must now exit 0.
+- **A long line now splits.** Render, or preview, a line well past the Coqui character limit for its language, in English and in Japanese. `logs/tts.err.log` must not show the `enable_text_splitting=False` fallback warning for it, and the audio must not be cut short.
+- **The next start does nothing.** Restart. `logs/server.log` must have no `[coqui-extras]` install line, and boot must not be delayed.
+- **A failure still starts Coqui.** Uninstall the packages again and break the install (go offline, or make pip fail). The server must log `[coqui-extras] install failed: ...`, the sidecar must still start, Coqui must still load and render as before, and the app must show the amber "Could not add the Coqui text-splitting packages" alert (its raw error stays in the log, not the UI). Then restore network and restart: it must retry and succeed.
+- **A server that does not auto-start the sidecar leaves the venv alone.** With the Auto-start sidecar preference off (or with a sidecar already listening on the port), start the server with the packages missing: no `[coqui-extras]` install line, and the venv is unchanged. Re-enable and restart to confirm it then installs.
+
+**Setup:** The GPU box on Windows with the real sidecar venv and Coqui installed. Restore the packages afterwards if a bullet leaves them out.
+
+**Criteria:** This row. Clears when each bullet is recorded with the log line it produced. Issue [#4961](https://github.com/dudarenok-maker/Castwright/issues/4961).
 
 ## Group B — local Ollama analyzer only
 

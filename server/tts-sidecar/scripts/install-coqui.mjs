@@ -29,6 +29,12 @@
 //
 // Idempotent: from_pretrained / TTS() is a no-op when the model dir already has
 // the weights.
+//
+// `--extras-only` (#4961): run ONLY the third pip step (CJK phonemizers + spacy +
+// SudachiPy) and exit — no coqui-tts install, no clone-path verify, no ~1.8 GB
+// prefetch. The server runs this at boot, BEFORE the sidecar is spawned, on a
+// Coqui install made before 1.15 that lacks the text-splitting packages
+// (server/src/tts/coqui-extras-autoinstall.ts).
 
 import { spawnSync } from 'node:child_process';
 import { existsSync } from 'node:fs';
@@ -181,6 +187,15 @@ export function coquiPipInstallSteps(constraints) {
   ];
 }
 
+/**
+ * #4961 — the pip steps `--extras-only` runs: just the CJK phonemizers + spacy +
+ * SudachiPy step above (the last entry of {@link coquiPipInstallSteps}, taken by
+ * reference so the two can never drift). Pure + exported for the same reason.
+ */
+export function coquiExtrasPipSteps(constraints) {
+  return coquiPipInstallSteps(constraints).slice(-1);
+}
+
 // Printed by COQUI_VERIFY_CODE immediately before it enters
 // patched_xtts_load_audio() — the last checkpoint before the code that can
 // actually detect loader drift. main() greps captured stdout for this line
@@ -250,12 +265,18 @@ function main() {
   // pull a broken coqui-tts release. torchcodec, the CJK phonemizers, and spacy
   // are required too (see coquiPipInstallSteps' rationale) — installed here, NOT
   // the base overlay.
-  for (const { label, args, failMsg } of coquiPipInstallSteps(constraints)) {
+  const extrasOnly = process.argv.includes('--extras-only');
+  const pipSteps = extrasOnly ? coquiExtrasPipSteps(constraints) : coquiPipInstallSteps(constraints);
+  for (const { label, args, failMsg } of pipSteps) {
     step(label);
     if (run(python, args, env) !== 0) {
       step(failMsg);
       process.exit(1);
     }
+  }
+  if (extrasOnly) {
+    step('Done. Text-splitting packages installed (--extras-only; weights untouched).');
+    return;
   }
 
   step('Verifying the clone path can decode reference audio (#1967)...');

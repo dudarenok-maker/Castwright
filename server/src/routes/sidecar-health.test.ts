@@ -74,6 +74,10 @@ vi.mock('../gpu/capacity-retry.js', async (importOriginal) => {
 });
 import { withCapacityRetry, createHardTimeoutAbortReason, isHardTimeoutAbort } from '../gpu/capacity-retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
+import {
+  ensureCoquiTextSplitPackages,
+  _resetCoquiExtrasNotice,
+} from '../tts/coqui-extras-autoinstall.js';
 
 function makeApp() {
   const app = express();
@@ -1832,4 +1836,38 @@ describe('sidecar proxy 503 bodies pass a real undici rejection through unchange
       );
     });
   }
+});
+
+describe('GET /api/sidecar/health — coquiExtras notice (#4961)', () => {
+  beforeEach(() => _resetCoquiExtrasNotice());
+
+  it('attaches the boot-time auto-install notice, even when the sidecar is not up yet', async () => {
+    // A real install-in-flight: the notice is written by the module itself.
+    void ensureCoquiTextSplitPackages({
+      repoRoot: '/repo',
+      autoStart: true,
+      coquiInstalledFn: () => true,
+      sidecarListeningFn: async () => false,
+      probeFn: async () => false,
+      installFn: () => new Promise<void>(() => {}), // never settles: stays 'installing'
+      log: () => {},
+      warn: () => {},
+    });
+    await new Promise((r) => setTimeout(r, 0));
+    fetchMock.mockRejectedValue(new Error('ECONNREFUSED'));
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body.status).toBe('unreachable');
+    expect(res.body.coquiExtras).toMatchObject({ status: 'installing' });
+  });
+
+  it('omits the field when no auto-install ran', async () => {
+    fetchMock.mockResolvedValue(
+      new Response(JSON.stringify({ ok: true }), {
+        status: 200,
+        headers: { 'Content-Type': 'application/json' },
+      }),
+    );
+    const res = await request(makeApp()).get('/api/sidecar/health');
+    expect(res.body).not.toHaveProperty('coquiExtras');
+  });
 });

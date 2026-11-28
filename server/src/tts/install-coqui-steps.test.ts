@@ -13,7 +13,7 @@
 import { readFileSync } from 'node:fs';
 import { describe, it, expect } from 'vitest';
 // @ts-expect-error — standalone install helper ships no .d.ts; plain JS.
-import { coquiPipInstallSteps, COQUI_VERIFY_CODE } from '../../tts-sidecar/scripts/install-coqui.mjs';
+import { coquiPipInstallSteps, coquiExtrasPipSteps, COQUI_VERIFY_CODE } from '../../tts-sidecar/scripts/install-coqui.mjs';
 
 const CONSTRAINTS = '/tmp/base-constraints.txt';
 
@@ -51,6 +51,15 @@ describe('coquiPipInstallSteps', () => {
     expect(cjk!.args.some((a: string) => a.startsWith('spacy'))).toBe(true);
     // Plain spacy, never the [ja] extra (SudachiPy/sudachidict-core, #2038).
     expect(cjk!.args.some((a: string) => a.startsWith('spacy[ja]'))).toBe(false);
+  });
+
+  it('--extras-only runs exactly the spacy/SudachiPy step, and not coqui-tts/torchcodec (#4961)', () => {
+    const extras = coquiExtrasPipSteps(CONSTRAINTS) as { label: string; args: string[] }[];
+    expect(extras).toHaveLength(1);
+    expect(extras[0]).toEqual(steps[steps.length - 1]); // same object content: one source of truth
+    expect(extras[0].args).toEqual(expect.arrayContaining(['spacy>=3.8,<4.0', 'sudachipy', 'sudachidict-core']));
+    expect(extras[0].args).not.toContain('coqui-tts');
+    expect(extras[0].args).not.toContain('torchcodec');
   });
 
   it('never passes -U / --upgrade (must not perturb the pinned torch/coqui)', () => {

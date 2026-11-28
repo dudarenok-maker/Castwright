@@ -164,4 +164,47 @@ describe('TtsNoticeBanner', () => {
       expect(container).toBeEmptyDOMElement();
     });
   });
+
+  describe('Coqui text-splitting auto-install notice (#4961)', () => {
+    const base = { evictionNotice: null, loadErrorNotice: null, tripNotice: null, onDismiss: vi.fn() };
+
+    it('shows the installing line with no dismiss button', () => {
+      render(
+        <TtsNoticeBanner
+          {...base}
+          coquiExtras={{ status: 'installing', message: 'Adding the Coqui text-splitting packages.' }}
+        />,
+      );
+      expect(screen.getByText(/Adding the Coqui text-splitting packages/)).toBeInTheDocument();
+      expect(screen.queryByRole('button', { name: /Dismiss Coqui text-splitting/ })).not.toBeInTheDocument();
+    });
+
+    it('shows a failure as an alert and dismisses it locally', () => {
+      render(
+        <TtsNoticeBanner
+          {...base}
+          coquiExtras={{ status: 'failed', message: 'Could not add the Coqui text-splitting packages.' }}
+        />,
+      );
+      expect(screen.getByRole('alert')).toHaveTextContent(/Could not add the Coqui text-splitting packages/);
+      fireEvent.click(screen.getByRole('button', { name: /Dismiss Coqui text-splitting/ }));
+      expect(screen.queryByText(/Could not add the Coqui/)).not.toBeInTheDocument();
+    });
+
+    it('shows the done line as a non-alert status', () => {
+      render(
+        <TtsNoticeBanner
+          {...base}
+          coquiExtras={{ status: 'installed', message: 'Coqui text-splitting packages installed.' }}
+        />,
+      );
+      expect(screen.getByRole('status')).toHaveTextContent(/installed/);
+      expect(screen.queryByRole('alert')).not.toBeInTheDocument();
+    });
+
+    it('renders nothing when there is no notice', () => {
+      const { container } = render(<TtsNoticeBanner {...base} coquiExtras={null} />);
+      expect(container).toBeEmptyDOMElement();
+    });
+  });
 });

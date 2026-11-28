@@ -81,6 +81,7 @@ import {
   type SidecarSupervisor,
 } from './tts/sidecar-supervisor.js';
 import { enforceSingleSidecarOwner, releaseSidecarOwnership } from './tts/sidecar-owner.js';
+import { ensureCoquiTextSplitPackages } from './tts/coqui-extras-autoinstall.js';
 import { runAutoRevert } from './gpu/auto-revert.js';
 import { detectQwenInstallStateOnDisk } from './tts/qwen-install-detect.js';
 import { detectCoquiInstallStateOnDisk } from './tts/coqui-install-detect.js';
@@ -180,6 +181,22 @@ export async function bootStartSidecarSupervisor(
   } catch (err) {
     console.error('[sidecar] supervisor failed to start', err);
   }
+}
+
+/** #4961 — run the Coqui text-splitting auto-install, THEN start the sidecar
+    supervisor. `ensure` is contained here too (it never rejects by contract), so
+    nothing it does can keep the sidecar from starting: a failed install still
+    starts Coqui exactly as before. */
+export async function bootStartSidecarAfterCoquiExtras(
+  supervisor: Pick<SidecarSupervisor, 'start'>,
+  ensure: () => Promise<unknown>,
+): Promise<void> {
+  try {
+    await ensure();
+  } catch (err) {
+    console.warn('[coqui-extras] auto-install check failed; starting the sidecar anyway', err);
+  }
+  await bootStartSidecarSupervisor(supervisor);
 }
 
 /** #3713 — startup repair of duplicate bookIds. repairDuplicateBookIds() already
@@ -433,7 +450,14 @@ async function main(): Promise<void> {
         );
       },
     });
-    void bootStartSidecarSupervisor(sidecarSupervisor);
+    /* #4961 — a pre-1.15 Coqui install lacks the text-splitting packages; add them
+       now, while NO sidecar is running (no hold, no restart), then start it. */
+    void bootStartSidecarAfterCoquiExtras(sidecarSupervisor, () =>
+      ensureCoquiTextSplitPackages({
+        repoRoot: bootRepoRoot,
+        autoStart: getResolvedAutoStartSidecar(),
+      }),
+    );
     registerActiveSupervisor(sidecarSupervisor);
 
     /* srv-2 — start the periodic per-book state.json backup sweep (no-op when

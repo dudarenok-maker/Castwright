@@ -2397,6 +2397,7 @@ export function Layout() {
           evictionNotice={ttsLifecycle.evictionNotice}
           loadErrorNotice={ttsLifecycle.loadErrorNotice}
           tripNotice={ttsLifecycle.tripNotice}
+          coquiExtras={ttsLifecycle.sidecarHealth?.coquiExtras ?? null}
           onDismiss={ttsLifecycle.dismissNotices}
           kokoro={ttsLifecycle.kokoro}
           coqui={ttsLifecycle.coqui}

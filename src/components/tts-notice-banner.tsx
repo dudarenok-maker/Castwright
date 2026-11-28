@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { IconClose } from '../lib/icons';
 import { ModelControlPill } from './ModelControlPill';
 import type { EngineLifecycle } from '../lib/use-tts-lifecycle';
@@ -14,6 +15,10 @@ interface TtsNoticeBannerProps {
       `loadErrorNotice` (rose) — this isn't a user-initiated Load/Stop
       failure, it's the supervisor acting on its own. */
   tripNotice: string | null;
+  /** #4961 — the server's boot-time Coqui text-splitting auto-install (spacy,
+      SudachiPy): amber while it runs or if it failed, emerald when done. The
+      done/failed lines dismiss locally (the server keeps reporting them). */
+  coquiExtras?: { status: 'installing' | 'installed' | 'failed'; message: string } | null;
   /** Clears all three notices (shared dismiss from useTtsLifecycle). */
   onDismiss: () => void;
   /** Kokoro's lifecycle. When resident (`state === 'ready'`), a Stop control
@@ -65,17 +70,48 @@ export function TtsNoticeBanner({
   evictionNotice,
   loadErrorNotice,
   tripNotice,
+  coquiExtras,
   onDismiss,
   kokoro,
   coqui,
 }: TtsNoticeBannerProps) {
+  const [dismissedExtras, setDismissedExtras] = useState<string | null>(null);
+  const extras =
+    coquiExtras && coquiExtras.message !== dismissedExtras ? coquiExtras : null;
   const resident: Array<{ label: string; lifecycle: EngineLifecycle }> = [];
   if (kokoro?.state === 'ready') resident.push({ label: 'Kokoro', lifecycle: kokoro });
   if (coqui?.state === 'ready') resident.push({ label: 'Coqui XTTS', lifecycle: coqui });
 
-  if (!evictionNotice && !loadErrorNotice && !tripNotice && resident.length === 0) return null;
+  if (!evictionNotice && !loadErrorNotice && !tripNotice && !extras && resident.length === 0) {
+    return null;
+  }
   return (
     <div className="max-w-[1500px] mx-auto px-3 sm:px-6 mt-2 flex flex-col gap-1">
+      {extras && (
+        <p
+          className={`inline-flex items-start gap-2 text-[11px] max-w-prose ${
+            extras.status === 'installed' ? 'text-emerald-700' : 'text-amber-700'
+          }`}
+          role={extras.status === 'failed' ? 'alert' : 'status'}
+        >
+          <span
+            className={`w-1.5 h-1.5 mt-1 rounded-full shrink-0 ${
+              extras.status === 'installed' ? 'bg-emerald-500' : 'bg-amber-500'
+            }`}
+          />
+          <span>{extras.message}</span>
+          {extras.status !== 'installing' && (
+            <button
+              type="button"
+              onClick={() => setDismissedExtras(extras.message)}
+              aria-label="Dismiss Coqui text-splitting notice"
+              className="ml-1 opacity-60 hover:opacity-100"
+            >
+              <IconClose className="w-3 h-3" />
+            </button>
+          )}
+        </p>
+      )}
       {evictionNotice && (
         <p className="inline-flex items-center gap-2 text-[11px] text-emerald-700">
           <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" />

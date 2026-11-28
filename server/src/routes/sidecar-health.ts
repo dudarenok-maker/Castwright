@@ -20,6 +20,7 @@ import { detectCoquiInstallStateOnDisk, coquiWeightsPresent } from '../tts/coqui
 import { setLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import { asrEnabled } from '../tts/segment-asr-qa.js';
 import { getActiveSupervisor } from '../tts/sidecar-supervisor.js';
+import { getCoquiExtrasNotice } from '../tts/coqui-extras-autoinstall.js';
 import { setLastKnownVram } from '../gpu/vram-state.js';
 import {
   setLastKnownEngineDevices,
@@ -582,7 +583,11 @@ export async function probeSidecarHealth(): Promise<SidecarHealthResult> {
 setProbeSidecarHealthProvider(probeSidecarHealth);
 
 sidecarHealthRouter.get('/health', async (_req: Request, res: Response) => {
-  res.json(await probeSidecarHealth());
+  /* #4961 — the boot-time Coqui text-splitting auto-install notice rides here
+     (not in probeSidecarHealth, which /api/diagnostics reuses) and is attached
+     to unreachable replies too: the install runs BEFORE the sidecar is up. */
+  const coquiExtras = getCoquiExtrasNotice();
+  res.json({ ...(await probeSidecarHealth()), ...(coquiExtras ? { coquiExtras } : {}) });
 });
 
 /* POST /api/sidecar/load — proxies to the sidecar's /load endpoint with a

@@ -61,6 +61,7 @@
 - **Russian pronouns like «ей» and «его» are no longer flagged as missing characters.** Castwright's cast check used to mistake a sentence that began with one of these words for a speaker you hadn't added. It now leaves them alone and still flags real unlisted speakers.
 - **The Voices page no longer shows a drag handle on voice cards that did nothing, or lets you drag them.** Voice cards look the same otherwise, and you still assign voices from the Cast screen.
 - **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
+- **Long lines in a cloned voice no longer get cut short on an older Coqui install.** If you set up Coqui before 1.15, it was missing the packages that split a long sentence into pieces it can speak, so a very long line could come out clipped. The first time you start this version, Castwright adds them before the voice engine starts. That takes about a minute, once. A note under the top bar tells you it's happening and when it's done. If it can't, Coqui keeps working as before and tries again next time you start Castwright.
 
 # Castwright 1.15.0
 
