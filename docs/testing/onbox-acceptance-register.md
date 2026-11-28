@@ -8319,7 +8319,7 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 > - **Stale `minimal`, browser half — PASS.** With `gemini-3.8-flash: "minimal"` written into the settings file (the API refuses to save it), headless chromium showed the row with `selected value="minimal" shown="Minimal"` beside the offered levels; after restoring the file byte-identical the row showed `model-default` and no `minimal`. The page made no non-GET `/api` request. The boot setup gate redirected to `#/setup` (no voice engine running), so the page was moved to Advanced settings by hash (`stale-minimal-row.png`, `restored-row.png`, `browser-rows.txt`). The API half passed on 2026-11-26 and was not re-run.
 > - **Outside this row.** The app's quota message said "resets at 2026-11-29T00:00:00.000Z", 16 h later than the time Google's retry hint gave; not filed.
 >
-> **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash`; thought tokens on `gemini-3.6-flash` (`model-default` vs `high`); G1 default-level leg (FAIL as the row is worded; needs an owner decision, see #4723)**
+> **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash`; thought tokens on `gemini-3.6-flash` (`model-default` vs `high`); G1 default-level leg (FAIL as the row is worded; needs an owner decision, see #4851)**
 
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 

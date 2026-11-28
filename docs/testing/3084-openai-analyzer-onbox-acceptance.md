@@ -488,7 +488,7 @@ A8, Gemma `on` step: no verdict (503 inconclusive). Result: STILL OWED
 Result (2026-11-28 re-run): `on` accepted (`thinkingLevel: HIGH` with `includeThoughts`, HTTP 200). Result: PASS
 
 G1, `on` vs default: not attempted (Gemma 503). Result: NOT RUN
-Result (2026-11-28 re-run, `config.maxOutputTokens=1200` on both legs, 31,140-byte chapter): `on` empty `MAX_TOKENS` → `analyzer-reasoning-overflow`, run stopped (PASS); default level also → `analyzer-reasoning-overflow`, no split, 2 of 2 (FAIL against this section; the behaviour in #4723). Result: on PASS, default FAIL
+Result (2026-11-28 re-run, `config.maxOutputTokens=1200` on both legs, 31,140-byte chapter): `on` empty `MAX_TOKENS` → `analyzer-reasoning-overflow`, run stopped (PASS); default level also → `analyzer-reasoning-overflow`, no split, 2 of 2 (FAIL against this section; owner decision owed in #4851). Result: on PASS, default FAIL
 
 Stale `minimal` refusal and row: refusal PASS (analyzer-request-rejected, when=before-start); row display not opened in a browser. Result: partial
 Result (2026-11-28 re-run, row display only): the row shows `minimal` selected beside the offered levels; refusal not re-run. Result: PASS
