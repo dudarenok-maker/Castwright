@@ -365,18 +365,22 @@ test('waitForOwnServer: returns null when nothing answers anywhere in range', as
 
 // decideLaunchAction is main()'s entire pre-spawn decision sequence,
 // extracted (Castwright#3030 round 4, finding R5) so it is exercised here
-// directly, with fully injected fake probes — no real sockets needed. This
-// is also what pins finding R1: the stale-own-instance scan must run
-// UNCONDITIONALLY, not only when the target port currently has a foreign
-// occupant, because a stale rebound copy of this worktree's own server can
-// outlive the very occupant that caused the rebind.
+// directly, with injected fake probes — no real sockets needed (the #3264
+// marker cases further down use real ones). This is also what pins finding R1:
+// the stale-own-instance scan must run UNCONDITIONALLY, not only when the
+// target port currently has a foreign occupant, because a stale rebound copy
+// of this worktree's own server can outlive the very occupant that caused the
+// rebind.
 const OWN_RUN_DIR = '/repo/.run';
 const served = (runDir, extra = {}) => ({ configLoad: { runDir, ...extra } });
 
+// No owner marker on any port: identity falls back to the /api/health answer,
+// as for a server started before #3264.
 function fakeProbes({ listening = {}, healthByPort = {} } = {}) {
   return {
     probePort: async (port) => Boolean(listening[port]),
     probeServed: async (port) => healthByPort[port] ?? null,
+    confirmOwnServerFromMarker: async () => false,
   };
 }
 
@@ -520,6 +524,78 @@ test('decideLaunchAction: fully clean boot — nothing anywhere → proceed, no 
     scanForOwnServer: async () => null,
   });
   assert.deepEqual(decision, { kind: 'proceed', mayHaveRebound: false, infoMessage: null });
+});
+
+// #3264 — our own healthy server on :port, bound HTTPS with mkcert unreachable:
+// a real listening socket, a real owner marker, and the real marker and TCP
+// probes. Only the /api/health answer is faked.
+async function decideWithOwnMarkerOnTarget(t, probeServed) {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir, port, https: true, pid: process.pid });
+  const url = `https://localhost:${port}/`;
+  const decision = await decideLaunchAction({
+    port,
+    altPort: port, // no alternate port in play
+    lanHttps: true,
+    runDir,
+    url,
+    probeServed,
+    scanForOwnServer: async () => null,
+  });
+  return { decision, port, url };
+}
+
+test('decideLaunchAction: #3264 own marker on the target port and no /api/health answer → skip, not fail', async (t) => {
+  const { decision, port, url } = await decideWithOwnMarkerOnTarget(t, async () => null);
+  assert.deepEqual(decision, {
+    kind: 'skip',
+    messageLines: [
+      `[SKIP] server already listening on :${port} — leaving it alone`,
+      `[READY] ${url}`,
+    ],
+  });
+});
+
+test('decideLaunchAction: #3264 own marker on the target port still warns when /api/health reports no server/.env', async (t) => {
+  const { decision } = await decideWithOwnMarkerOnTarget(t, async () => ({
+    configLoad: { envLoaded: false, cwd: '/repo/elsewhere' },
+  }));
+  assert.equal(decision.kind, 'skip');
+  assert.match(decision.messageLines[0], /^\[WARN\] .* WITHOUT server\/\.env \(cwd=\/repo\/elsewhere\)/);
+  assert.match(decision.messageLines[1], /^\[SKIP\] server already listening/);
+  assert.match(decision.messageLines[2], /^\[READY\]/);
+});
+
+test('decideLaunchAction: #3264 own marker on the target port → a probe that throws never fails the skip', async (t) => {
+  const { decision } = await decideWithOwnMarkerOnTarget(t, async () => {
+    throw new Error('unreadable root CA');
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.equal(decision.messageLines.length, 2);
+});
+
+test('decideLaunchAction: #3264 own marker on altPort and no /api/health answer → skip there', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await closedPort();
+  const altPort = await listenSilently(t);
+  writeServerOwner({ runDir, port: altPort, https: false, pid: process.pid });
+  const decision = await decideLaunchAction({
+    port,
+    altPort,
+    lanHttps: true,
+    runDir,
+    url: `https://localhost:${port}/`,
+    probeServed: async () => null,
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.equal(decision.messageLines.length, 1);
+  assert.ok(
+    decision.messageLines[0].startsWith(
+      `[SKIP] a Castwright server is already listening on :${altPort} `,
+    ),
+  );
 });
 
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';

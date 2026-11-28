@@ -57,6 +57,7 @@
 - **Russian pronouns like «ей» and «его» are no longer flagged as missing characters.** Castwright's cast check used to mistake a sentence that began with one of these words for a speaker you hadn't added. It now leaves them alone and still flags real unlisted speakers.
 - **The Voices page no longer shows a drag handle on voice cards that did nothing, or lets you drag them.** Voice cards look the same otherwise, and you still assign voices from the Cast screen.
 - **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
+- **Castwright no longer says it failed to start when it started fine.** If your computer had the HTTPS certificates but not the mkcert tool, starting Castwright could end in a failure message about a copy that was running perfectly well, either because it was already open or because another copy held its usual address. Castwright now recognises its own running copy without needing that tool.
 
 # Castwright 1.15.0
 

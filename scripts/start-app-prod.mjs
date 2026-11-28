@@ -379,12 +379,36 @@ export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lan
   return null;
 }
 
+/* The lines main() prints when this worktree's own server already serves the
+   target port. `served` is its /api/health body, or null when none could be
+   read, which only costs the missing-server/.env warning. */
+function ownServerOnTargetSkip(port, url, served) {
+  const lines = [];
+  if (served?.configLoad?.envLoaded === false) {
+    lines.push(
+      `[WARN] server on :${port} is running WITHOUT server/.env ` +
+        `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
+    );
+  }
+  lines.push(`[SKIP] server already listening on :${port} — leaving it alone`);
+  lines.push(`[READY] ${url}`);
+  return { kind: 'skip', messageLines: lines };
+}
+
 /* Everything main() must decide BEFORE spawning, extracted so it is
    unit-testable with injected probe functions rather than only reachable by
    spawning the real launcher (Castwright#3030 round 4, finding R5 — this
    file's pre-spawn orchestration had zero automated coverage, which is
    exactly how round 4's finding R1 survived rounds 1-3 unnoticed). Probe
-   functions default to the real network-touching ones; tests inject fakes.
+   functions default to the real ones (network, and the owner-marker read);
+   tests inject fakes.
+
+   On the target port and the alternate port, "is that our own server?" is
+   answered from the owner marker first (confirmOwnServerFromMarker, #3264), so
+   a healthy own server that /api/health cannot be read from (HTTPS with mkcert
+   unreachable) is still recognised. Without a confirming marker the
+   /api/health answer decides, which covers a server started before the marker
+   existed.
 
    Returns one of:
      { kind: 'fail', message }                                   — main() should fail(message)
@@ -412,12 +436,18 @@ export async function decideLaunchAction({
   probePort: probePortFn = probePort,
   probeServed: probeServedFn = probeServed,
   scanForOwnServer: scanForOwnServerFn = scanForOwnServer,
+  confirmOwnServerFromMarker: confirmOwnServerFromMarkerFn = confirmOwnServerFromMarker,
 }) {
   let mayHaveRebound = false;
   let foreignOccupantCwd = null;
 
   const alreadyUp = await probePortFn(port);
   if (alreadyUp) {
+    if (await confirmOwnServerFromMarkerFn(port, runDir)) {
+      // Best-effort: the health answer only feeds the server/.env warning here.
+      const health = await probeServedFn(port, lanHttps).catch(() => null);
+      return ownServerOnTargetSkip(port, url, health);
+    }
     const served = await probeServedFn(port, lanHttps);
     if (!served) {
       return {
@@ -427,18 +457,7 @@ export async function decideLaunchAction({
           `likely a stale or foreign server. Run "npm run stop" and retry.`,
       };
     }
-    if (isOwnServerInstance(served, runDir)) {
-      const lines = [];
-      if (served.configLoad && served.configLoad.envLoaded === false) {
-        lines.push(
-          `[WARN] server on :${port} is running WITHOUT server/.env ` +
-            `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
-        );
-      }
-      lines.push(`[SKIP] server already listening on :${port} — leaving it alone`);
-      lines.push(`[READY] ${url}`);
-      return { kind: 'skip', messageLines: lines };
-    }
+    if (isOwnServerInstance(served, runDir)) return ownServerOnTargetSkip(port, url, served);
     /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
        answers on our target port — not a duplicate of this worktree's own
        instance, so don't refuse to start outright. */
@@ -463,10 +482,17 @@ export async function decideLaunchAction({
      would miss that running server and spawn a duplicate (two servers, one
      stale pid file). Detect a live instance of THIS worktree's own server on
      the alternate port and leave it alone — a sibling worktree's (or any
-     other install's) own server answering there is not a reason to skip. */
+     other install's) own server answering there is not a reason to skip. The
+     owner marker identifies it (#3264); /api/health is asked only when no
+     marker does, as for a server started before the marker existed. */
   if (altPort !== port && (await probePortFn(altPort))) {
-    const servedAlt = await probeServedFn(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
-    if (isOwnServerInstance(servedAlt, runDir)) {
+    const altIsOwn =
+      (await confirmOwnServerFromMarkerFn(altPort, runDir)) ||
+      isOwnServerInstance(
+        await probeServedFn(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443)),
+        runDir,
+      );
+    if (altIsOwn) {
       return {
         kind: 'skip',
         messageLines: [
