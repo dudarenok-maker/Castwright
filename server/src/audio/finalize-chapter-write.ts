@@ -614,6 +614,8 @@ async function finalizeChapterAudioWriteInner(
      [id]` check on the very next line already discriminates "the fresh set
      covers this id" correctly (it tests the actual snapshot, not
      `speakingIds`), so the extra guard bought nothing and cost this. */
+  // #4225 — taken before the carry-forward: these entries describe THIS write's takes, carried ones do not.
+  const builtSnapshotIds = new Set(Object.keys(characterSnapshots));
   const untouchedStampedIds = new Set<string>();
   for (const i of untouchedIndices) {
     untouchedStampedIds.add(segments[i].resolvedCharacterId ?? segments[i].characterId);
@@ -668,7 +670,19 @@ async function finalizeChapterAudioWriteInner(
   const stampedSegments: ChapterSegment[] = segments.map((s, i) => {
     if (resynthesizedIndexSet.has(i)) {
       const resolved = resolveSpeakingId(s.characterId);
-      return { ...s, resolvedCharacterId: characterSnapshots[resolved] ? resolved : undefined };
+      /* #4225 — the tier THIS take rendered under. The old take's stamp is dropped first (a
+         re-record arrives spread over the prior segment); a fallback take, or one this write built
+         no snapshot for, stays unstamped. */
+      const { renderedModelKey: _priorStamp, ...take } = s;
+      const renderedModelKey =
+        !s.renderedFallbackEngine && builtSnapshotIds.has(resolved)
+          ? characterSnapshots[resolved].modelKey
+          : undefined;
+      return {
+        ...take,
+        resolvedCharacterId: characterSnapshots[resolved] ? resolved : undefined,
+        ...(renderedModelKey ? { renderedModelKey } : {}),
+      };
     }
     return s.resolvedCharacterId && !characterSnapshots[s.resolvedCharacterId]
       ? { ...s, resolvedCharacterId: undefined }

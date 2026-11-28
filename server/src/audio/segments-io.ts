@@ -106,6 +106,10 @@ export interface SegmentsFile {
         raw `characterId`, exact-matched against this chapter's own snapshot
         keys, never against history. */
     resolvedCharacterId?: string;
+    /** #4225 — the model key this segment's audio was rendered under. Absent on
+        a legacy or fallback-engine segment: the tier is unknown. See
+        `ChapterSegment.renderedModelKey` (synthesise-chapter.ts). */
+    renderedModelKey?: TtsModelKey;
     /** #2023 Piece 1 — the cast character id that ACTUALLY spoke this segment
         when `characterId` above is an orphaned id (no cast entry at all) and
         the render's orphaned-characterId safety net substituted the narrator

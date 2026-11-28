@@ -85,6 +85,9 @@ interface SegmentsEntry {
    *  `resolveRowCharId`'s own doc comment just below for how this is used
    *  to join a row to its chapter's `characterSnapshots`. */
   resolvedCharacterId?: string;
+  /** #4225 — the model key this segment's audio was rendered under. Absent on a
+   *  legacy or fallback-engine segment: the tier is unknown. */
+  renderedModelKey?: TtsModelKey;
 }
 
 interface SegmentsFileView {
