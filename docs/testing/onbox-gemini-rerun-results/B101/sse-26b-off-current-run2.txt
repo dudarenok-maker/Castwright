@@ -1,0 +1,25 @@
+# start 2026-11-28 15:26:35 +11:00 POST /api/manuscripts/mns_GomuRovAHW/analysis {model:gemma-4-26b-a4b-it,fresh:true}
+# HTTP 200
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":1846,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":31682,"reason":"tpm"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":5106,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":19228,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 45s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {\"error\":{\"message\":\"{\\n  \\\"error\\\": {\\n    \\\"code\\\": 429,\\n    \\\"message\\\": \\\"You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \\\\n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_input_token_count, limit: 16000, model: gemma-4-26b, description: Generate content input tokens per minute limit exceeded on Free Tier. See https://aistudio.google.com/docs/…
+data: {"kind":"log","phaseId":0,"message":"Continuing without chapter 1 in the cast roster (1m 1s spent). Re-run analysis to retry."}
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemma 4 26B returned 429 (Too Many Requests): {","code":"analyzer-rate-limit","remediation":"Wait for the quota window to reset (Gemini free-tier resets daily), or switch to a local engine (Kokoro / Qwen) in the engine picker, then resume.","phase":"cast"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis."}
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 1 chapter still needs cast detection (Chapter One — The Knock). Retry to continue."}
+# end 2026-11-28 15:27:36 +11:00 wallSeconds=61
+# DONE

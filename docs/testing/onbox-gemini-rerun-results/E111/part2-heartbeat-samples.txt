@@ -1,0 +1,30 @@
+# Auto run, phase 1, attribution section 1: receivedBytes stays 0 while elapsedMs advances (thought chunks).
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":1,"sinceLastChunkMs":1,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":2074,"sinceLastChunkMs":989,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":4413,"sinceLastChunkMs":1187,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":7378,"sinceLastChunkMs":1771,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":10269,"sinceLastChunkMs":926,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":12759,"sinceLastChunkMs":1256,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":0,"charsPerSec":0,"elapsedMs":15076,"sinceLastChunkMs":1119,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":1666,"charsPerSec":97,"elapsedMs":17095,"sinceLastChunkMs":66,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":3333,"charsPerSec":174,"elapsedMs":19124,"sinceLastChunkMs":91,"chapterIndex":1}
+# Auto run, phase 1, attribution section 2: receivedBytes is held at section 1's total (10707) while thought chunks arrive
+# about every 1-1.6 s; the gaps drop to about 0.1 s once answer text streams.
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":1,"sinceLastChunkMs":1,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":2668,"sinceLastChunkMs":1171,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":5865,"sinceLastChunkMs":1636,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":8615,"sinceLastChunkMs":1313,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":10972,"sinceLastChunkMs":1215,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":13692,"sinceLastChunkMs":1476,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":16049,"sinceLastChunkMs":1154,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":18522,"sinceLastChunkMs":1295,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":21227,"sinceLastChunkMs":1345,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":23527,"sinceLastChunkMs":1208,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":0,"elapsedMs":25819,"sinceLastChunkMs":1111,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":44,"elapsedMs":27848,"sinceLastChunkMs":69,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":92,"elapsedMs":29933,"sinceLastChunkMs":111,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":131,"elapsedMs":31971,"sinceLastChunkMs":103,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":169,"elapsedMs":34036,"sinceLastChunkMs":81,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":199,"elapsedMs":36100,"sinceLastChunkMs":102,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":227,"elapsedMs":38143,"sinceLastChunkMs":95,"chapterIndex":1}
+data: {"kind":"heartbeat","phaseId":1,"receivedBytes":10707,"charsPerSec":247,"elapsedMs":40235,"sinceLastChunkMs":123,"chapterIndex":1}

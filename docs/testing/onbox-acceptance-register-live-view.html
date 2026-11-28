@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="161" data-publish-id="10c2bb674c68"></div>
+  <div hidden data-published-as="163" data-publish-id="2db10ec08f7d"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">91</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">90</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->20<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->19<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->2<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1477,7 +1477,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">20 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">19 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser. Independent of the GPU sessions — schedule whenever convenient.</p>
     </header>
     <details class="item">
@@ -1611,26 +1611,14 @@
     <details class="item">
       <summary><span class="num">E111</span><span class="iname">A thinking Gemini model completes a 20,000-character chapter with Auto output, and Gemma still splits (#3084 wave 2)</span><span class="risk hot">The reporter's stall</span><span class="chev">›</span></summary>
       <div class="body">
-        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 120 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> must still split. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
+        <p>Wave 2 made Gemini's output cap Auto (the model's own limit, not 8192), asks thinking models for thought summaries and lets them stay silent for up to 120 s at a time before their answer text, and fails an empty <code>MAX_TOKENS</code> response with reasoning evidence as <code>analyzer-reasoning-overflow</code> instead of splitting. On Gemma, with reasoning <code>off</code>, only a thought part counts as evidence, so its empty <code>MAX_TOKENS</code> still splits. Unit tests drive all of this against a mocked stream; only real runs prove it.</p>
         <ul>
           <li>On a 19,000–21,000-character chapter at <b>Auto</b> on <code>gemini-3.6-flash</code>: time to first chunk and to first answer text, whether the heartbeat moves during thinking, idle retries, <code>analyzer-timeout</code> failures, truncations, reasoning-overflow failures, request count.</li>
           <li>The same chapter at <b>8192</b> (Advanced Settings → Gemini max output tokens) as the baseline.</li>
-          <li><b>Gemma:</b> <code>gemma-4-31b-it</code> at a 64-token cap — at least one <code>bytes=0</code> truncation appears (the row fails if none can be reproduced), every one is followed by a re-split, and no <code>analyzer-reasoning-overflow</code> failure occurs.</li>
+          <li><b>Gemma:</b> <code>gemma-4-31b-it</code> with its reasoning level set to <code>off</code> at a 64-token cap — <code>thoughtPartsBeforeAnswer=0</code>, at least one <code>bytes=0</code> truncation appears (the row fails if none can be reproduced), every one is followed by a re-split, and no <code>analyzer-reasoning-overflow</code> failure occurs; at Gemma's default (reasoning on) an <code>analyzer-reasoning-overflow</code> after a <code>bytes=0</code> truncation is the by-design outcome (#4723).</li>
           <li><b>Pass:</b> Auto completes with no <code>analyzer-timeout</code> and no overflow, using no more requests than the 8192 run, and the Gemma check holds.</li>
         </ul>
         <p class="src">Any machine with a Gemini key; no GPU; two chapter runs within <code>gemini-3.6-flash</code>'s 20 requests a day · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §2 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E112</span><span class="iname">Gemini schema mode on a real key (#3084 PR 3b)</span><span class="risk low">Owed · any Gemini key</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>With a Gemini key and <code>analyzer.gemini.structuredOutput</code> = <code>schema</code>, analyse one real chapter on <code>gemma-4-31b-it</code> and one on <code>gemini-3.5-flash-lite</code>. This row does not by itself move Gemini's default.</p>
-        <ul>
-          <li>Whether Gemini returns HTTP 400 for the adapted <code>responseJsonSchema</code>, or accepts it.</li>
-          <li>The debug log's "schema adapter dropped" list must match the PR's <code>gemini / *</code> snapshot.</li>
-          <li>Whether replies conform on the first attempt.</li>
-        </ul>
-        <p class="src">Gemini key, no GPU · run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> §5 · <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a></p>
       </div>
     </details>
     <details class="item">

@@ -1,0 +1,15 @@
+// BASE SIDE ONLY. 802bab81 has no reasoning-level setting, so this adds to outgoing gemma
+// generateContent requests the one field current main sends for reasoning "off":
+// generationConfig.thinkingConfig = { thinkingLevel: 'MINIMAL' }. Nothing else is touched.
+const prev = globalThis.fetch;
+globalThis.fetch = function injectOff(input, init) {
+  const url = String(typeof input === 'string' || input instanceof URL ? input : input?.url);
+  if (url.includes('generativelanguage.googleapis.com') && /\/models\/gemma-[^/:]*:(stream)?[gG]enerateContent/.test(url) && typeof init?.body === 'string') {
+    const body = JSON.parse(init.body);
+    body.generationConfig = { ...(body.generationConfig ?? {}), thinkingConfig: { thinkingLevel: 'MINIMAL' } };
+    const headers = new Headers(init.headers);
+    headers.delete('content-length');
+    init = { ...init, headers, body: JSON.stringify(body) };
+  }
+  return prev.call(this, input, init);
+};

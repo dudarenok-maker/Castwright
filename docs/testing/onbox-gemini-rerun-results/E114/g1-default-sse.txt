@@ -1,0 +1,29 @@
+start 14:42:16 +11:00 POST /api/manuscripts/mns_NusxoxNuc1/analysis {model:gemma-4-31b-it,fresh:true} saved reasoning={} chars=31032 bytes=31140 words=5770
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 5,770 words, 31,032 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~3m 6s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (31,032 chars) via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — large chapter, section 1/4 (3,442 chars) to fit the model context…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~2m 35s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"error","code":"analyzer-reasoning-overflow","message":"Gemma 4 31B spent its whole output budget reasoning on chapter \"Chapter One — The Knock\" and returned no answer, so the analysis stopped.","remediation":"Reasoning: the Gemini reasoning setting for gemma-4-31b-it (Advanced settings → Analyzer request controls; sent as thinkingLevel — \"off\" sends MINIMAL). Raise the custom parameter \"config.maxOutputTokens\" in the Gemini custom parameters (Advanced settings → Analyzer request controls): it sets this request's output cap, so the 'Gemini max output tokens' setting has no effect while it is there. Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1, raise it or set it back to -1 (unlimited), otherwise raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — finished chapters are kept.","detail":"transport=gemini model=gemma-4-31b-it chapterId=1","fixes":[{"label":"Raise the custom parameter \"config.maxOutputTokens\" in the Gemini custom parameters (Advanced settings → Analyzer request controls)"},{"label":"Switch to a…
+HTTP 200 total=50.606s
+end 14:43:07 +11:00
+
+start 14:43:22 +11:00 POST /api/manuscripts/mns_d9WdjVlnFr/analysis {model:gemma-4-31b-it,fresh:true} saved reasoning={} chars=31032 bytes=31140 words=5770
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 5,770 words, 31,032 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~3m 6s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (31,032 chars) via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — large chapter, section 1/4 (3,442 chars) to fit the model context…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~2m 35s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"error","code":"analyzer-reasoning-overflow","message":"Gemma 4 31B spent its whole output budget reasoning on chapter \"Chapter One — The Knock\" and returned no answer, so the analysis stopped.","remediation":"Reasoning: the Gemini reasoning setting for gemma-4-31b-it (Advanced settings → Analyzer request controls; sent as thinkingLevel — \"off\" sends MINIMAL). Raise the custom parameter \"config.maxOutputTokens\" in the Gemini custom parameters (Advanced settings → Analyzer request controls): it sets this request's output cap, so the 'Gemini max output tokens' setting has no effect while it is there. Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1, raise it or set it back to -1 (unlimited), otherwise raise 'Ollama num_ctx' (ANALYZER_NUM_CTX), the context window the prompt and the whole reply must fit in. Or switch to a different analyzer model. Then resume — finished chapters are kept.","detail":"transport=gemini model=gemma-4-31b-it chapterId=1","fixes":[{"label":"Raise the custom parameter \"config.maxOutputTokens\" in the Gemini custom parameters (Advanced settings → Analyzer request controls)"},{"label":"Switch to a…
+HTTP 200 total=54.934s
+end 14:44:17 +11:00

@@ -1257,7 +1257,7 @@ describe('analyzer-invalid-output remediation (#3084 PR 3b review 🟡1)', () =>
     expect(classify('ollama', 'schema').remediation).toContain('already "schema"');
   });
 
-  it('never steers Gemini to "schema" (E112 has not shown it accepts it)', () => {
+  it('never steers Gemini to "schema" (behaviour pending #4887)', () => {
     expect(classify('gemini', 'json').remediation).not.toContain('"schema"');
     expect(classify('gemini', 'off').remediation).not.toContain('"schema"');
   });
