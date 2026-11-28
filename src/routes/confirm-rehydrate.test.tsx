@@ -617,6 +617,63 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
     ).toEqual([]);
   });
 
+  /* #4564 (PR #4862 review pass 1, owner decision a) — the 409 book_busy backstop: a sync the
+     server refused because a book started analysing AFTER the screen loaded is announced by a
+     toast naming the BUSY book, never the server's "this book" sentence. */
+  describe('the library sync refused 409 book_busy', () => {
+    const MATCHED = {
+      ...VOICELESS_COALFALL,
+      matchedFrom: { bookTitle: 'Solway Bay', bookId: 'b0', characterId: 'x', confidence: 0.5 },
+    } as unknown as Character;
+    const SERVER_SENTENCE = 'This book is busy (analysing). Its cast is read-only while it is analysing.';
+    const syncArgs = { sourceCharacterId: 'coalfall', targetBookId: 'b0', targetCharacterId: 'x' };
+    /* The 409 body names the book that refused (`bookId`). */
+    const busy = (bookId: string) => Object.assign(new Error(SERVER_SENTENCE), { code: 'book_busy', bookId });
+    const toastsOf = (store: ReturnType<typeof makeGatedStore>) =>
+      store.getState().notifications.toasts.filter((t) => /Profile sync not applied/.test(t.message));
+
+    it('names the LIBRARY book when the book on screen is free', async () => {
+      getBookStateMock.mockResolvedValue(reply(MATCHED));
+      overrideLibraryCastMock.mockRejectedValue(busy('b0'));
+      const store = makeGatedStore([MATCHED]);
+      renderRoute(store);
+      await act(async () => {
+        await viewProps.current!.onOverrideLibrary(syncArgs).catch(() => {});
+      });
+      const toasts = toastsOf(store);
+      expect(toasts).toHaveLength(1);
+      expect(toasts[0].kind).toBe('error');
+      expect(toasts[0].message).toContain('"Solway Bay" is re-analysing');
+      expect(toasts[0].message).not.toContain('Coalfall');
+      expect(toasts[0].message).not.toContain(SERVER_SENTENCE);
+    });
+
+    /* The server names the book on screen as the refuser. No era is latched: that is the state
+       the view can actually be in (it sends the sync only when it knows of no run); the
+       real-view case lives in confirm-library-sync-busy.test.tsx. */
+    it('names THIS book when the server says the book on screen is the busy one', async () => {
+      getBookStateMock.mockResolvedValue(reply(MATCHED));
+      overrideLibraryCastMock.mockRejectedValue(busy(GATED_BOOK));
+      const store = makeGatedStore([MATCHED]);
+      renderRoute(store);
+      await act(async () => {
+        await viewProps.current!.onOverrideLibrary(syncArgs).catch(() => {});
+      });
+      expect(toastsOf(store)[0].message).toContain('"Coalfall" is re-analysing');
+    });
+
+    it('a failure that is not book_busy raises no sync toast', async () => {
+      getBookStateMock.mockResolvedValue(reply(MATCHED));
+      overrideLibraryCastMock.mockRejectedValue(new Error('Target character "x" not found.'));
+      const store = makeGatedStore([MATCHED]);
+      renderRoute(store);
+      await act(async () => {
+        await viewProps.current!.onOverrideLibrary(syncArgs).catch(() => {});
+      });
+      expect(toastsOf(store)).toEqual([]);
+    });
+  });
+
   it('a read the gate has overtaken is not hydrated: Confirm reads again', async () => {
     const FRESH = { ...VOICED_COALFALL, name: 'Coalfall Fresh' } as Character;
     const resolvers: Array<(v: unknown) => void> = [];

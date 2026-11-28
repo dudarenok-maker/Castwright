@@ -808,3 +808,128 @@ describe('the banner shows on the four surfaces while read-only and not otherwis
     expect(screen.queryByTestId('cast-edits-paused-banner')).toBeNull();
   });
 });
+
+/* #4564 review pass 1 (owner decision, option a) — a Sync profile row whose source or target
+   book is known to be analysing is disabled with a reason naming the BUSY book, because the
+   server refuses the override (409 book_busy) and the opt-in would otherwise be lost silently. */
+describe('ConfirmCastView — Sync profile while a book analyses', () => {
+  const runOf = (bookId: string) =>
+    ({ bookId, manuscriptId: 'm', phaseId: 0, phaseLabel: 'x', phaseProgress: 0, remainingMs: null, lastTickAt: 0, state: 'running' }) as never;
+
+  function renderBusy(busy: 'target' | 'source' | 'none') {
+    const onOverrideLibrary = vi.fn(async () => {});
+    const onConfirm = vi.fn();
+    const store = configureStore({
+      reducer: {
+        ui: uiSlice.reducer,
+        cast: castSlice.reducer,
+        analysis: analysisSlice.reducer,
+        bookBusy: bookBusySlice.reducer,
+      },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'book_two', status: 'cast_pending' }));
+    if (busy === 'target') store.dispatch(analysisActions.applyExternalAnalysisSnapshot(runOf('book_one')));
+    if (busy === 'source') {
+      store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'book_two' }));
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(runOf('book_two')));
+    }
+    render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={[marlow, wren]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={onConfirm}
+          onOverrideLibrary={onOverrideLibrary}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    return { onOverrideLibrary, onConfirm };
+  }
+
+  it('disables the checkbox and names the LIBRARY book when the matched book is analysing', () => {
+    renderBusy('target');
+    const box = screen.getByRole('checkbox', { name: /Sync profile with Book One/i });
+    expect(box).toBeDisabled();
+    expect(box).not.toBeChecked();
+    const reason = screen.getByText(/"Book One" is re-analysing/);
+    expect(reason).not.toHaveTextContent(/Book Two/);
+    expect(box).toHaveAccessibleDescription(reason.textContent!);
+  });
+
+  it('names THIS book when the book on screen is analysing', () => {
+    renderBusy('source');
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i })).toBeDisabled();
+    expect(screen.getByText(/"Book Two" is re-analysing/)).toBeInTheDocument();
+  });
+
+  it('leaves the checkbox enabled with no reason when neither book is analysing', () => {
+    renderBusy('none');
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i })).toBeEnabled();
+    expect(screen.queryByText(/is re-analysing/)).toBeNull();
+  });
+
+  it('bulk apply ticks the free row and never the blocked one', () => {
+    const low: Character = { ...marlow, matchedFrom: { ...marlow.matchedFrom!, confidence: 0.5 } };
+    const free: Character = {
+      ...wren,
+      matchedFrom: { bookTitle: 'Book Three', bookId: 'book_three', characterId: 'wren_lib', confidence: 0.5 },
+    };
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, analysis: analysisSlice.reducer, bookBusy: bookBusySlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'book_two', status: 'cast_pending' }));
+    store.dispatch(analysisActions.applyExternalAnalysisSnapshot(runOf('book_one')));
+    render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={[low, free]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={() => {}}
+          onOverrideLibrary={vi.fn(async () => {})}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('button', { name: /Apply all 1 match/ }));
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i })).not.toBeChecked();
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book Three/i })).toBeChecked();
+    expect(screen.getByRole('button', { name: 'Clear all syncs' })).toBeInTheDocument();
+  });
+
+  it('Confirm does not fire the override for a row ticked before its book started analysing, and still confirms', async () => {
+    const onOverrideLibrary = vi.fn(async () => {});
+    const onConfirm = vi.fn();
+    const store = configureStore({
+      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, analysis: analysisSlice.reducer, bookBusy: bookBusySlice.reducer },
+    });
+    store.dispatch(uiSlice.actions.openBook({ id: 'book_two', status: 'cast_pending' }));
+    render(
+      <Provider store={store}>
+        <ConfirmCastView
+          characters={[marlow, wren]}
+          library={library}
+          title="Book Two"
+          onOpenProfile={() => {}}
+          onConfirm={onConfirm}
+          onOverrideLibrary={onOverrideLibrary}
+          onReanalyse={() => {}}
+        />
+      </Provider>,
+    );
+    fireEvent.click(screen.getByRole('checkbox', { name: /Sync profile with Book One/i }));
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i })).toBeChecked();
+    /* the library book starts analysing while the screen is open */
+    act(() => {
+      store.dispatch(analysisActions.applyExternalAnalysisSnapshot(runOf('book_one')));
+    });
+    expect(screen.getByRole('checkbox', { name: /Sync profile with Book One/i })).toBeDisabled();
+    fireEvent.click(screen.getByRole('button', { name: /Confirm cast and design voices/ }));
+    await waitFor(() => expect(onConfirm).toHaveBeenCalledTimes(1));
+    expect(onOverrideLibrary).not.toHaveBeenCalled();
+  });
+});

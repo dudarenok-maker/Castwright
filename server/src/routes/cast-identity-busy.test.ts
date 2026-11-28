@@ -5,8 +5,10 @@
    answers 409 `book_busy` while `runBookJob(bookId, 'analysis', ...)` holds the book: the
    same signal the whole-slice cast PUT's 409 uses (`book-state.ts`). A write that only
    touches voice, style or decline markers stays live, and dismissing a suggestion stays
-   live (its reversal is a spec promise). Each refused route is paired with a control: the
-   same request once the job's token is released goes through.
+   live (its reversal is a spec promise). The library cast override is refused too, while
+   either of its two books holds such a job (#4564, owner ruling 2026-11-28), although it
+   only merges profile fields. Each refused route is paired with a control: the same request
+   once the job's token is released goes through.
 
    The check sits inside the write's own book-op span. A registration takes book-op
    (`runBookJob`), so a job cannot register between the check and the write. The TOCTOU
@@ -109,12 +111,12 @@ afterAll(() => {
 });
 
 /** Register an analysis job the real way (`runBookJob`), held open until `finish`. */
-async function holdAnalysis(): Promise<{ finish: () => Promise<void> }> {
+async function holdAnalysis(id: string = bookId): Promise<{ finish: () => Promise<void> }> {
   const { runBookJob } = await import('../workspace/book-jobs.js');
   const bookOp = await import('../workspace/book-op-lock.js');
   let open!: () => void;
   const gate = new Promise<void>((r) => (open = r));
-  const reg = await runBookJob(bookId, 'analysis', () => gate);
+  const reg = await runBookJob(id, 'analysis', () => gate);
   if (reg === bookOp.BOOK_GONE) throw new Error('test setup: book not found');
   return {
     finish: async () => {
@@ -196,40 +198,71 @@ describe('R55: a cast-identity write is refused with 409 book_busy while an anal
 
   /* A lock-free check before the book-op span would pass here: the job registers while
      the request is parked on book-op, after any such check and before the write. */
-  it.each([
-    ['POST /cast/merge', post('/cast/merge', { sourceId: 'wren', targetId: 'marlow' })],
-    ['POST /cast/merge-suggestions/accept', post('/cast/merge-suggestions/accept', { sourceId: 'wren', targetId: 'marlow' })],
-  ])('%s: a job registered while the request waits on book-op still refuses it (no TOCTOU)', async (_n, send) => {
+  /* Parks `send` on `book-op:<parkId>`, registers the analysis job for that book while it
+     waits, then expects the request refused and every book in `dirs` unchanged. */
+  async function expectRefusedWhileParked(
+    parkId: string,
+    send: () => request.Test,
+    dirs: string[],
+  ): Promise<void> {
     const { withBookOp, __addBookJobToken } = await import('../workspace/book-op-lock.js');
     const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
-    const before = snapshot(bookDir);
+    const before = dirs.map(snapshot);
     let releaseOp!: () => void;
     const held = new Promise<void>((r) => (releaseOp = r));
     let acquired!: () => void;
     const holding = new Promise<void>((r) => (acquired = r));
-    const op = withBookOp(bookId, async () => {
+    const op = withBookOp(parkId, async () => {
       acquired();
       await held;
     });
     await holding;
     const pending = send().then((r) => r);
-    for (let i = 0; i < 500 && __keyWaitersForTest(`book-op:${bookId}`) === 0; i++) {
+    for (let i = 0; i < 500 && __keyWaitersForTest(`book-op:${parkId}`) === 0; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect(__keyWaitersForTest(`book-op:${bookId}`)).toBe(1);
+    expect(__keyWaitersForTest(`book-op:${parkId}`)).toBe(1);
     /* What `runBookJob` does under book-op; it cannot be called here, since this test
        already holds book-op and runBookJob would queue behind the request. */
-    const releaseJob = __addBookJobToken(bookId, 'analysis');
+    const releaseJob = __addBookJobToken(parkId, 'analysis');
     releaseOp();
     try {
       await op;
       const res = await pending;
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
-      expect(snapshot(bookDir)).toEqual(before);
+      expect(dirs.map(snapshot)).toEqual(before);
     } finally {
       releaseJob();
     }
+  }
+
+  it.each([
+    ['POST /cast/merge', post('/cast/merge', { sourceId: 'wren', targetId: 'marlow' })],
+    ['POST /cast/merge-suggestions/accept', post('/cast/merge-suggestions/accept', { sourceId: 'wren', targetId: 'marlow' })],
+  ])('%s: a job registered while the request waits on book-op still refuses it (no TOCTOU)', async (_n, send) => {
+    await expectRefusedWhileParked(bookId, send, [bookDir]);
+  });
+
+  /* The override names two books; either one's book-op can be the one it waits on. */
+  it.each([
+    ['source', () => bookId],
+    ['target', () => otherBookId],
+  ])('POST /library-cast/override: a job registered on the %s book while it waits on book-op still refuses it (no TOCTOU)', async (_n, parkId) => {
+    await expectRefusedWhileParked(
+      parkId(),
+      () =>
+        request(app)
+          .post('/api/library-cast/override')
+          .set('Content-Type', 'application/json')
+          .send({
+            sourceBookId: bookId,
+            sourceCharacterId: 'wren',
+            targetBookId: otherBookId,
+            targetCharacterId: 'wren',
+          }),
+      [bookDir, otherDir],
+    );
   });
 });
 
@@ -259,5 +292,46 @@ describe('R55: a write that leaves the id set and the identity history alone sta
     } finally {
       await job.finish();
     }
+  });
+});
+
+describe('#4564: the library cast override is refused while either of its books analyses', () => {
+  const send = () =>
+    request(app)
+      .post('/api/library-cast/override')
+      .set('Content-Type', 'application/json')
+      .send({
+        sourceBookId: bookId,
+        sourceCharacterId: 'wren',
+        targetBookId: otherBookId,
+        targetCharacterId: 'wren',
+      });
+
+  it.each([
+    ['source', () => bookId],
+    ['target', () => otherBookId],
+  ])('answers 409 book_busy while the %s book analyses, and writes neither book', async (_n, busyId) => {
+    const before = [snapshot(bookDir), snapshot(otherDir)];
+    const job = await holdAnalysis(busyId());
+    try {
+      const res = await send();
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      /* The body names the book that refused, so a client can name the right book. */
+      expect(res.body.bookId).toBe(busyId());
+      expect(Object.keys(res.body).sort()).toEqual(['bookId', 'code', 'error']);
+      expect(res.body.error).toMatch(/read-only until the analysis finishes/);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect([snapshot(bookDir), snapshot(otherDir)]).toEqual(before);
+    } finally {
+      await job.finish();
+    }
+  });
+
+  it('control: once the job is released the same request goes through', async () => {
+    const job = await holdAnalysis();
+    await job.finish();
+    const res = await send();
+    expect(res.status).toBe(200);
   });
 });

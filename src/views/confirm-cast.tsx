@@ -11,6 +11,8 @@ import {
 } from '../components/primitives';
 import type { Character, Voice, CharColor } from '../lib/types';
 import { useAppSelector } from '../store';
+import { selectCastIdentityPaused, stageBookId } from '../store/book-busy-slice';
+import { librarySyncPausedReason, THIS_BOOK_FALLBACK_TITLE } from '../lib/library-sync-busy';
 import { engineForModelKey } from '../lib/tts-models';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { QwenStatusNotice } from '../components/qwen-status-notice';
@@ -79,6 +81,29 @@ export function ConfirmCastView({
   /* Same engine the cast view + profile drawer use — keeps the previewed
      prebuilt-voice label here matching what the user will actually hear. */
   const ttsEngine = useAppSelector((s) => engineForModelKey(s.ui.ttsModelKey));
+  /* #4564 — books an analysis holds right now (the stage's own book via its cast gate, any
+     other via the running snapshot): the server refuses a library sync that touches one.
+     A joined string so the selector stays referentially stable. */
+  const busyIds = useAppSelector((s) => {
+    const ids = new Set<string>();
+    const own = stageBookId(s);
+    if (own) ids.add(own);
+    for (const c of characters) if (c.matchedFrom?.bookId) ids.add(c.matchedFrom.bookId);
+    return [...ids]
+      .filter((id) => selectCastIdentityPaused(s, id))
+      .sort()
+      .join('|');
+  });
+  const ownBookId = useAppSelector((s) => stageBookId(s));
+  const syncBlockedReason = (c: Character): string | null => {
+    const busy = new Set(busyIds ? busyIds.split('|') : []);
+    const targetId = c.matchedFrom?.bookId;
+    if (targetId && busy.has(targetId))
+      return librarySyncPausedReason(c.matchedFrom?.bookTitle || targetId);
+    if (ownBookId && busy.has(ownBookId))
+      return librarySyncPausedReason(title || THIS_BOOK_FALLBACK_TITLE);
+    return null;
+  };
   const findVoice = (id?: string) => library.find((v) => v.id === id);
   const matchedCount = characters.filter((c) => c.matchedFrom).length;
   const generatedCount = characters.length - matchedCount;
@@ -102,8 +127,11 @@ export function ConfirmCastView({
   /* High-confidence rows count as "applied" once their decision is
      'match' (override is irrelevant — apply-all won't write it). Low-
      confidence rows still need override === true to be applied. */
-  const shouldAutoSync = (id: string) =>
-    (characterById.get(id)?.matchedFrom?.confidence ?? 0) < SYNC_AUTO_THRESHOLD;
+  const shouldAutoSync = (id: string) => {
+    const c = characterById.get(id);
+    /* A blocked row is never auto-ticked (#4564), so it counts as applied by its decision alone. */
+    return (c?.matchedFrom?.confidence ?? 0) < SYNC_AUTO_THRESHOLD && !(c && syncBlockedReason(c));
+  };
   const isApplied = (id: string) =>
     decisions[id] === 'match' && (shouldAutoSync(id) ? !!overrides[id] : true);
   const allApplied = eligibleIds.length > 0 && eligibleIds.every(isApplied);
@@ -161,6 +189,7 @@ export function ConfirmCastView({
         if (
           decisions[c.id] === 'match' &&
           overrides[c.id] &&
+          !syncBlockedReason(c) &&
           target?.bookId &&
           target.characterId
         ) {
@@ -229,6 +258,7 @@ export function ConfirmCastView({
           overrides={overrides}
           setOverrides={setOverrides}
           onOverrideLibrary={onOverrideLibrary}
+          syncBlockedReason={syncBlockedReason}
           onOpenProfile={onOpenProfile}
         />
 
@@ -280,6 +310,9 @@ interface CardProps {
       voice-match cache without the cross-book identifiers). */
   canOverrideLibrary: boolean;
   onToggleOverride: (v: boolean) => void;
+  /** #4564 — why the sync cannot run right now (an analysis holds the source or the matched
+      book), naming the busy book; null when it can. The checkbox is disabled while set. */
+  syncBlockedReason: string | null;
   /** Card-level click handler. Whole card is clickable; the DecisionTile
       column stops propagation so picking match/generate doesn't also pop
       the drawer. Mirrors the ready-stage Cast view's row click behavior. */
@@ -301,6 +334,7 @@ function CharacterList({
   overrides,
   setOverrides,
   onOverrideLibrary,
+  syncBlockedReason,
   onOpenProfile,
 }: {
   characters: Character[];
@@ -311,6 +345,7 @@ function CharacterList({
   overrides: Record<string, boolean>;
   setOverrides: (o: Record<string, boolean>) => void;
   onOverrideLibrary?: (args: OverrideArgs) => Promise<void>;
+  syncBlockedReason: (c: Character) => string | null;
   onOpenProfile: (id: string) => void;
 }) {
   const virtualEnabled = characters.length >= 40;
@@ -355,6 +390,7 @@ function CharacterList({
         !!onOverrideLibrary && !!c.matchedFrom?.bookId && !!c.matchedFrom?.characterId
       }
       onToggleOverride={(v) => setOverrides({ ...overrides, [c.id]: v })}
+      syncBlockedReason={syncBlockedReason(c)}
       onOpenProfile={() => onOpenProfile(c.id)}
     />
   );
@@ -407,6 +443,7 @@ function ConfirmCharacterCard({
   overrideLibrary,
   canOverrideLibrary,
   onToggleOverride,
+  syncBlockedReason,
   onOpenProfile,
 }: CardProps) {
   const matched = !!character.matchedFrom;
@@ -560,10 +597,12 @@ function ConfirmCharacterCard({
               }}
             >
               <Checkbox
-                checked={overrideLibrary}
+                checked={overrideLibrary && !syncBlockedReason}
                 onChange={onToggleOverride}
+                disabled={!!syncBlockedReason}
                 accent="peach"
                 aria-label={`Sync profile with ${character.matchedFrom?.bookTitle}`}
+                aria-describedby={syncBlockedReason ? `sync-blocked-${character.id}` : undefined}
               />
               <span>
                 Sync profile with{' '}
@@ -571,6 +610,14 @@ function ConfirmCharacterCard({
                   {character.matchedFrom?.bookTitle}
                 </span>
                 .
+                {syncBlockedReason && (
+                  <span
+                    id={`sync-blocked-${character.id}`}
+                    className="block font-semibold text-amber-900"
+                  >
+                    {syncBlockedReason}
+                  </span>
+                )}
                 <span className="text-ink/40">
                   {' '}
                   Description, attributes, and aliases get merged — both books inherit the richer
