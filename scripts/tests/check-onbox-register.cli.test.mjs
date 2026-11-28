@@ -119,12 +119,12 @@ test('#3529 pass 4 CLI: a retirement is honoured only for the closed PR whose co
     }
     const wrongPr = run('old', states('CLOSED', [other]));
     assert.equal(wrongPr.status, 1, wrongPr.stderr);
-    assert.match(wrongPr.stderr, new RegExp(`retired-carried-row: B103: .*#77.*${xCommit}`));
-    assert.ok(wrongPr.stderr.includes('unmerged-lane-row: B103:'), wrongPr.stderr);
+    assert.match(wrongPr.stderr, new RegExp(`retired-carried-row: B103: .*#77.*${xCommit}`)); // fixture ID: the real row B103 was removed from the register 2026-11-28 (#4883)
+    assert.ok(wrongPr.stderr.includes('unmerged-lane-row: B103:'), wrongPr.stderr); // fixture ID: the real row B103 was removed from the register 2026-11-28 (#4883)
     assert.ok(!/BEHIND what is already live/.test(wrongPr.stderr), wrongPr.stderr);
     const open = run('old', states('OPEN', [xCommit]));
     assert.equal(open.status, 1, open.stderr);
-    assert.match(open.stderr, /retired-carried-row: B103: .*#77.*OPEN/);
+    assert.match(open.stderr, /retired-carried-row: B103: .*#77.*OPEN/); // fixture ID: the real row B103 was removed from the register 2026-11-28 (#4883)
     const unavailable = run('old', 'unavailable');
     assert.equal(unavailable.status, 0, unavailable.stderr);
     assert.match(unavailable.stderr, /retired-row-warning: B103 .*#77/);
@@ -136,7 +136,7 @@ test('#3529 pass 4 CLI: a retirement is honoured only for the closed PR whose co
     // A commit this checkout lacks: fail closed, naming a plain fetch.
     const absent = run('old', states('CLOSED', ['5555555555555555555555555555555555555555']));
     assert.equal(absent.status, 1, absent.stderr);
-    assert.match(absent.stderr, /retired-carried-row: B103: .*#77.*run git fetch origin and re-run/);
+    assert.match(absent.stderr, /retired-carried-row: B103: .*#77.*run git fetch origin and re-run/); // fixture ID: the real row B103 was removed from the register 2026-11-28 (#4883)
     assert.ok(!/pull[/]\d+[/]head/.test(absent.stderr), absent.stderr);
   });
 });
@@ -610,27 +610,44 @@ for (const [label, cellRegex] of [
 
 
 test('#3587 review: legacy `—` rows on the live Blocked/Unconfirmed sections raise an advisory warning only when the register carries IDs', () => {
-  const run = (html, register = REAL_REGISTER_TEXT) =>
+  // The real Unconfirmed section can be empty (it is when nothing is merely suspected), so the test
+  // carries its own UNC row rather than relying on the real page having one.
+  const uncBlock = `    <details class="item">
+      <summary><span class="num">UNC901</span><span class="iname">synthetic unconfirmed row</span><span class="risk low">Probably exercised</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>body UNC901</p>
+      </div>
+    </details>`;
+  const LIVE_VIEW_HTML = REAL_LIVE_VIEW_HTML.replace(
+    /(<section\b[^>]*\bid="unconfirmed"[^>]*>[\s\S]*?)(\s*<\/section>)/,
+    (_m, head, tail) => `${head}\n${uncBlock}${tail}`,
+  );
+  assert.ok(LIVE_VIEW_HTML.includes('<span class="num">UNC901</span>'), 'the fixture page carries a UNC row');
+  const REGISTER_TEXT = REAL_REGISTER_TEXT
+    .replace(/^<!-- next-id: UNC\d+ -->$/m, '<!-- next-id: UNC902 -->\n\n- **UNC901 · synthetic unconfirmed row** (PR #1) — body UNC901.')
+    .replace(/(\| — \| \*\*Unconfirmed\*\*[^|]*\| )\d+( \|)/, '$11$2');
+  assert.ok(/^- \*\*UNC901 · /m.test(REGISTER_TEXT), 'the fixture register carries a UNC row');
+  const run = (html, register = REGISTER_TEXT) =>
     ofPrefix(
       checkLiveView(register, html, {
         direction: 'extraOnly',
         baselineText: register,
-        trackedLiveViewHtml: REAL_LIVE_VIEW_HTML,
+        trackedLiveViewHtml: LIVE_VIEW_HTML,
         publishedProvenance: UNMERGED,
       }),
       onbox.LEGACY_LIVE_ROW_WARNING_PREFIX,
     );
-  assert.deepEqual(run(REAL_LIVE_VIEW_HTML), [], 'the tracked page has IDs, so nothing to warn about');
-  const legacy = REAL_LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
-  assert.notEqual(legacy, REAL_LIVE_VIEW_HTML);
+  assert.deepEqual(run(LIVE_VIEW_HTML), [], 'the tracked page has IDs, so nothing to warn about');
+  const legacy = LIVE_VIEW_HTML.replace(/<span class="num">(?:BLK|UNC)\d+<\/span>/g, '<span class="num">—</span>');
+  assert.notEqual(legacy, LIVE_VIEW_HTML);
   const warnings = run(legacy);
   assert.equal(warnings.length, 2, JSON.stringify(warnings));
-  const countRows = (prefix) => (REAL_LIVE_VIEW_HTML.match(new RegExp(`<span class="num">${prefix}\\d+</span>`, 'g')) ?? []).length;
+  const countRows = (prefix) => (LIVE_VIEW_HTML.match(new RegExp(`<span class="num">${prefix}\\d+</span>`, 'g')) ?? []).length;
   const plural = (n) => `row${n === 1 ? '' : 's'}`;
   assert.match(warnings[0], new RegExp(`Blocked section has ${countRows('BLK')} legacy ${plural(countRows('BLK'))} with no BLK ID`));
   assert.match(warnings[1], new RegExp(`Unconfirmed section has ${countRows('UNC')} legacy ${plural(countRows('UNC'))} with no UNC ID`));
-  const idless = REAL_REGISTER_TEXT.replace(/^### BLK\d+ · /gm, '### ').replace(/^(- \*\*)UNC\d+ · /gm, '$1').replace(/^<!-- next-id: (?:BLK|UNC)\d+ -->\r?\n/gm, '');
-  assert.notEqual(idless, REAL_REGISTER_TEXT);
+  const idless = REGISTER_TEXT.replace(/^### BLK\d+ · /gm, '### ').replace(/^(- \*\*)UNC\d+ · /gm, '$1').replace(/^<!-- next-id: (?:BLK|UNC)\d+ -->\r?\n/gm, '');
+  assert.notEqual(idless, REGISTER_TEXT);
   assert.deepEqual(run(legacy, idless), [], 'a register with no BLK/UNC IDs is the pre-#3587 state: no warning');
 });
 

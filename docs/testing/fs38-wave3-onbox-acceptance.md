@@ -13,7 +13,7 @@
 > [`docs/features/271-fs38-wave3c-xtts.md`](../../271)
 > Spec: `docs/superpowers/specs/2026-07-25-fs38-wave3-clone-pipeline-design.md`
 > Umbrella: fs-38 · GitHub [#624](https://github.com/dudarenok-maker/Castwright/issues/624)
-> Register row: [A1](onbox-acceptance-register.md#group-a--the-gpu-box)
+> Register rows: [A1](onbox-acceptance-register.md#group-a--the-gpu-box), A31 (Russian XTTS quality, the `#2026` section below)
 
 ---
 
@@ -3292,7 +3292,7 @@ surface does that) is also gone.
 
 #### #1967 — additional acceptance criteria, on top of the nine E-tests above
 
-Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A18. Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
+Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and the on-box acceptance register stays accurate) — a narrower, separately-tracked set of criteria for the specific torchcodec/static-FFmpeg bug that blocked all nine E-tests on the first Wave 3 on-box run (2026-07-31), and its fix. Register row: `docs/testing/onbox-acceptance-register.md` A18 (removed from the register 2026-11-28 by owner ruling, #4883). Design: `docs/superpowers/specs/2026-07-31-xtts-clone-torchcodec-ffmpeg-design.md` §12.
 
 **Preconditions — the hot patch was REVERTED on 2026-07-31.** The 25 copied FFmpeg DLLs are gone from `site-packages/torchcodec/` and the box is a genuine static-FFmpeg box again (`ffmpeg 8.1.1-full_build-www.gyan.dev`). Reverting no longer costs you Section E: #1967 is merged, so the fix — not the hot patch — is what makes a derive work. **The revert is not "delete every non-hash-suffixed `*.dll`"**: `libtorchcodec_core4-8.dll` and `libtorchcodec_custom_ops4-8.dll` are torchcodec's own extensions and must stay. The copied set is exactly the non-hash-suffixed files that also have a hash-suffixed twin.
 
@@ -3303,7 +3303,7 @@ Not an E-10 (the "Section E, all 9" count elsewhere in this file, plan 271, and 
 
 4. **Pinokio's torchcodec outcome.** On a real Pinokio install, run `import torchcodec` inside the nested `.venv` `pinokio/install.js` provisions and record whether it succeeds or fails, either way — see the correction note on `docs/superpowers/specs/2026-06-15-pinokio-installer-design.md:83`. #1967's fix makes the answer moot for behaviour either way; this is a recorded fact, not a pass/fail gate.
 
-**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A18**; the mixed-engine `vram-spill` seen during item 1 is no longer its own register row (folded into A18's own text).
+**Result:** **items 1 and 3 → P** (2026-07-31) · **item 2 → partial** (decode equivalence measured at max difference 0.0; the audible half needs a shared-FFmpeg box) · **item 4 → owed** (needs a real Pinokio install).  **Notes:** items 1 and 3 are recorded in full on register row **A18** (removed from the register 2026-11-28 by owner ruling, #4883); the mixed-engine `vram-spill` seen during item 1 is no longer its own register row (folded into A18's own text).
 
 ---
 

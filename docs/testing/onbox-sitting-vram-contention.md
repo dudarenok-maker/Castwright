@@ -242,7 +242,7 @@ up.
    fields here.
    - Result: _(filled in `sidecar-evict-latency-onbox-acceptance.md` §5, not here)_
 
-### A19 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
+### A19 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9 — removed from the register 2026-11-28 by owner ruling, #4883
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:1321-1355`
 > (PR #1993's description + the C1/M3 review findings it quotes). Re-resolved:
