@@ -4,6 +4,7 @@ import { type CoverFraming } from '../lib/cover-framing';
 import { ExportAudiobookModal } from '../modals/export-audiobook';
 import { ShareLinkModal } from '../modals/share-link';
 import { parseDuration } from '../lib/time';
+import { isSkippedNoTextChapter } from '../lib/skipped-chapter';
 import { EXPORT_QUEUE } from '../data/export-queue';
 import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { useAppDispatch, useAppSelector, useAppSelectorShallow } from '../store';
@@ -145,6 +146,9 @@ export function ListenView({
      view is the place to revisit exclusion choices. */
   const listenable = chapters.filter((c) => !c.excluded);
   const completed = listenable.filter((c) => c.state === 'done').length;
+  /* #3507 — "Play from the start" passes over a skipped no-text chapter,
+     which is listed and counts as complete but has no audio. */
+  const firstToPlay = listenable.find((c) => !isSkippedNoTextChapter(c));
   const totalSec = listenable.reduce((s, c) => s + parseDuration(c.duration), 0);
   /* Narrator credit precedence: explicit override from bookMeta → DEFAULT_NARRATOR_CREDIT.
      Explicit user credits always win; when none is set the brand default is shown. */
@@ -175,8 +179,8 @@ export function ListenView({
         totalSec={totalSec}
         chapterCount={listenable.length}
         completedCount={completed}
-        hasListenable={listenable.length > 0}
-        firstListenableId={listenable.length > 0 ? listenable[0].id : null}
+        hasListenable={firstToPlay != null}
+        firstListenableId={firstToPlay?.id ?? null}
         bookCoverGradient={bookCoverGradient}
         effectiveCoverUrl={effectiveCoverUrl}
         effectiveFraming={effectiveFraming}

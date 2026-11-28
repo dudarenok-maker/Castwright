@@ -1877,6 +1877,89 @@ describe('Layout — auto-finish on reaching the final listenable chapter (Task 
   });
 });
 
+/* #3507 — a skipped no-text chapter has no audio, so the mini player's
+   previous / next (and auto-advance, which calls next) pass over it. */
+describe('Layout — mini player previous / next pass over a skipped no-text chapter (#3507)', () => {
+  beforeEach(() => {
+    HTMLMediaElement.prototype.load = vi.fn();
+    HTMLMediaElement.prototype.play = vi.fn().mockResolvedValue(undefined);
+    HTMLMediaElement.prototype.pause = vi.fn();
+  });
+
+  /* Real hydrate: a `noTextChapterIds` entry with no audio on disk becomes a
+     done + skippedNoText row. Every other chapter has audio. */
+  async function renderAtTrack(ids: number[], noTextChapterIds: number[], currentTrack: number) {
+    const slug = (id: number) => `0${id}-chapter-${id}`;
+    const base = bookStateFor('b1', null);
+    getBookStateMock.mockResolvedValue({
+      ...base,
+      state: {
+        ...base.state,
+        chapters: ids.map((id) => ({
+          id,
+          title: `Chapter ${id}`,
+          slug: slug(id),
+          duration: noTextChapterIds.includes(id) ? undefined : '10:00',
+        })),
+      },
+      completedSlugs: ids.filter((id) => !noTextChapterIds.includes(id)).map(slug),
+      analysis: { noTextChapterIds },
+    });
+    const store = makeStore();
+    store.dispatch(uiActions.openBook({ id: 'b1', status: 'cast_confirmed' }));
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/listen']}>
+          <Routes>
+            <Route path="/books/:bookId/listen" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await waitFor(() => expect(store.getState().chapters.chapters).toHaveLength(ids.length));
+    expect(
+      store
+        .getState()
+        .chapters.chapters.filter((c) => c.skippedNoText)
+        .map((c) => c.id),
+    ).toEqual(noTextChapterIds);
+    act(() => {
+      store.dispatch(uiActions.setCurrentTrack(currentTrack));
+    });
+    await screen.findByRole('button', { name: 'Next chapter' });
+    return store;
+  }
+
+  const next = () => screen.getByRole('button', { name: 'Next chapter' });
+  const previous = () => screen.getByRole('button', { name: 'Previous chapter' });
+
+  it('(d) next from chapter 1 goes to chapter 3, and previous goes back to 1', async () => {
+    const store = await renderAtTrack([1, 2, 3], [2], 1);
+
+    fireEvent.click(next());
+    expect(store.getState().ui.currentTrack).toBe(3);
+
+    fireEvent.click(previous());
+    expect(store.getState().ui.currentTrack).toBe(1);
+  });
+
+  it('(e) next is unavailable when only a skipped chapter follows', async () => {
+    const store = await renderAtTrack([1, 2, 3], [3], 2);
+
+    expect(next()).toBeDisabled();
+    expect(previous()).toBeEnabled();
+    fireEvent.click(next());
+    expect(store.getState().ui.currentTrack).toBe(2);
+  });
+
+  it('previous is unavailable when only a skipped chapter precedes', async () => {
+    await renderAtTrack([1, 2, 3], [1], 2);
+
+    expect(previous()).toBeDisabled();
+    expect(next()).toBeEnabled();
+  });
+});
+
 /* fe-47 — the tier modal's 1.7B guard used to carry its OWN inline
    "has a designed voice" check (`hasDesignedVoice`/`eligibleQwenMembers` in
    layout.tsx), a third parallel definition alongside the cast view's

@@ -107,6 +107,7 @@ function renderView(
     currentTrack?: number | null;
     coverImageUrl?: string | null;
     coverFraming?: { offsetX: number; offsetY: number; zoom: number };
+    chapters?: Chapter[];
   } = {},
 ) {
   const handlers = baseHandlers();
@@ -114,7 +115,7 @@ function renderView(
     <Provider store={makeStore()}>
       <ListenView
         bookId="demo__sa__test"
-        chapters={chapters}
+        chapters={overrides.chapters ?? chapters}
         characters={characters}
         library={voices}
         currentTrack={overrides.currentTrack ?? null}
@@ -722,6 +723,39 @@ describe('ListenView — export-queue per-row actions (plan 18a)', () => {
     fireEvent.click(screen.getByTitle('Remove'));
 
     expect(store.getState().exports.byBookId['demo__sa__test']).toHaveLength(0);
+  });
+});
+
+describe('ListenView — "Play from the start" vs. a skipped no-text chapter (#3507)', () => {
+  const skipped = (id: number): Chapter => ({
+    ...chapters[0],
+    id,
+    title: `Ornament ${id}`,
+    duration: '00:00',
+    skippedNoText: true,
+  });
+  const playFromStart = () => screen.getByRole('button', { name: /Play from the start/ });
+
+  it('(c) starts at the first chapter that has audio, past a leading skipped one', () => {
+    const h = renderView({ chapters: [skipped(1), { ...chapters[1], id: 2 }] });
+    fireEvent.click(playFromStart());
+    expect(h.setCurrentTrack).toHaveBeenCalledTimes(1);
+    expect(h.setCurrentTrack).toHaveBeenCalledWith(2);
+  });
+
+  it('passes over both an excluded and a skipped chapter', () => {
+    const h = renderView({
+      chapters: [{ ...chapters[0], id: 1, excluded: true }, skipped(2), { ...chapters[1], id: 3 }],
+    });
+    fireEvent.click(playFromStart());
+    expect(h.setCurrentTrack).toHaveBeenCalledWith(3);
+  });
+
+  it('is disabled when every included chapter was skipped', () => {
+    const h = renderView({ chapters: [skipped(1), skipped(2)] });
+    expect(playFromStart()).toBeDisabled();
+    fireEvent.click(playFromStart());
+    expect(h.setCurrentTrack).not.toHaveBeenCalled();
   });
 });
 

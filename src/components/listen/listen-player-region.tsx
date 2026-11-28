@@ -26,6 +26,7 @@ import { Waveform } from '../waveform';
 import { api } from '../../lib/api';
 import { parseDuration, formatTime } from '../../lib/time';
 import { stripChapterPrefix } from '../../lib/format-chapter-title';
+import { isSkippedNoTextChapter } from '../../lib/skipped-chapter';
 import { useAppDispatch, useAppSelector } from '../../store';
 import { RESTRUCTURING_REASON, selectBookEditsLocked } from '../../store/restructure-lock';
 import {
@@ -248,7 +249,7 @@ function peaksCacheKey(bookId: string, chapter: Chapter): string {
    Returns null while loading, on error, or for chapters with no rendered audio
    — in which case <Waveform> falls back to its seeded bars. */
 function useChapterPeaks(bookId: string, chapter: Chapter): number[] | null {
-  const hasAudio = chapter.state === 'done';
+  const hasAudio = chapter.state === 'done' && !isSkippedNoTextChapter(chapter);
   const key = peaksCacheKey(bookId, chapter);
   const [peaks, setPeaks] = useState<number[] | null>(() =>
     hasAudio ? peaksCache.get(key) ?? null : null,
@@ -328,10 +329,14 @@ function ChapterListenRow({
      "0:00" duration and no file. Gate the Play + Share affordances on
      this so the row reads as inert until generation lands, and surface
      the state instead of a misleading "0:00". Regenerate stays active —
-     on a non-done chapter it can kick off (or retry) generation. */
-  const hasAudio = chapter.state === 'done';
-  const statusLabel =
-    chapter.state === 'in_progress'
+     on a non-done chapter it can kick off (or retry) generation.
+     #3507 — a skipped no-text chapter is `done` with no file either, and
+     has nothing to record, so it gets no Regenerate. */
+  const skipped = isSkippedNoTextChapter(chapter);
+  const hasAudio = chapter.state === 'done' && !skipped;
+  const statusLabel = skipped
+    ? 'No text to narrate'
+    : chapter.state === 'in_progress'
       ? 'Generating…'
       : chapter.state === 'failed'
         ? 'Failed'
@@ -354,11 +359,13 @@ function ChapterListenRow({
             onClick={onPlay}
             disabled={!hasAudio}
             aria-label={
-              !hasAudio
-                ? `Chapter ${chapter.id} not yet generated`
-                : isPlaying
-                  ? `Pause chapter ${chapter.id}`
-                  : `Play chapter ${chapter.id}`
+              skipped
+                ? `Chapter ${chapter.id} has no audio to play`
+                : !hasAudio
+                  ? `Chapter ${chapter.id} not yet generated`
+                  : isPlaying
+                    ? `Pause chapter ${chapter.id}`
+                    : `Play chapter ${chapter.id}`
             }
             {...(isFirstListenable ? { 'data-tour-id': 'chapter-1-play' } : {})}
             className={`shrink-0 w-9 h-9 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full grid place-items-center transition-all ${
@@ -482,22 +489,32 @@ function ChapterListenRow({
             >
               <IconPencil className="w-4 h-4" />
             </button>
-            <button
-              onClick={() => onRegenerate(chapter)}
-              title="Regenerate"
-              aria-label={`Regenerate chapter ${chapter.id}`}
-              className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4"
-            >
-              <IconRefresh className="w-4 h-4" />
-            </button>
+            {!skipped && (
+              <button
+                onClick={() => onRegenerate(chapter)}
+                title="Regenerate"
+                aria-label={`Regenerate chapter ${chapter.id}`}
+                className="text-ink/40 hover:text-magenta grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full hover:bg-ink/4"
+              >
+                <IconRefresh className="w-4 h-4" />
+              </button>
+            )}
             <button
               onClick={onShareClip}
               disabled={!hasAudio}
-              title={hasAudio ? 'Share a 30-second clip' : 'No audio to share yet'}
+              title={
+                skipped
+                  ? 'No text to narrate'
+                  : hasAudio
+                    ? 'Share a 30-second clip'
+                    : 'No audio to share yet'
+              }
               aria-label={
-                hasAudio
-                  ? `Share clip of chapter ${chapter.id}`
-                  : `Chapter ${chapter.id} has no audio to share yet`
+                skipped
+                  ? `Chapter ${chapter.id} has no audio to share`
+                  : hasAudio
+                    ? `Share clip of chapter ${chapter.id}`
+                    : `Chapter ${chapter.id} has no audio to share yet`
               }
               data-testid={`chapter-row-${chapter.id}-share-clip`}
               className={`grid place-items-center w-8 h-8 min-h-[44px] min-w-[44px] fine-pointer:min-h-0 fine-pointer:min-w-0 rounded-full ${

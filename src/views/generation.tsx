@@ -162,6 +162,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import { deriveIssues } from '../lib/chapter-issues';
 import { Waveform } from '../components/waveform';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
+import { isSkippedNoTextChapter } from '../lib/skipped-chapter';
 import {
   isChapterStaleFromReassign,
   isChapterReassignedSinceRender,
@@ -2227,7 +2228,7 @@ function ChapterRow({
   const actionRowShown = chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason);
   /* #3507 — the flag is set by a skip; a later run that moves the row off
      `done` shows the normal controls again. */
-  const skipped = chapter.state === 'done' && chapter.skippedNoText === true;
+  const skipped = isSkippedNoTextChapter(chapter);
 
   const assembling = chapter.phase === 'assembling';
   const verifying = chapter.phase === 'verifying';
@@ -2804,7 +2805,7 @@ function ChapterRow({
                       'Queued'
                     )}
                   </span>
-                  {status !== 'skipped' && (
+                  {status !== 'skipped' && !skipped && (
                     /* Hover-reveal is mouse-only. Gate the hide on `fine-pointer:`
                        (mice) rather than the `sm:` width breakpoint: `fine-pointer`
                        and `coarse-pointer` are mutually-exclusive media queries, so
@@ -2859,7 +2860,7 @@ function ChapterRow({
                 </span>
               </div>
             )}
-          {chapter.state === 'done' && (
+          {chapter.state === 'done' && !skipped && (
             <ChapterSegmentStrip chapter={chapter} bookId={bookId} characters={characters} />
           )}
         </div>

@@ -62,7 +62,8 @@ import {
   buildNameChangeEvent,
 } from '../lib/change-log';
 import { api, ApiError, type SeriesRosterEntry } from '../lib/api';
-import type { Character, BookExportJob, Revision } from '../lib/types';
+import type { Chapter, Character, BookExportJob, Revision } from '../lib/types';
+import { isSkippedNoTextChapter } from '../lib/skipped-chapter';
 import { engineForModelKey } from '../lib/tts-models';
 import { computeOverallProgress } from '../lib/analysis-progress';
 import { renderedChaptersForCharacter } from '../lib/stale-chapters';
@@ -519,8 +520,14 @@ export function Layout() {
   const trackChapter =
     ui.currentTrack != null ? (chapters.find((c) => c.id === ui.currentTrack) ?? null) : null;
   const trackIdx = trackChapter ? chapters.indexOf(trackChapter) : -1;
-  const prevTrackAvailable = trackIdx > 0;
-  const nextTrackAvailable = trackIdx >= 0 && trackIdx < chapters.length - 1;
+  /* #3507 — previous / next (and so auto-advance) go to the nearest chapter
+     in that direction that was not skipped for having no text: it has no
+     audio, so the player would error on it and never reach its end. */
+  const hasTrackAudio = (c: Chapter) => !isSkippedNoTextChapter(c);
+  const prevTrack =
+    trackIdx >= 0 ? chapters.slice(0, trackIdx).reverse().find(hasTrackAudio) : undefined;
+  const nextTrack =
+    trackIdx >= 0 ? chapters.slice(trackIdx + 1).find(hasTrackAudio) : undefined;
   /* fs-15 / Task 4 — final listenable chapter for auto-finish.
      "Final listenable" = the LAST chapter satisfying
        !c.excluded && c.state === 'done' && parseDuration(c.duration) > 0.
@@ -2422,14 +2429,10 @@ export function Layout() {
           bookId={bookId}
           autoSeekToIssues={view === 'generate'}
           onClose={() => dispatch(uiActions.setCurrentTrack(null))}
-          onPrev={() =>
-            prevTrackAvailable && dispatch(uiActions.setCurrentTrack(chapters[trackIdx - 1].id))
-          }
-          onNext={() =>
-            nextTrackAvailable && dispatch(uiActions.setCurrentTrack(chapters[trackIdx + 1].id))
-          }
-          prevAvailable={prevTrackAvailable}
-          nextAvailable={nextTrackAvailable}
+          onPrev={() => prevTrack && dispatch(uiActions.setCurrentTrack(prevTrack.id))}
+          onNext={() => nextTrack && dispatch(uiActions.setCurrentTrack(nextTrack.id))}
+          prevAvailable={prevTrack != null}
+          nextAvailable={nextTrack != null}
           /* fs-15 / Task 4 — auto-finish: only fire when the currently-loaded
              chapter IS the final listenable chapter so mid-book chapter ends
              don't incorrectly mark the book finished. */

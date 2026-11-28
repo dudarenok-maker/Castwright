@@ -10,7 +10,7 @@
    post-filter measurements, so rendering them as ground truth would
    mislead the user. */
 
-import { describe, it, expect, vi } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach, type MockInstance } from 'vitest';
 import { render, screen, within, fireEvent, act } from '@testing-library/react';
 import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
@@ -19,6 +19,7 @@ import { listenProgressSlice, listenProgressActions } from '../../store/listen-p
 import { qaRepairSlice, qaRepairActions } from '../../store/qa-repair-slice';
 import { uiSlice, uiActions } from '../../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../../store/restructure-lock';
+import { api } from '../../lib/api';
 import type { Chapter, ChapterLoudness } from '../../lib/types';
 
 function makeStore() {
@@ -389,6 +390,62 @@ describe('ListenPlayerRegion — markers panel re-record entry (fs-26)', () => {
     fireEvent.click(fixBtn);
     expect(onFixLine).toHaveBeenCalledTimes(1);
     expect(onFixLine.mock.calls[0][0]).toMatchObject({ id: 'm1', chapterId: 1, sec: 42 });
+  });
+});
+
+/* #3507 — an included chapter with no narratable text is `done` with
+   `skippedNoText`: it counts as complete but has no audio to play, share,
+   draw or re-record. */
+describe('ListenPlayerRegion — skipped no-text chapter (#3507)', () => {
+  const skipped = (id: number) => makeChapter(id, { skippedNoText: true, duration: '00:00' });
+
+  /* Never resolves: only the calls are asserted, and a resolved envelope
+     would land in the module-level peaks cache. */
+  let getChapterAudio: MockInstance<typeof api.getChapterAudio>;
+  beforeEach(() => {
+    getChapterAudio = vi
+      .spyOn(api, 'getChapterAudio')
+      .mockImplementation(() => new Promise(() => {}));
+  });
+  afterEach(() => getChapterAudio.mockRestore());
+  const fetchedIds = () => getChapterAudio.mock.calls.map(([args]) => args.chapterId);
+
+  it('(a) disables Play and Share, fetches no waveform and offers no Regenerate', () => {
+    renderRegion([skipped(1), makeChapter(2)]);
+    const row = within(screen.getByTestId('chapter-row-1'));
+
+    expect(row.getByRole('button', { name: 'Chapter 1 has no audio to play' })).toBeDisabled();
+    const share = row.getByTestId('chapter-row-1-share-clip');
+    expect(share).toBeDisabled();
+    expect(share).toHaveAccessibleName('Chapter 1 has no audio to share');
+    expect(share).toHaveAttribute('title', 'No text to narrate');
+    expect(row.queryByRole('button', { name: 'Regenerate chapter 1' })).toBeNull();
+    expect(row.getByText('No text to narrate')).toBeInTheDocument();
+    expect(row.queryByText('00:00')).toBeNull();
+    expect(row.getByRole('button', { name: 'Rename chapter 1' })).toBeEnabled();
+    expect(fetchedIds()).toEqual([2]);
+  });
+
+  it('(b) leaves a done chapter with audio unchanged', () => {
+    renderRegion([skipped(1), makeChapter(2)]);
+    const row = within(screen.getByTestId('chapter-row-2'));
+
+    expect(row.getByRole('button', { name: 'Play chapter 2' })).toBeEnabled();
+    expect(row.getByTestId('chapter-row-2-share-clip')).toBeEnabled();
+    expect(row.getByRole('button', { name: 'Regenerate chapter 2' })).toBeEnabled();
+    expect(row.getByText('10:00')).toBeInTheDocument();
+    expect(row.queryByText('No text to narrate')).toBeNull();
+    expect(fetchedIds()).toContain(2);
+  });
+
+  it('ignores a leftover flag on a row that has moved off done', () => {
+    renderRegion([makeChapter(1, { state: 'queued', skippedNoText: true })]);
+    const row = within(screen.getByTestId('chapter-row-1'));
+
+    expect(row.getByText('Queued')).toBeInTheDocument();
+    expect(row.getByRole('button', { name: 'Chapter 1 not yet generated' })).toBeDisabled();
+    expect(row.getByRole('button', { name: 'Regenerate chapter 1' })).toBeEnabled();
+    expect(row.queryByText('No text to narrate')).toBeNull();
   });
 });
 

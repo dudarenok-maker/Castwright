@@ -5780,6 +5780,27 @@ describe('GenerationView — skipped no-text chapter (#3507)', () => {
     }
   });
 
+  it('(f) expands the skipped row with no per-character Regenerate and no audio fetch', () => {
+    renderBookWithSkippedChapter();
+    fireEvent.click(row(2).getByText('Chapter 2'));
+    /* The expanded body is mounted: the cast is still listed. */
+    expect(row(2).getByText('Marlow')).toBeInTheDocument();
+    expect(
+      row(2).queryByRole('button', { name: /Regenerate .+ in this chapter/ }),
+    ).not.toBeInTheDocument();
+    expect(api.getChapterAudio).not.toHaveBeenCalled();
+    expect(row(2).getByRole('button', { name: /^Exclude$/ })).toBeEnabled();
+    expect(row(2).getByRole('button', { name: 'Rename chapter 2' })).toBeEnabled();
+    expect(row(2).getByTestId('chapter-row-2-reanalyse')).toBeEnabled();
+
+    /* A done chapter with audio keeps both. */
+    fireEvent.click(row(1).getByText('Chapter 1'));
+    expect(
+      row(1).getByRole('button', { name: 'Regenerate Marlow in this chapter' }),
+    ).toBeInTheDocument();
+    expect(api.getChapterAudio).toHaveBeenCalledWith(expect.objectContaining({ chapterId: 1 }));
+  });
+
   it('shows no stale, engine-drift or Suspect caption on the skipped row', () => {
     renderBookWithSkippedChapter();
     expect(row(1).getByText(/Sentences reassigned/)).toBeInTheDocument();
