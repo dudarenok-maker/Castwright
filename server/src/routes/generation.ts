@@ -1326,7 +1326,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      fallback taken into account (`computeRunQwenNeeds`). A tier only a finished
      chapter, a silent cast member or a Kokoro-fallback character used is NOT
      kept, so a stray same-tier base can be evicted. A run that needs no tier
-     does not reconcile at all (D3).
+     does not reconcile at all (D3). On a non-English book each stamped pending
+     entry is evaluated at its own engine, and an unknown one (unstamped, or
+     stamped with an ineligible engine) keeps the full cast's tiers, whoever
+     speaks (#4587).
 
      Read for BOTH the run-start VRAM reconcile and `usesQuality17` (the render
      lease). The post-score reconcile passes this as `keep` too, but re-reads the

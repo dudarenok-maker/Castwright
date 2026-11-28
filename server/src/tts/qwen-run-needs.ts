@@ -6,14 +6,16 @@
    A target chapter is evaluated at the REQUEST's Qwen key (the POST's own queue entry,
    by id, is never consulted for it; its other pending entries are); a pending non-target chapter is evaluated
    at its entry's stamped `modelKey` (engine and Qwen tier), or at the request's
-   engine and key when unstamped (§2.6, D8); several pending entries of one chapter
-   each count. `done` / `failed` entries, other books' entries and chapters that
-   are neither a target nor pending contribute nothing; a pending chapter with
-   no cached sentences contributes nothing.
+   engine and key when unstamped (§2.6, D8; not under `nonEnglish`, below); several
+   pending entries of one chapter each count. `done` / `failed` entries, other books'
+   entries and chapters that are neither a target nor pending contribute nothing; a
+   pending chapter with no cached sentences contributes nothing (unless its entry is
+   unknown, below).
 
    With `nonEnglish` supplied (#4587), a pending entry's POST re-forces the cast at its own engine,
    so an entry stamped with an eligible engine is evaluated at that engine with the cast forced for
-   it; an unstamped or non-eligible-stamped entry is unknown and ORs the full-cast keep in.
+   it; an unstamped or non-eligible-stamped entry is unknown and ORs the full-cast keep in, with
+   or without cached sentences.
 
    PURE: the caller reads the queue file and the analysis cache. Reused by the
    same-book job union (#4557) and the post-score path (#4560). */

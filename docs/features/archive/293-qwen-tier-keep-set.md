@@ -158,9 +158,10 @@ the generation path falls back to when a term is unknown (§2.2).
 New pure module `tts/qwen-tier-needs.ts`. No fs, no network, no `await`.
 
 Inputs: `sentences`, `cast` (hydrated, and after the non-English engine
-forcing at `routes/generation.ts:945-954`), `castIdHistory`, `defaultEngine`,
-`runQwenModelKey` (the run key canonicalised to Qwen), `qwenUnavailable`,
-`includesTitleBeat`.
+forcing at `routes/generation.ts:945-954`; for a stamped pending entry on a
+non-English book, forced at that entry's engine, §3.5), `castIdHistory`,
+`defaultEngine`, `runQwenModelKey` (the run key canonicalised to Qwen),
+`qwenUnavailable`, `includesTitleBeat`.
 
 Output: `{ keep06: boolean; keep17: boolean }`.
 
@@ -207,10 +208,14 @@ runNeeds = OR over P of chapterQwenTierNeeds(analysis.chapters[id], …,
 - A target chapter is evaluated at the request's model key. The POST's own
   queue entry is never consulted for it.
 - A pending entry is evaluated at its stamped `modelKey`, or at the
-  request's key when it has none (§2.6).
+  request's key when it has none (§2.6). On a non-English book, a stamped
+  entry is evaluated with the cast forced at its engine, and an unstamped one
+  (or one stamped with an engine the language cannot use) is unknown (§3.5,
+  #4587).
 - `done` and `failed` entries, other books' entries, and chapters that are
   neither a target nor queued contribute nothing (constraint 2).
-- A pending chapter with no cached sentences contributes nothing (`:1540`).
+- A pending chapter with no cached sentences contributes nothing (`:1540`),
+  unless its entry is unknown on a non-English book (§3.5).
 
 `runNeeds` is stored on the job as `RunningJob.tierNeeds`. The job also keeps
 a closure that recomputes `runNeeds` from a fresh queue read, for §2.7.
@@ -300,6 +305,9 @@ It is not treated as unknown, and it does not force the full-cast fall-back.
 The request's key is the best available estimate: it came from the same
 dispatcher, and for an unstamped entry the dispatcher will send its session
 model, which is what an unstamped current entry also sent.
+(This section's rule is for an English book. On a non-English one an unstamped
+entry is unknown and takes the full-cast fall-back: owner decision 2026-11-28,
+#4587, §3.5.)
 
 - *When the estimate is wrong:* the current entry carried an override (a
   regenerate at a chosen tier) while the unstamped pending one will run at
@@ -452,21 +460,32 @@ the tier this run is about to keep.
   a designed or cloned Qwen voice", is true of nearly every Qwen book and
   would pin `keep06` permanently. The re-derive fires once per missing
   artifact, then the artifact exists. On-box row (c) records it (§5.8).
-- **The non-English engine forcing is applied once, at the request's engine
-  (accepted, pre-existing).** `generation.ts` forces each character's
-  `ttsEngine` with the POST's engine (`resolveClonedRetargetEngine`), and
-  `computeRunQwenNeeds` reuses that forced cast for every pending entry. A
-  character cloned on both Qwen and Coqui keeps the request's engine there, so
-  under a Coqui request a Qwen-stamped pending chapter whose speakers are all
-  such characters predicts no Qwen tier, while that chapter's own POST retargets
-  them to Qwen. `main`'s full-cast keep reads the same forced cast and evicts
-  the same tier, so this is not a regression; each hit costs one reload. Not
-  fixed: re-forcing the cast per stamp engine means passing the book's eligible
-  engines into the helper and choosing what a Kokoro or unstamped entry
-  retargets to, which is a behaviour choice, not a one-line change.
+- **The non-English engine forcing is re-applied per stamped pending entry
+  (owner decision 2026-11-28, option (c), #4587).** `generation.ts` forces each
+  character's `ttsEngine` with the POST's engine (`nonEnglishEngineFor`), and
+  that forced cast still serves the targets. A pending entry renders on its own
+  POST, which forces the cast at its own engine, so on a non-English book
+  `computeRunQwenNeeds` (input `nonEnglish`) evaluates an entry stamped with an
+  eligible engine at that engine, with the cast forced for it from each
+  character's original `ttsEngine` (a designed voice cleared for a language
+  mismatch stays cleared). Under a Coqui request, a Qwen-stamped pending chapter
+  spoken by characters cloned on both Qwen and Coqui therefore keeps their Qwen
+  tier. An unstamped entry, or one stamped with an engine the book's language
+  cannot use (Kokoro), is **unknown**: the full-cast fall-back applies, even
+  when its chapter has no cached sentences. Both needs reads, at run start and
+  post-score (§2.7), pass the input; an English book passes none.
+  *What is left:* the full-cast fall-back is `computeUsedQwenTiers` over the cast
+  as forced at the **request's** engine. Under a Coqui request, a character
+  cloned on both with no eligible engine of their own still reads as Coqui
+  there, while an unknown entry's own POST may retarget them to Qwen, so that
+  case can still cost one reload. A parked unknown entry also holds the full
+  cast's tiers for as long as it stays parked.
+  *2026-11-28 (#4587): replaces the accepted residual that applied the forcing
+  once, at the request's engine.*
 - **The inter-chapter gap.** Another book's reconcile in the gap evicts this
   book's tier. One reload per hit. D2 (accepted).
-- **An unstamped pending entry's tier is an estimate** (§2.6).
+- **On an English book, an unstamped pending entry's tier is an estimate**
+  (§2.6). On a non-English one it is unknown (above).
 - **Other books' score passes** are skipped around, never unioned.
 - **Third evictors are untouched** (§8).
 
@@ -838,7 +857,7 @@ Recorded; not reopened.
   enqueuing browser decides the tier.
 - **D8. Decided 2026-11-20: accepted as recommended.** An unstamped pending entry
   is evaluated at the request's model key (section 2.6); an occasional wrong
-  estimate costs one reload.
+  estimate costs one reload. (English books only since #4587: section 3.5.)
 
 ## Ship notes
 
