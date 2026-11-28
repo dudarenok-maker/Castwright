@@ -11,6 +11,7 @@ import { enqueueQueueEntries } from './queue-thunks';
 import { buildCharacterRegenEvent } from '../lib/change-log';
 import { REVISION_COPY, activeBookId } from './revisions-thunks';
 import { selectHoldsBook } from './open-book';
+import { selectHoldsChapterRows } from './loaded-book-slice';
 
 const rand = () => Math.random().toString(36).slice(2, 8);
 
@@ -47,7 +48,7 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
        When the slices hold another book nothing here can tell: only the
        Generate toggle drops the id from the preview then, so the fan-out may
        still name an excluded chapter (the server skips it). */
-    const excludedIds = state.chapters.currentBookId === preview.bookId
+    const excludedIds = selectHoldsChapterRows(state, preview.bookId)
       ? new Set(state.chapters.chapters.filter((c) => c.excluded).map((c) => c.id))
       : new Set<number>();
     const remainingChapterIds = preview.remainingChapterIds.filter((id) => !excludedIds.has(id));

@@ -54,10 +54,12 @@ import { uiActions, type UiState } from './ui-slice';
 import type { AppDispatch, RootState } from './index';
 import type { StreamRunner } from './generation-stream-runner';
 import type { Chapter } from '../lib/types';
+import { selectHoldsChapterRows, type LoadedBookState } from './loaded-book-slice';
 
 interface DispatcherRootState {
   ui: UiState;
   chapters: ChaptersState;
+  loadedBook?: LoadedBookState;
   queue: QueueState;
   /* Optional so lean test stores without the account slice still work; the
      worker count falls back to the default (2). */
@@ -172,7 +174,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
                streak below, so a race with an analysis can never pause the queue for every book. */
             const bookBusy = failure.errorCode === 'book-busy';
             if (bookBusy) {
-              if (priorRow && (storeApi.getState() as DispatcherRootState).chapters.currentBookId === bookId) {
+              if (priorRow && selectHoldsChapterRows(storeApi.getState() as DispatcherRootState, bookId)) {
                 dispatch(chaptersActions.restoreChapterRow(priorRow));
               }
               busyHoldUntil.set(bookId, Date.now() + BOOK_BUSY_HOLD_MS);
@@ -315,7 +317,7 @@ export function queueDispatcherMiddleware(getRunner: () => StreamRunner): Middle
            docs/features/archive/114-profile-regen-preview.md), so a tolerated-but-
            unused `scope:'character'` on an old .queue.json row maps to the
            same chapter regen. */
-        if (chapters.currentBookId === e.bookId) {
+        if (selectHoldsChapterRows(state, e.bookId)) {
           const prior = chapters.chapters.find((c) => c.id === e.chapterId);
           if (prior) priorRows.set(e.id, { row: prior, lastError: chapters.lastError });
           dispatch(chaptersActions.regenerateChapterIds({ chapterIds: [e.chapterId] }));

@@ -4,6 +4,7 @@ import { spliceActions, type SpliceBatchRequest } from './splice-slice';
 import { refetchActiveRevisions } from './revisions-thunks';
 import { chaptersActions } from './chapters-slice';
 import { notificationsActions } from './notifications-slice';
+import { selectHoldsChapterRows } from './loaded-book-slice';
 import type { AppDispatch } from './index';
 
 /* fs-26 — drives a per-character splice batch in the background: one splice SSE
@@ -109,12 +110,13 @@ async function runBatch(mw: MiddlewareAPI, req: SpliceBatchRequest): Promise<voi
             }
             const state = mw.getState();
             /* Refresh the Listen row: re-record changes duration, a gain remix
-               doesn't — the renderedAt stamp is what cache-busts the audio. Guarded on
-               `currentBookId`, matching qa-repair-runner-middleware: `chapters` is keyed by
-               bare `chapterId` alone (ids repeat 1..N across every book), so a splice that
-               finishes after the user has navigated to a DIFFERENT book would otherwise
-               stamp that other book's same-numbered chapter with this splice's duration. */
-            if (state.chapters.currentBookId === req.bookId) {
+               doesn't — the renderedAt stamp is what cache-busts the audio. Only while
+               the chapter rows are this book's (selectHoldsChapterRows), matching
+               qa-repair-runner-middleware: `chapters` is keyed by bare `chapterId` alone
+               (ids repeat 1..N across every book), so a splice that finishes after the
+               user has navigated to a DIFFERENT book would otherwise stamp that other
+               book's same-numbered chapter with this splice's duration. */
+            if (selectHoldsChapterRows(state, req.bookId)) {
               dispatch(
                 chaptersActions.markChapterAudioUpdated({
                   chapterId,

@@ -331,8 +331,8 @@ export const analysisSlice = createSlice({
        doesn't match our current activeStream's bookId, the snapshot is
        still applied verbatim — the snapshot's own bookId field becomes
        the slice's truth, mirroring how the same-tab `setActiveStream`
-       behaves. The middleware additionally guards on `currentBookId`
-       at the slice level (manuscript / chapters) so cross-bookId
+       behaves. Per-book chapter rows are guarded separately
+       (selectHoldsChapterRows, loaded-book-slice.ts) so cross-bookId
        contamination cannot leak into per-book per-chapter state. */
     applyExternalAnalysisSnapshot(state, action: PayloadAction<AnalysisStreamSnapshot | null>) {
       state.activeStream = action.payload;

@@ -65,6 +65,33 @@ export function selectHeldBookId(state: {
   return state.loadedBook?.loadedBookId ?? state.manuscript?.bookId ?? null;
 }
 
+/** The book whose chapter rows `chapters.chapters` are: the pair names it AND
+    the rows are set for it (`chapters.currentBookId`). `null` when they differ
+    or either names none.
+
+    Both are needed. The pair alone is not enough: a full read moves it with the
+    manuscript hydrate, before the chapters hydrate replaces the rows, and a
+    middleware runs between the two. The rows' record alone is not enough: an
+    upload, a re-parse or a manuscript replace clears the pair and leaves the old
+    rows and their record behind. Tolerates a partial store. */
+export function selectChapterRowsBookId(state: {
+  loadedBook?: { loadedBookId: string | null };
+  chapters?: { currentBookId: string | null };
+}): string | null {
+  const held = state.loadedBook?.loadedBookId ?? null;
+  return held !== null && state.chapters?.currentBookId === held ? held : null;
+}
+
+/** Are the chapter rows `bookId`'s (selectChapterRowsBookId)? Every reader and
+    writer of a row that knows its book asks this: chapter ids repeat across
+    books. Ask when the answer lands, never when the request is made. */
+export function selectHoldsChapterRows(
+  state: Parameters<typeof selectChapterRowsBookId>[0],
+  bookId: string,
+): boolean {
+  return selectChapterRowsBookId(state) === bookId;
+}
+
 /** Do the slices hold the book the stage names? `null` when it names none. */
 export function selectLoadedBookMatchesStage(state: {
   ui: { stage: Parameters<typeof stageNamesBook>[0] };

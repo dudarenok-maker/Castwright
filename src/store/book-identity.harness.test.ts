@@ -16,6 +16,14 @@
      (iv)  stage names B, a late result for B lands nowhere;
      (v)   stage names A, a late result for A lands.
 
+   A writer that reads or writes the chapter ROWS (`readsChapterRows`) has two
+   questions to ask: does the pair name the book, and are the rows set for it
+   (`chapters.currentBookId`). Two further runs set the two records apart, the
+   pair naming A and the rows set for B:
+
+     (vi)  a late result for B lands nowhere: the pair wins;
+     (vii) a late result for A lands nowhere either: the rows are not A's.
+
    Every fixture book shares its ids with the others (test/stage-slice-harness),
    so a write that ignores which book it was made for changes the held book.
 
@@ -42,6 +50,7 @@ import { Layout } from '../components/layout';
 import type { ProfileDrawer as RealProfileDrawer } from '../modals/profile-drawer';
 import { libraryActions } from './library-slice';
 import { castActions } from './cast-slice';
+import { chaptersActions } from './chapters-slice';
 import { CastView } from '../views/cast';
 import { LibraryView as VoicesView } from '../views/voices';
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
@@ -230,6 +239,8 @@ interface Row {
   lands: (h: H) => void;
   /** Why this writer writes nothing once the stage names another book. */
   dropsOffStage?: string;
+  /** It reads or writes the chapter rows, so (vi) and (vii) run too. */
+  readsChapterRows?: boolean;
 }
 
 const ready = (bookId: string, view: 'cast' | 'manuscript' | 'generate' | 'voices' = 'cast'): Stage =>
@@ -370,6 +381,7 @@ const thunkRows: Row[] = [
   },
   {
     writer: 'store/generation-stream-runner.ts progress ticks (chapters)',
+    readsChapterRows: true,
     stage: (b) => ready(b, 'generate'),
     start: async (h, book) => {
       type Open = { onTick: (ev: unknown) => void };
@@ -405,6 +417,7 @@ const thunkRows: Row[] = [
       queueActions.setSnapshot({ entries, paused: false, recycling: false } as never);
     return {
       writer: 'store/queue-dispatcher-middleware.ts restores a refused row (chapters)',
+      readsChapterRows: true,
       stage: (b: string) => ready(b, 'generate'),
       middleware: () => [queueDispatcherMiddleware(() => runner)],
       start: async (h: H, book: string) => {
@@ -422,8 +435,39 @@ const thunkRows: Row[] = [
       lands: (h: H) => expect(chapter(h, 1).state).toBe('done'),
     } satisfies Row;
   })(),
+  (() => {
+    /* The claim itself: a queued entry arriving for a book flips that book's
+       rendered row, so the snapshot is the late answer. */
+    const runner = {
+      open: () => {},
+      hasOpenStreamForChapter: () => false,
+      hasPendingLanguageGuard: () => false,
+      takeChapterAwaitingConfirm: () => false,
+      takeChapterFailure: () => null,
+    } as unknown as StreamRunner;
+    return {
+      writer: 'store/queue-dispatcher-middleware.ts flips the claimed row (chapters)',
+      readsChapterRows: true,
+      stage: (b: string) => ready(b, 'generate'),
+      middleware: () => [queueDispatcherMiddleware(() => runner)],
+      start: async (h: H, book: string) => () =>
+        frame(() =>
+          h.store.dispatch(
+            queueActions.setSnapshot({
+              entries: [
+                { id: `c-${book}`, bookId: book, chapterId: 1, scope: 'this', status: 'queued' },
+              ],
+              paused: false,
+              recycling: false,
+            } as never),
+          ),
+        ),
+      lands: (h: H) => expect(chapter(h, 1).state).not.toBe('done'),
+    } satisfies Row;
+  })(),
   {
     writer: 'store/queue-thunks.ts cancelQueueEntry holds the chapter (chapters)',
+    readsChapterRows: true,
     stage: (b) => ready(b, 'generate'),
     start: async (h, book) => {
       h.store.dispatch(
@@ -452,6 +496,7 @@ const thunkRows: Row[] = [
   },
   {
     writer: 'store/qa-repair-runner-middleware.ts repaired audio (chapters)',
+    readsChapterRows: true,
     stage: (b) => ready(b, 'generate'),
     middleware: () => [qaRepairRunnerMiddleware()],
     start: async (h, book) => {
@@ -466,6 +511,7 @@ const thunkRows: Row[] = [
   },
   {
     writer: 'store/splice-runner-middleware.ts spliced audio (chapters)',
+    readsChapterRows: true,
     stage: (b) => ready(b, 'generate'),
     middleware: () => [spliceRunnerMiddleware()],
     start: async (h, book) => {
@@ -1772,7 +1818,12 @@ function writerSuite(r: Row) {
   };
   /* Start the writer for `from`, then leave the slices holding A with the stage
      on `stageBook` before the late answer. */
-  async function lateResult(from: 'A' | 'B', stageBook: 'A' | 'B', manuscriptNames?: 'B') {
+  async function lateResult(
+    from: 'A' | 'B',
+    stageBook: 'A' | 'B',
+    manuscriptNames?: 'B',
+    rowsSetFor?: 'B',
+  ) {
     const h = open();
     show(h, from);
     const late = await r.start(h, from);
@@ -1780,6 +1831,7 @@ function writerSuite(r: Row) {
     act(() => {
       h.moveStage(stageOf(stageBook));
       if (manuscriptNames) h.nameInManuscript(manuscriptNames);
+      if (rowsSetFor) h.store.dispatch(chaptersActions.setCurrentBookId(rowsSetFor));
     });
     await flush();
     const before = h.snapshot();
@@ -1825,6 +1877,17 @@ function writerSuite(r: Row) {
     r.lands(h);
     expect(h.snapshot()).not.toEqual(before);
   });
+
+  if (r.readsChapterRows) {
+    it('(vi) the pair names A, the chapter rows are set for B: a late result for B lands nowhere', async () => {
+      const { h, before } = await lateResult('B', 'B', undefined, 'B');
+      h.expectUnchanged(before);
+    });
+    it('(vii) the pair names A, the chapter rows are set for B: a late result for A lands nowhere', async () => {
+      const { h, before } = await lateResult('A', 'A', undefined, 'B');
+      h.expectUnchanged(before);
+    });
+  }
 }
 
 for (const r of rows) describe(r.writer, { timeout: 20_000 }, () => writerSuite(r));

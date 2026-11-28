@@ -19,6 +19,7 @@ import { queueActions, type QueueEntry, type QueueScope } from './queue-slice';
 import type { TtsModelKey, ReviewRequest } from '../lib/types';
 import { notificationsActions } from './notifications-slice';
 import { chaptersActions } from './chapters-slice';
+import { selectHoldsChapterRows } from './loaded-book-slice';
 import { refuseIfEditsLocked } from './restructure-lock';
 import { mockQueueRequest } from '../mocks/mock-queue';
 import { api } from '../lib/api';
@@ -402,11 +403,10 @@ export function cancelQueueEntry(entryId: string, opts?: { force?: boolean }) {
       entry.chapterId != null &&
       !refuseIfEditsLocked(getState, dispatch, entry.bookId)
     ) {
-      const chaptersState = getState().chapters;
-      const ch =
-        chaptersState.currentBookId === entry.bookId
-          ? chaptersState.chapters.find((c) => c.id === entry.chapterId)
-          : undefined;
+      const state = getState();
+      const ch = selectHoldsChapterRows(state, entry.bookId)
+        ? state.chapters.chapters.find((c) => c.id === entry.chapterId)
+        : undefined;
       if (ch && ch.state === 'queued' && !ch.held) {
         dispatch(chaptersActions.setChapterHeld({ chapterId: entry.chapterId, held: true }));
         void api.setChapterHeld(entry.bookId, entry.chapterId, true).catch(() => {

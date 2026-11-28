@@ -25,6 +25,7 @@ import { notificationsSlice } from './notifications-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { persistenceMiddleware } from './persistence-middleware';
 import { spliceRunnerMiddleware } from './splice-runner-middleware';
+import { heldBook } from './loaded-book-slice.test-helpers';
 import type { Chapter } from '../lib/types';
 
 const CHAPTERS: Chapter[] = [
@@ -40,6 +41,7 @@ function makeStore(currentBookId = 'bk1') {
       revisions: revisionsSlice.reducer,
       notifications: notificationsSlice.reducer,
       ui: uiSlice.reducer,
+      loadedBook: heldBook(currentBookId),
     },
     preloadedState: {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },
@@ -85,6 +87,7 @@ function makeStoreWithRecorder(currentBookId = 'bk1') {
       revisions: revisionsSlice.reducer,
       notifications: notificationsSlice.reducer,
       ui: uiSlice.reducer,
+      loadedBook: heldBook(currentBookId),
     },
     preloadedState: {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },

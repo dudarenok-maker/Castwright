@@ -48,10 +48,12 @@ import type { QueueState } from './queue-slice';
 import { activeBookId, refetchActiveRevisions } from './revisions-thunks';
 import { selectActivePending, type RevisionsState } from './revisions-slice';
 import { notificationsActions } from './notifications-slice';
+import { selectHoldsChapterRows, type LoadedBookState } from './loaded-book-slice';
 
 interface StreamableRootState {
   ui: UiState;
   chapters: ChaptersState;
+  loadedBook: LoadedBookState;
   cast: CastState;
   /* The enqueue-on-work gate honours the same card rule the reverse-local-analyzer
      guard enforces (#3084: Ollama, or an endpoint on the TTS card): don't auto-start a
@@ -128,7 +130,7 @@ async function openPreview(
   const before = getState();
   /* A8 — only this book's chapter rows (the fire gate already waited for
      them; this guards the window after the refetch's await). */
-  const chapter = before.chapters.currentBookId === p.bookId ? before.chapters.chapters.find((c) => c.id === p.chapterId) : undefined;
+  const chapter = selectHoldsChapterRows(before, p.bookId) ? before.chapters.chapters.find((c) => c.id === p.chapterId) : undefined;
   const prev = chapter ? await api.getChapterAudioPrevious({ bookId: p.bookId, chapterId: p.chapterId, duration: chapter.duration }).catch(() => null) : null;
   const s = getState();
   const preview = s.ui.previewRegen;
@@ -195,8 +197,8 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
       const stage = after.ui.stage;
       if (stage.kind !== 'ready' || stage.view !== 'generate') return;
       const stageBookId = bookIdFromState(after);
-      const { chapters, currentBookId } = after.chapters;
-      if (!stageBookId || currentBookId !== stageBookId) return;
+      if (!stageBookId || !selectHoldsChapterRows(after, stageBookId)) return;
+      const { chapters } = after.chapters;
       if (after.queue?.paused) return;
 
       /* Reverse-local-analyzer guard: a live local analysis on this book needs
@@ -322,7 +324,7 @@ export function generationStreamMiddleware(getRunner: () => StreamRunner): Middl
         pv?.bookId === armedFor &&
         pv.completed !== undefined && // finished (OD27/OD28) — the ONLY completed test
         after.ui.openRevision === null && // never over a player the user has open
-        after.chapters.currentBookId === armedFor // this book's chapter rows (A8)
+        selectHoldsChapterRows(after, armedFor) // this book's chapter rows (A8)
       ) {
         armedFor = null; // once per arm; openPreview's own dispatches re-enter with it cleared
         void openPreview(dispatch, () => store.getState() as StreamableRootState, {

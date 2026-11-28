@@ -12,6 +12,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { chaptersSlice } from './chapters-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
 import { revisionsSlice } from './revisions-slice';
 import { uiSlice } from './ui-slice';
 import { accountSlice } from './account-slice';
@@ -122,6 +124,7 @@ function makeStore(generationWorkers = 1) {
       ui: uiSlice.reducer,
       queue: queueSlice.reducer,
       chapters: chaptersSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       revisions: revisionsSlice.reducer,
       account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
@@ -207,7 +210,7 @@ const openedChapterIds = () =>
 describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
   it('opens a stream for a same-book entry and flips its rows', async () => {
     const store = makeStore();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     store.dispatch(
       chaptersSlice.actions.setChapters([
         { id: 3, title: 'Chapter 3', state: 'done', progress: 1, duration: '0:30', characters: {} },
@@ -445,7 +448,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
 
   it('completes an entry only after its chapter’s stream closes (no-loop)', async () => {
     const store = makeStore(2);
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     store.dispatch(
       chaptersSlice.actions.setChapters([
         {
@@ -558,7 +561,7 @@ describe('queue-dispatcher-middleware (queue-sole concurrency)', () => {
     const store = makeStore(2);
     /* No setSnapshot yet → queue.loaded false → dispatcher idle even if a
        slice mutation fires. */
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     await flushMicro();
     expect(streamGenerationMock).not.toHaveBeenCalled();
   });

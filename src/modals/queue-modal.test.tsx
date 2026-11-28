@@ -17,6 +17,7 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { librarySlice } from '../store/library-slice';
 import { accountSlice } from '../store/account-slice';
 import { chaptersSlice } from '../store/chapters-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { uiSlice, uiActions } from '../store/ui-slice';
 import { RESTRUCTURING_REASON } from '../store/restructure-lock';
 import type { ActiveStreamSnapshot } from '../store/chapters-slice';
@@ -84,6 +85,7 @@ function renderModal(
     restructuring?: string;
   } = {},
 ) {
+  const heldPair = loadedPair({ bookId: opts.activeGeneration?.currentBookId });
   const store = configureStore({
     reducer: {
       queue: queueSlice.reducer,
@@ -92,6 +94,8 @@ function renderModal(
       account: accountSlice.reducer,
       chapters: chaptersSlice.reducer,
       ui: uiSlice.reducer,
+      /* The slices hold the book the preloaded rows are set for. */
+      loadedBook: () => heldPair,
     },
     preloadedState: {
       queue: { entries, paused: opts.paused ?? false, recycling: false, loaded: true },

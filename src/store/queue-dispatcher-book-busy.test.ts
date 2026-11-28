@@ -10,6 +10,8 @@ import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { chaptersSlice, chaptersActions } from './chapters-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
 import { revisionsSlice } from './revisions-slice';
 import { uiSlice } from './ui-slice';
 import { accountSlice } from './account-slice';
@@ -111,6 +113,7 @@ function makeStore(generationWorkers = 3) {
       ui: uiSlice.reducer,
       queue: queueSlice.reducer,
       chapters: chaptersSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       revisions: revisionsSlice.reducer,
       account: accountSlice.reducer,
       notifications: notificationsSlice.reducer,
@@ -233,7 +236,7 @@ describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change
   it('leaves the chapter row unchanged (not failed, no busy sentence) and appends no change-log event', async () => {
     const store = makeStore();
     store.dispatch(chaptersActions.setChapters([doneRow]));
-    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     const logBefore = store.getState().changeLog.events.length;
     seed(store, [entry('a1', 'book-A', 1, 0)]);
 
@@ -254,7 +257,7 @@ describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change
     await vi.waitFor(() => expect(generationPosts.filter((b) => b === 'book-A').length).toBe(1));
 
     /* the book is opened AFTER the claim: its hydrated row is not the claim's doing */
-    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     store.dispatch(chaptersActions.setChapters([doneRow]));
     release();
 
@@ -266,7 +269,7 @@ describe('#3436 a 409 book_busy refusal on the OPEN book (the row and the change
   it('keeps the "Generation halted" banner across a refused claim (the skip path would have left it up)', async () => {
     const store = makeStore();
     store.dispatch(chaptersActions.setChapters([doneRow]));
-    store.dispatch(chaptersActions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     store.dispatch(
       chaptersActions.applyGenerationTick({ type: 'chapter_failed', errorReason: 'Sidecar is not ready.' } as never),
     );

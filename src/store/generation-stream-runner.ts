@@ -31,6 +31,7 @@ import { changeLogActions } from './change-log-slice';
 import { notificationsActions } from './notifications-slice';
 import { retryQueueEntry } from './queue-thunks';
 import type { ActiveStreamSnapshot, ChaptersState } from './chapters-slice';
+import { selectHoldsChapterRows, type LoadedBookState } from './loaded-book-slice';
 import type { GenerationTick, TtsModelKey } from '../lib/types';
 import type { ReviewRequest } from '../lib/types';
 
@@ -76,11 +77,12 @@ function streamKey(bookId: string, chapterId: number | undefined): string {
 const IMMEDIATE_TOAST_ERROR_CODES = new Set(['voice-not-designed', 'cloned-voice-broken']);
 
 /** Minimal store surface the runner needs. Satisfied by the configured RTK
-    store; kept narrow (`chapters`) so the runner doesn't import the store's
-    circular `RootState` and stays usable from lean test stores. */
+    store; kept narrow (`chapters`, and the loaded-book pair that says whose rows
+    they are) so the runner doesn't import the store's circular `RootState` and
+    stays usable from lean test stores. */
 export interface StreamRunnerStore {
   dispatch: AppDispatch;
-  getState: () => { chapters: ChaptersState };
+  getState: () => { chapters: ChaptersState; loadedBook?: LoadedBookState };
 }
 
 interface OpenHandle {
@@ -282,7 +284,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
        the server will resume against. For a cross-book open the slice holds a
        DIFFERENT book's rows, so fall back only when the spec is empty AND the
        slice is on this book. */
-    const sliceOnThisBook = after.chapters.currentBookId === bookId;
+    const sliceOnThisBook = selectHoldsChapterRows(after, bookId);
     const ids =
       spec?.chapterIds && spec.chapterIds.length > 0
         ? spec.chapterIds
@@ -360,7 +362,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
         dispatch(changeLogActions.appendLogEvent(buildGenerationStartedEvent({ chapterIds: handle.chapterIds })));
       }
     }
-    if (store.getState().chapters.currentBookId === handle.bookId) {
+    if (selectHoldsChapterRows(store.getState(), handle.bookId)) {
       dispatch(chaptersActions.applyGenerationTick(ev));
     }
     handleTickFor(key, ev);
@@ -371,7 +373,7 @@ export function createStreamRunner(store: StreamRunnerStore): StreamRunner {
     if (!handle) return;
     const bookId = handle.bookId;
     const after = store.getState();
-    const sliceMatchesHandle = after.chapters.currentBookId === bookId;
+    const sliceMatchesHandle = selectHoldsChapterRows(after, bookId);
     if (sliceMatchesHandle) {
       /* Slice has this book's rows — derive counters from rows so we
          pick up any user-side mutations (excluded toggles etc.). */

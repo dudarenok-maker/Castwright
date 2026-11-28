@@ -16,6 +16,9 @@ import { changeLogSlice } from './change-log-slice';
 import { revisionsSlice } from './revisions-slice';
 import { notificationsSlice } from './notifications-slice';
 import { createStreamRunner, type StreamRunner } from './generation-stream-runner';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
+import { manuscriptActions } from './manuscript-slice';
 import type { Chapter, GenerationTick } from '../lib/types';
 
 const streamGenerationMock = vi.fn();
@@ -53,6 +56,7 @@ function makeStore() {
       changeLog: changeLogSlice.reducer,
       revisions: revisionsSlice.reducer,
       notifications: notificationsSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
     },
   });
 }
@@ -89,7 +93,7 @@ function makeRunner(): { store: ReturnType<typeof makeStore>; runner: StreamRunn
 describe('generation-stream-runner (queue-sole concurrency)', () => {
   it('open() seeds the per-stream snapshot (keyed by composite key) from the viewed book’s rows', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(
       chaptersSlice.actions.setChapters([
         ch(1, { state: 'done', progress: 1 }),
@@ -160,7 +164,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('flushes a single generation_run_complete rollup on idle close', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(
       chaptersSlice.actions.setChapters([ch(1, { state: 'in_progress', progress: 0.5 })]),
     );
@@ -198,7 +202,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
        slice carries the structured failure class + the "what to do" copy onto
        the chapter row — the failed-state box renders it under the reason. */
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(
       chaptersSlice.actions.setChapters([ch(2, { state: 'in_progress', progress: 0.5 })]),
     );
@@ -218,7 +222,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('records a CROSS-BOOK chapter_failed even when the slice is on another book', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
+    holdChapterRows(store, 'other-book');
     runner.open('b1', 'kokoro-v1', { chapterIds: [3], force: true }, { chapterId: 3 });
     onTickFor('b1', 3)({ type: 'chapter_failed', chapterId: 3, errorReason: 'boom' } as GenerationTick);
     expect(runner.takeChapterFailure('b1', 3)).toEqual({ reason: 'boom', errorCode: undefined });
@@ -312,7 +316,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
        generationRemediation / errorReason), proving the voice names aren't
        swallowed by a generic message. */
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(3)]));
     runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [3], force: true }, { chapterId: 3 });
     onTickFor('b1', 3)({
@@ -353,7 +357,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('refreshes the viewed book’s snapshot from rows on a progress tick', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(
       chaptersSlice.actions.setChapters([ch(1, { state: 'in_progress', progress: 0.1 }), ch(2)]),
     );
@@ -374,7 +378,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
   it('cross-book stream updates its own snapshot from run aggregates without touching the viewed book’s rows', () => {
     const { store, runner } = makeRunner();
     /* Viewing b1; a stream is open for b2 (cross-book). */
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, { state: 'queued' })]));
     runner.open('b2', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
     onTickFor(
@@ -405,7 +409,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('surfaces a `scoring_started` tick — progress state seeded at 0, an info toast, and a change-log event', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
     onTickFor('b1', 1)({
       type: 'scoring_started',
@@ -429,7 +433,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('applies a `scoring_progress` tick to the progress state without pushing an additional toast', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
     const tick = onTickFor('b1', 1);
     tick({ type: 'scoring_started', charactersOnRoster: 4 } as unknown as GenerationTick);
@@ -449,7 +453,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
 
   it('surfaces a `scoring_complete` tick — clears the progress state and appends a completion change-log event', () => {
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     runner.open('b1', 'qwen3-tts-0.6b', { chapterIds: [1], force: true }, { chapterId: 1 });
     const tick = onTickFor('b1', 1);
     tick({ type: 'scoring_started', charactersOnRoster: 4 } as unknown as GenerationTick);
@@ -463,7 +467,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
   it('opens the language guard once for a language-unset failure, even on a non-viewed book', () => {
     emitLanguageGuardMock.mockReturnValue(true);
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('other-book'));
+    holdChapterRows(store, 'other-book');
     runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
     onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
     expect(emitLanguageGuardMock).toHaveBeenCalledTimes(1);
@@ -490,7 +494,7 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
        STEP 2 `continue` guard, which reads hasPendingLanguageGuard). */
     emitLanguageGuardMock.mockReturnValue(false);
     const { store, runner } = makeRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     runner.open('b1', 'gemini-2.5-flash', { chapterIds: [5], force: true }, { chapterId: 5, queueEntryId: 'q1' });
     onTickFor('b1', 5)({ type: 'chapter_failed', chapterId: 5, errorCode: 'language-unset', errorReason: 'x' } as GenerationTick);
     const toasts = store.getState().notifications.toasts;
@@ -547,6 +551,59 @@ describe('generation-stream-runner (queue-sole concurrency)', () => {
   });
 });
 
+/* #3519 — the runner reads the chapter rows only when the loaded-book pair names
+   the stream's book AND the rows are set for it. `resetForBook` moves the pair
+   alone, `setCurrentBookId` the rows' record alone. */
+describe('#3519 — the loaded-book pair and the chapter rows name different books', () => {
+  const APART = [
+    ['the pair names b2, the rows are set for b1', 'b2', 'b1'],
+    ['the pair names b1, the rows are set for b2', 'b1', 'b2'],
+  ] as const;
+  const rows = [
+    ch(1, { state: 'done', progress: 1 }),
+    ch(2, { state: 'in_progress', progress: 0.4 }),
+    ch(3, { state: 'queued' }),
+  ];
+
+  it.each(APART)('open() seeds a placeholder, not the rows, when %s', (_name, pair, rowsFor) => {
+    const { store, runner } = makeRunner();
+    store.dispatch(manuscriptActions.resetForBook(pair));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId(rowsFor));
+    store.dispatch(chaptersSlice.actions.setChapters(rows));
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    expect(store.getState().chapters.activeStreams['b1::2']).toMatchObject({
+      done: 0,
+      total: 1,
+      inProgress: 1,
+    });
+  });
+
+  it.each(APART)('a tick takes its counters from the frame, not the rows, when %s', (_name, pair, rowsFor) => {
+    const { store, runner } = makeRunner();
+    holdChapterRows(store, 'b1');
+    store.dispatch(chaptersSlice.actions.setChapters(rows));
+    runner.open('b1', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
+    store.dispatch(manuscriptActions.resetForBook(pair));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId(rowsFor));
+    onTickFor('b1', 2)({
+      type: 'progress',
+      chapterId: 2,
+      characterId: 'narrator',
+      progress: 0.9,
+      runDone: 7,
+      runTotal: 9,
+      runInProgress: 2,
+    } as unknown as GenerationTick);
+    expect(store.getState().chapters.activeStreams['b1::2']).toMatchObject({
+      done: 7,
+      total: 9,
+      inProgress: 2,
+    });
+    /* And no row was written. */
+    expect(store.getState().chapters.chapters).toEqual(rows);
+  });
+});
+
 /* Plan 286 (Task 24) — a chapter actually rendered with review is stamped
    `reviewChapter: true` on its own live `chapter_complete` (never a
    replay). The runner dispatches `chapters/previewChapterComplete` for
@@ -562,6 +619,7 @@ describe('plan 286 — preview completion', () => {
         changeLog: changeLogSlice.reducer,
         revisions: revisionsSlice.reducer,
         notifications: notificationsSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
       },
       middleware: (g) =>
         g().concat(() => (next: (a: unknown) => unknown) => (a: unknown) => {
@@ -574,7 +632,7 @@ describe('plan 286 — preview completion', () => {
 
   it('dispatches previewChapterComplete only for reviewChapter, for any book', () => {
     const { store, runner, types } = recordingRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('viewed'));
+    holdChapterRows(store, 'viewed');
     runner.open('other', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
     runner.open('other', 'kokoro-v1', { chapterIds: [2], force: true }, { chapterId: 2 });
     onTickFor(
@@ -588,7 +646,7 @@ describe('plan 286 — preview completion', () => {
 
   it('never dispatches revisions/markRevisionPlayable', () => {
     const { store, runner, types } = recordingRunner();
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     runner.open('b1', 'kokoro-v1', { chapterIds: [1], force: true }, { chapterId: 1 });
     onTickFor('b1', 1)({ type: 'chapter_complete', chapterId: 1 } as GenerationTick);
     expect(types.some((t) => t.type === 'revisions/markRevisionPlayable')).toBe(false);

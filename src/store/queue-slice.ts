@@ -13,6 +13,7 @@
 import { createSelector, createSlice, type PayloadAction } from '@reduxjs/toolkit';
 import type { components } from '../lib/api-types';
 import type { ChaptersState } from './chapters-slice';
+import { selectChapterRowsBookId } from './loaded-book-slice';
 
 /* Plan 108 Wave 3 — the TTS engines a chapter requires, stamped server-side at
    enqueue time. The QueueEntry contract lives on the SERVER queue shape only
@@ -170,6 +171,8 @@ export const selectInFlightEntryIds = createSelector(
 interface ActiveGenerationRootShape {
   queue: QueueState;
   chapters?: ChaptersState;
+  /* Optional for the same lean stores; without it no rows are listed. */
+  loadedBook?: { loadedBookId: string | null };
 }
 
 export interface ActiveGenerationChapterRow {
@@ -203,10 +206,10 @@ export const selectActiveGenerationView = createSelector(
   [
     (s: ActiveGenerationRootShape) => s.queue.entries,
     (s: ActiveGenerationRootShape) => s.chapters?.activeStreams,
-    (s: ActiveGenerationRootShape) => s.chapters?.currentBookId,
+    selectChapterRowsBookId,
     (s: ActiveGenerationRootShape) => s.chapters?.chapters,
   ],
-  (entries, activeStreams, currentBookId, chapterRows): ActiveGenerationView | null => {
+  (entries, activeStreams, rowsBookId, chapterRows): ActiveGenerationView | null => {
     if (entries.length > 0) return null;
     if (!activeStreams || !chapterRows) return null;
     /* Prefer the stream for the currently-viewed book (so the overlay lists
@@ -214,9 +217,9 @@ export const selectActiveGenerationView = createSelector(
        prior single-snapshot behaviour. */
     const streams = Object.values(activeStreams);
     const active =
-      (currentBookId ? activeStreams[currentBookId] : undefined) ?? streams[0] ?? null;
+      (rowsBookId ? activeStreams[rowsBookId] : undefined) ?? streams[0] ?? null;
     if (!active) return null;
-    const sameBook = currentBookId === active.bookId;
+    const sameBook = rowsBookId === active.bookId;
     /* Excluded chapters never queue or synthesise — mirror the filter in the
        runner's snapshotFromChapters + middleware hasWork so the row count agrees
        with the pill's done/total. */

@@ -7,6 +7,8 @@
 import { describe, it, expect, beforeEach, vi } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { chaptersSlice } from './chapters-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
 import { manuscriptSlice } from './manuscript-slice';
 import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
@@ -85,6 +87,7 @@ function makeStore() {
     reducer: {
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
@@ -129,7 +132,7 @@ describe('queue-driven generation integration (plan 111)', () => {
     /* Cold-boot: queue loaded empty. */
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, 'done'), ch(2), ch(3)]));
     /* The user clicks "Approve cast & start generating" (plan 137 — the only
        action that enqueues). Until this fires, opening + seeding never queues. */
@@ -151,7 +154,7 @@ describe('queue-driven generation integration (plan 111)', () => {
     const { store } = makeStore();
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(1), ch(2)]));
     store.dispatch(uiSlice.actions.requestStartGeneration());
     await flush();

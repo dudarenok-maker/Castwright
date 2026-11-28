@@ -87,6 +87,18 @@ describe('approvePreviewSideEffects (plan 286)', () => {
     const ev = store.getState().changeLog.events.find((e) => e.type === 'regenerate');
     expect(JSON.stringify(ev)).not.toContain('3 chapters');
   });
+  it.each([
+    ['the pair names B, the rows are set for A', 'B', 'A'],
+    ['the pair names A, the rows are set for B', 'A', 'B'],
+  ])('#3519 — reads no exclusion from the chapter rows when %s', async (_name, pair, rowsFor) => {
+    const store = makeStore('A');
+    store.dispatch(manuscriptSlice.actions.resetForBook(pair));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId(rowsFor));
+    store.dispatch(chaptersSlice.actions.setChapters([{ id: 1 }, { id: 2, excluded: true }, { id: 3 }] as never));
+    await store.dispatch(approvePreviewSideEffects(PREVIEW({ remainingChapterIds: [2, 3] })));
+    const [entries] = enqueueBodies();
+    expect(entries.map((e: { chapterId: number }) => e.chapterId)).toEqual([2, 3]);
+  });
   it('#3919 — does nothing past the clear when every remaining chapter is excluded', async () => {
     const store = makeStore('A');
     store.dispatch(chaptersSlice.actions.setCurrentBookId('A'));

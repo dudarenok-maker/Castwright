@@ -11,7 +11,9 @@
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { chaptersSlice, previewChapterComplete } from './chapters-slice';
-import { manuscriptSlice } from './manuscript-slice';
+import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
 import { uiSlice } from './ui-slice';
 import { changeLogSlice } from './change-log-slice';
 import { castSlice } from './cast-slice';
@@ -77,6 +79,7 @@ function makeStore(opts: { watcher?: boolean } = {}) {
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       changeLog: changeLogSlice.reducer,
       cast: castSlice.reducer,
       config: configSlice.reducer,
@@ -110,7 +113,7 @@ const ch = (id: number, overrides: Partial<Chapter> = {}): Chapter =>
    dispatcher) treat the queue as authoritative. */
 function seedBook(store: ReturnType<typeof makeStore>['store'], bookId: string, chapters: Chapter[]) {
   store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
-  store.dispatch(chaptersSlice.actions.setCurrentBookId(bookId));
+  holdChapterRows(store, bookId);
   store.dispatch(chaptersSlice.actions.setChapters(chapters));
 }
 
@@ -162,7 +165,7 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
     const { store } = makeStore();
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: true }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, { state: 'queued' })]));
     store.dispatch(uiSlice.actions.requestStartGeneration());
     await Promise.resolve();
@@ -188,7 +191,7 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
         paused: false,
       }),
     );
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(1, { state: 'queued' })]));
     store.dispatch(uiSlice.actions.requestStartGeneration());
     await Promise.resolve();
@@ -375,7 +378,7 @@ describe('generationStreamMiddleware — enqueue-on-work (explicit-start intent)
         paused: false,
       }),
     );
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(
       chaptersSlice.actions.setChapters([ch(1, { state: 'queued' }), ch(2, { state: 'queued' })]),
     );
@@ -410,6 +413,9 @@ describe('generationStreamMiddleware — explicit-start enqueue gate', () => {
     store.dispatch(queueSlice.actions.setSnapshot({ entries: [], paused: false }));
     store.dispatch(
       chaptersSlice.actions.hydrateFromAnalysis({ bookId, chapters, sentences: [] } as never),
+    );
+    store.dispatch(
+      manuscriptActions.hydrateFromAnalysis({ bookId, chapters, sentences: [] } as never),
     );
     store.dispatch(uiSlice.actions.analysisComplete({ bookId }));
   }
@@ -524,7 +530,7 @@ describe('plan 286 — previewChapterComplete', () => {
   const PREVIEW = { bookId: 'b1', characterId: 'marlow', previewChapterId: 3, remainingChapterIds: [4], reason: 'voice', note: '' };
   function seedPreview(store: ReturnType<typeof makeStore>['store']) {
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
     store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
     store.dispatch(uiSlice.actions.setPreviewRegen(PREVIEW as never));
@@ -682,7 +688,7 @@ describe('plan 286 — previewChapterComplete', () => {
   it("OD27 — the re-open waits for the arriving book's chapters", async () => {
     const { store } = makeStore(); seedPreview(store);
     store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+    holdChapterRows(store, 'b2');
     store.dispatch(chaptersSlice.actions.setChapters([ch(9, { state: 'done', duration: '01:00' })])); // b2's chapters
     store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
     getChapterAudioPreviousMock.mockResolvedValue(null);
@@ -692,12 +698,12 @@ describe('plan 286 — previewChapterComplete', () => {
     /* b1's hydrate lands: rows first, then the book id the gate keys on (the
        real per-book hydrate sets both in one action). */
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
   });
   it("A8 — an active completion waits for its own book's chapters (chapter ids repeat across books)", async () => {
     const { store } = makeStore(); seedPreview(store); // active b1
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b2'));
+    holdChapterRows(store, 'b2');
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '09:00' })])); // ANOTHER book's chapter 3
     getChapterAudioPreviousMock.mockResolvedValue(null);
     store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
@@ -706,7 +712,7 @@ describe('plan 286 — previewChapterComplete', () => {
     expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
     expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
     expect(getChapterAudioPreviousMock).toHaveBeenCalledWith({ bookId: 'b1', chapterId: 3, duration: '05:00' });
   });
@@ -819,7 +825,7 @@ describe('plan 286 — OD30: an existing entry for the chapter wins over the stu
   function integratedStore() {
     const { store } = makeStore({ watcher: true });
     store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('b1'));
+    holdChapterRows(store, 'b1');
     store.dispatch(chaptersSlice.actions.setChapters([ch(3, { state: 'done', duration: '05:00' })]));
     store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
     store.dispatch(revisionsSlice.actions.applyPoll(cached)); // the active cache already holds an entry for chapter 3
@@ -869,5 +875,74 @@ describe('plan 286 — OD30: an existing entry for the chapter wins over the stu
     expect(store.getState().ui.openRevision).toEqual({ kind: 'server', revisionId: 'rB', chapterId: 2 });
     expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
     expect(store.getState().ui.previewRegen?.completed).toEqual({ reviewOutcome: 'none', stubFallback: true });
+  });
+});
+
+/* #3519 — every read of the chapter rows asks both records: the loaded-book pair
+   names the book, and the rows are set for it (`chapters.currentBookId`). Each
+   test sets the two apart. `manuscriptActions.resetForBook` moves the pair
+   alone, `setCurrentBookId` the rows' record alone. */
+describe('#3519 — the loaded-book pair and the chapter rows name different books', () => {
+  const PREVIEW = { bookId: 'b1', characterId: 'marlow', previewChapterId: 3, remainingChapterIds: [4], reason: 'voice', note: '' };
+  const tick = () => new Promise((r) => setTimeout(r, 0));
+  const APART = [
+    ['the pair names b2, the rows are set for b1', 'b2', 'b1'],
+    ['the pair names b1, the rows are set for b2', 'b1', 'b2'],
+  ] as const;
+  beforeEach(() => { pollRevisionsMock.mockReset(); getChapterAudioPreviousMock.mockReset(); });
+  afterEach(() => vi.useRealTimers());
+
+  it.each(APART)('enqueue-on-work enqueues nothing when %s', async (_name, pair, rows) => {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(1, { state: 'queued' })]);
+    store.dispatch(manuscriptActions.resetForBook(pair));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId(rows));
+    store.dispatch(uiSlice.actions.requestStartGeneration());
+    await Promise.resolve();
+    expect(enqueueCalls()).toHaveLength(0);
+  });
+
+  function seedPreviewOnB1() {
+    const { store } = makeStore();
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' }));
+    seedBook(store, 'b1', [ch(3, { state: 'done', duration: '05:00' })]);
+    store.dispatch(castSlice.actions.hydrateCharacters([{ id: 'marlow', name: 'Marlow' } as never]));
+    store.dispatch(uiSlice.actions.setPreviewRegen(PREVIEW as never));
+    return store;
+  }
+
+  it.each(APART)('the preview re-open does not fire when %s', async (_name, pair, rows) => {
+    const store = seedPreviewOnB1();
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    store.dispatch(uiSlice.actions.openBook({ id: 'b2', status: 'complete' }));
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'none' }));
+    store.dispatch(manuscriptActions.resetForBook(pair));
+    store.dispatch(chaptersSlice.actions.setCurrentBookId(rows));
+    store.dispatch(uiSlice.actions.openBook({ id: 'b1', status: 'generating' })); // arrival
+    await tick();
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    holdChapterRows(store, 'b1'); // both records name the preview's book: it fires
+    await vi.waitFor(() => expect(store.getState().ui.openRevision).toEqual({ kind: 'preview-stub' }));
+  });
+
+  it('openPreview reads no chapter row once the pair has moved to another book during its refetch', async () => {
+    vi.useFakeTimers();
+    const store = seedPreviewOnB1();
+    pollRevisionsMock.mockRejectedValueOnce(new Error('x')).mockRejectedValueOnce(new Error('y'));
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    store.dispatch(previewChapterComplete({ bookId: 'b1', chapterId: 3, reviewOutcome: 'recorded' }));
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollRevisionsMock).toHaveBeenCalledTimes(1);
+    store.dispatch(manuscriptActions.resetForBook('b2')); // the rows stay set for b1
+    await vi.advanceTimersByTimeAsync(1000);
+    await vi.advanceTimersByTimeAsync(0);
+    expect(pollRevisionsMock).toHaveBeenCalledTimes(2);
+    expect(getChapterAudioPreviousMock).not.toHaveBeenCalled();
+    expect(store.getState().ui.openRevision).toBeNull();
+    expect(store.getState().ui.previewRegen?.stub).toBeUndefined();
+    warn.mockRestore();
   });
 });

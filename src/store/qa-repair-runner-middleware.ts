@@ -3,6 +3,7 @@ import { api, type QaRepairTick } from '../lib/api';
 import { qaRepairActions, type QaRepairRequest } from './qa-repair-slice';
 import { chaptersActions } from './chapters-slice';
 import { notificationsActions } from './notifications-slice';
+import { selectHoldsChapterRows } from './loaded-book-slice';
 
 /* Plan 179 — drives a per-chapter audio-QA scan-and-repair in the background,
    so the run survives the Listen row that started it unmounting. Same shape as
@@ -83,13 +84,14 @@ async function runRepair(mw: MiddlewareAPI, req: QaRepairRequest): Promise<void>
         } else if (ev.type === 'qa_repair_complete') {
           repairedCount = ev.repaired?.length ?? 0;
           /* Refresh the Listen row — a re-record changes duration, and the
-             renderedAt stamp is what cache-busts the audio element. Guarded on
-             `currentBookId`, matching generation-stream-runner's tick guard:
-             `chapters` is keyed by bare `chapterId` alone (ids repeat 1..N
-             across every book), so a repair that finishes after the user has
-             navigated to a DIFFERENT book would otherwise stamp that other
-             book's same-numbered chapter with this repair's duration. */
-          if (mw.getState().chapters.currentBookId === bookId) {
+             renderedAt stamp is what cache-busts the audio element. Only while
+             the chapter rows are this book's (selectHoldsChapterRows), matching
+             generation-stream-runner's tick guard: `chapters` is keyed by bare
+             `chapterId` alone (ids repeat 1..N across every book), so a repair
+             that finishes after the user has navigated to a DIFFERENT book
+             would otherwise stamp that other book's same-numbered chapter with
+             this repair's duration. */
+          if (selectHoldsChapterRows(mw.getState(), bookId)) {
             dispatch(
               chaptersActions.markChapterAudioUpdated({
                 chapterId,

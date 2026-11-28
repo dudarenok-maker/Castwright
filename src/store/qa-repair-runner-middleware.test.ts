@@ -18,6 +18,7 @@ import { qaRepairSlice, qaRepairActions } from './qa-repair-slice';
 import { chaptersSlice } from './chapters-slice';
 import { notificationsSlice } from './notifications-slice';
 import { qaRepairRunnerMiddleware } from './qa-repair-runner-middleware';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import type { Chapter } from '../lib/types';
 
 const CHAPTERS: Chapter[] = [
@@ -29,11 +30,14 @@ const WARN_MESSAGE =
   'than this book — re-design Eliza Carrick before generating.';
 
 function makeStore(currentBookId: string | null = 'bk1') {
+  /* The slices hold the book the preloaded rows are set for. */
+  const pair = loadedPair({ bookId: currentBookId });
   return configureStore({
     reducer: {
       qaRepair: qaRepairSlice.reducer,
       chapters: chaptersSlice.reducer,
       notifications: notificationsSlice.reducer,
+      loadedBook: () => pair,
     },
     preloadedState: {
       chapters: { ...chaptersSlice.getInitialState(), chapters: CHAPTERS, currentBookId },

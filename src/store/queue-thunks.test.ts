@@ -9,6 +9,8 @@ import { configureStore } from '@reduxjs/toolkit';
 import { queueSlice, type QueueEntry } from './queue-slice';
 import { notificationsSlice } from './notifications-slice';
 import { chaptersSlice } from './chapters-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { holdChapterRows } from './loaded-book-slice.test-helpers';
 import { uiSlice, uiActions } from './ui-slice';
 import { api } from '../lib/api';
 import { __resetRepairEpochForTest, loadRepairEpoch } from '../lib/repair-epoch';
@@ -447,10 +449,11 @@ describe('cancelQueueEntry — "Not queued" (held) wiring (Bug 1)', () => {
         queue: queueSlice.reducer,
         notifications: notificationsSlice.reducer,
         chapters: chaptersSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         ui: uiSlice.reducer,
       },
     });
-    store.dispatch(chaptersSlice.actions.setCurrentBookId('book-A'));
+    holdChapterRows(store, 'book-A');
     store.dispatch(
       chaptersSlice.actions.setChapters([
         {
@@ -561,6 +564,7 @@ describe('haltActiveGeneration (plan 102 Should #5 — local-analyzer GPU halt)'
         queue: queueSlice.reducer,
         notifications: notificationsSlice.reducer,
         chapters: chaptersSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
       },
       middleware: (gd) => gd().concat(recorder),
     });

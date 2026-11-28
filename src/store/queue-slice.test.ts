@@ -246,6 +246,7 @@ describe('active-generation selectors', () => {
   it('same-book stream: lists in_progress + queued rows (excluded filtered out)', () => {
     const s = {
       queue: emptyQueue,
+      loadedBook: { loadedBookId: 'book-A' },
       chapters: chaptersState({
         activeStream: stream({ done: 2, total: 5, inProgress: 1 }),
         currentBookId: 'book-A',
@@ -271,9 +272,37 @@ describe('active-generation selectors', () => {
     expect(selectGenerationActivityCount(s)).toBe(2);
   });
 
+  it.each([
+    ['the pair names book-B, the rows are set for book-A', 'book-B', 'book-A'],
+    ['the pair names book-A, the rows are set for book-B', 'book-A', 'book-B'],
+  ])('#3519 — lists no rows and prefers no stream when %s', (_name, pair, rowsFor) => {
+    const base = chaptersState({
+      activeStream: null,
+      currentBookId: rowsFor,
+      chapters: [{ id: 1, state: 'in_progress' }],
+    });
+    /* The first stream belongs to neither record's preference. */
+    const s = {
+      queue: emptyQueue,
+      loadedBook: { loadedBookId: pair },
+      chapters: {
+        ...base,
+        activeStreams: {
+          'book-C': stream({ bookId: 'book-C' }),
+          'book-A': stream({ bookId: 'book-A' }),
+          'book-B': stream({ bookId: 'book-B' }),
+        },
+      },
+    };
+    const view = selectActiveGenerationView(s);
+    expect(view!.bookId).toBe('book-C');
+    expect(view!.chapters).toBeNull();
+  });
+
   it('cross-book stream: no per-chapter rows, count derived from the summary', () => {
     const s = {
       queue: emptyQueue,
+      loadedBook: { loadedBookId: 'book-A' },
       chapters: chaptersState({
         activeStream: stream({ bookId: 'book-B', done: 3, total: 10, inProgress: 2 }),
         currentBookId: 'book-A', // slice holds a DIFFERENT book
@@ -290,6 +319,7 @@ describe('active-generation selectors', () => {
   it('empty queue with no live stream → null / 0', () => {
     const s = {
       queue: emptyQueue,
+      loadedBook: { loadedBookId: 'book-A' },
       chapters: chaptersState({ activeStream: null, currentBookId: 'book-A' }),
     };
     expect(selectActiveGenerationView(s)).toBeNull();
@@ -305,6 +335,7 @@ describe('active-generation selectors', () => {
   it('returns a stable reference across calls with unchanged queue entries + chapters state (#1308)', () => {
     const s = {
       queue: emptyQueue,
+      loadedBook: { loadedBookId: 'book-A' },
       chapters: chaptersState({
         activeStream: stream({ done: 2, total: 5, inProgress: 1 }),
         currentBookId: 'book-A',
