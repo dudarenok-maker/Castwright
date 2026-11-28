@@ -5,3 +5,5 @@
 > **Row verdict: DISCHARGE**
 
 Observation, not a criterion of this row and not fixed here: the Analysing screen's phase log panel prints the `❌ ... cast FAILED` lines with the raw nested Google error envelope (value redacted); the failure cards show the clean message.
+
+Fixed later in this PR by ce134ceb, not re-run on-box.
