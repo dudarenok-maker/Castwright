@@ -1,0 +1,33 @@
+# start 2026-11-28 15:35:14 +11:00 POST /api/manuscripts/mns_ZvwASlFfb3/analysis {model:gemma-4-26b-a4b-it,fresh:true}
+# HTTP 200
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":1771,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":7091,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":49639,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 45s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 6 characters in 1m 30s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Detected 6 characters: Narrator, Oduvan, Wren, Maerin, Unknown Voice, Coalfall"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 1m 30s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 1m 30s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~7m 32s) via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 done — 78 sentences in 1m 54s"}
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":1,"message":"Attributed 78 sentences across 1 chapter"}
+data: {"kind":"log","phaseId":1,"message":"Narrator: 28 lines"}
+data: {"kind":"log","phaseId":1,"message":"Oduvan: 22 lines"}
+data: {"kind":"log","phaseId":1,"message":"Coalfall: 10 lines"}
+data: {"kind":"log","phaseId":1,"message":"Maerin: 9 lines"}
+data: {"kind":"log","phaseId":2,"message":"No library matches yet (voice library matching is not wired up for this slice)."}
+data: {"kind":"log","phaseId":1,"message":"Folded 1 background character (1 → Unknown male) — names rolled into aliases."}
+# end 2026-11-28 15:38:39 +11:00 wallSeconds=205
+# DONE
+# result: characters=6 [narrator, oduvan, wren, maerin, coalfall, unknown-male] sentences=78
