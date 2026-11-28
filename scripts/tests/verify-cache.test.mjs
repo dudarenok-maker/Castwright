@@ -45,6 +45,7 @@ import {
   branchDiffFiles,
   stagedDiffFiles,
   sidecarFingerprint,
+  pesterFingerprint,
   STEPS,
   computeBudgetMs,
   computeStepBudgetMs,
@@ -2293,6 +2294,41 @@ test('sidecarFingerprint still returns unavailable when no venv exists on POSIX'
   const dir = mkTmp();
   const result = sidecarFingerprint(dir, 'linux');
   assert.equal(result, 'unavailable');
+});
+
+// pesterFingerprint must use the SAME selection as scripts/tests/run.ps1
+// (highest Pester 5.x, via scripts/lib/select-pester5.ps1) under the shell
+// run-powershell.mjs picks (pwsh first), and emit version AND path, so
+// installing/upgrading the Pester that actually runs busts the test:scripts cache.
+test('pesterFingerprint runs the shared selector under pwsh first', () => {
+  const calls = [];
+  const fake = (shell, args) => {
+    calls.push({ shell, script: args[args.length - 1] });
+    return { status: 0, stdout: '5.7.1|/m/Pester.psd1\n' };
+  };
+  assert.equal(pesterFingerprint(fake), '5.7.1|/m/Pester.psd1');
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].shell, 'pwsh');
+  assert.match(calls[0].script, /select-pester5\.ps1/);
+  assert.match(calls[0].script, /Select-Pester5Module/);
+  assert.match(calls[0].script, /\$m\.Path/);
+});
+
+test('pesterFingerprint falls back to powershell when pwsh is absent, and reports unavailable on failure', () => {
+  const seen = [];
+  const noPwsh = (shell) => {
+    seen.push(shell);
+    return shell === 'pwsh' ? { error: new Error('ENOENT') } : { status: 0, stdout: '5.5.0|p\n' };
+  };
+  assert.equal(pesterFingerprint(noPwsh), '5.5.0|p');
+  assert.deepEqual(seen, ['pwsh', 'powershell']);
+  assert.equal(pesterFingerprint(() => ({ status: 1, stdout: '' })), 'unavailable');
+  assert.equal(pesterFingerprint(() => ({ error: new Error('ENOENT') })), 'unavailable');
+});
+
+test('pesterFingerprint (real shell) never reports a Pester 6+', () => {
+  const fp = pesterFingerprint();
+  assert.ok(fp === 'unavailable' || /^5\.\d+\.\d+[^|]*\|/.test(fp), fp);
 });
 
 // Finding 5 (ops-2997): contention probe optimization — skip probing when no

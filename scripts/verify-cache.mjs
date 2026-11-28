@@ -1317,18 +1317,28 @@ function detectSiblingContention() {
 // availability or version changes. Used to invalidate the cache when a user
 // installs Pester or bootstraps the pytest venv after a previous skip.
 
-function pesterFingerprint() {
-  const r = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-Command',
-      "$m = Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { $m.Version.ToString() } else { 'unavailable' }",
-    ],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true },
-  );
-  if (r.error || r.status !== 0) return 'unavailable';
-  return (r.stdout ?? '').trim() || 'unavailable';
+// Same selection as scripts/tests/run.ps1 (highest Pester 5.x, via the shared
+// select-pester5.ps1) under the shell run-powershell.mjs picks (pwsh first,
+// else Windows PowerShell), so the fingerprint moves exactly when the Pester
+// that actually runs changes. `spawn` is a parameter only so tests can pin
+// the shell order without installing anything.
+export function pesterFingerprint(spawn = spawnSync) {
+  const lib = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'select-pester5.ps1');
+  const script =
+    `. '${lib.replace(/'/g, "''")}'; ` +
+    '$m = Select-Pester5Module -Modules (Get-Module -ListAvailable -Name Pester); ' +
+    "if ($m) { \"$($m.Version)|$($m.Path)\" } else { 'unavailable' }";
+  for (const shell of ['pwsh', 'powershell']) {
+    const r = spawn(shell, ['-NoProfile', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    });
+    if (r.error) continue; // shell not on PATH: try the next one, as run-powershell does
+    if (r.status !== 0) return 'unavailable';
+    return (r.stdout ?? '').trim() || 'unavailable';
+  }
+  return 'unavailable';
 }
 
 // I2 (#2146 review): this used to hardcode the Windows venv layout
