@@ -35,4 +35,4 @@ That's the whole pipeline — here it is mid-analysis on the demo book itself, t
 sidebar's "Core journey" section for [Uploading a Book](Uploading-a-Book)
 onward.
 
-![The Coalfall Commission mid-analysis, cast roster building live](images/getting-started/03-quickstart-flow.png)
+![The Tidewatcher's Oath mid-analysis, cast roster building live](images/getting-started/03-quickstart-flow.png)
