@@ -1395,6 +1395,14 @@ export async function mockGetBookState(
   signal?: AbortSignal,
 ): Promise<BookStateResponse | null> {
   signal?.throwIfAborted();
+  /* e2e seam (#3519): a spec can hold one book's read open by setting
+     `window.__castwrightMockBookStateHold[bookId]` to a promise before the app
+     asks for that book, and resolving it to let the read land. Undefined in
+     normal dev/prod. */
+  const hold = (
+    globalThis as unknown as { __castwrightMockBookStateHold?: Record<string, Promise<void>> }
+  ).__castwrightMockBookStateHold?.[bookId];
+  if (hold) await hold;
   await wait(60);
   signal?.throwIfAborted();
   const stored =

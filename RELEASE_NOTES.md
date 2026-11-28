@@ -56,6 +56,7 @@
 - **Russian pronouns like «ей» and «его» are no longer flagged as missing characters.** Castwright's cast check used to mistake a sentence that began with one of these words for a speaker you hadn't added. It now leaves them alone and still flags real unlisted speakers.
 - **The Voices page no longer shows a drag handle on voice cards that did nothing, or lets you drag them.** Voice cards look the same otherwise, and you still assign voices from the Cast screen.
 - **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
+- **Changes stay with their own book.** If you switch books while Castwright is still saving or generating something for the last one, the result no longer lands in the book you've opened. And while a book is still loading, the page waits behind "Loading this book…" until it's ready, so you can't change something too early and lose it.
 
 # Castwright 1.15.0
 
