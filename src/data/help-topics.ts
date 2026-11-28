@@ -148,17 +148,17 @@ export const HELP_TOPICS: HelpTopic[] = [
       'guardian)"), enter the person\'s name and tick the attestation; cloning on someone else\'s ' +
       'behalf also records your name as the one who attests, and Castwright refuses the clone ' +
       'without it. Press Continue, name the voice and Save. Record in the language you want the ' +
-      'voice to read: you can cast a clone as any character, in any book whose voice engine can ' +
-      'perform one, but it sounds most like its owner in the language you recorded, and ' +
-      'Castwright warns you (it never blocks you) if you cast it into a book in another ' +
-      'language. Two of the three voice engines can perform a clone, Qwen3-TTS and Coqui XTTS; ' +
-      'Kokoro can’t. The recording and ' +
+      'voice to read: you can cast a clone as any character voiced by an engine that can perform ' +
+      'one, but it sounds most like its owner in the language you recorded, and Castwright warns ' +
+      'you (it never blocks you) if you cast it into a book in another language. Only Qwen3-TTS ' +
+      'and Coqui XTTS can perform a clone; Kokoro and Gemini voices can’t. The recording and ' +
       'the voice built from it stay on your machine — nothing is uploaded or shared. Revoke a voice ' +
       'from its card in My voices whenever you like, and Castwright erases the recording and ' +
       'the voice built from it. It does not touch chapters you have already made: they stay in ' +
       'that voice until you re-cast those characters and generate the chapters again, and a ' +
       'regenerated chapter keeps its previous take, in the old voice, for A/B review until you ' +
-      'accept the new one.',
+      'accept the new one. Audiobooks you have already exported or synced, share clips and ' +
+      'downloads on your phone keep the voice too.',
   },
   {
     id: 'vocalizations',

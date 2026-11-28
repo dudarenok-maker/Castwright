@@ -32,10 +32,11 @@ describe('help categories', () => {
     const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
     expect(topic?.body).not.toContain('Repair');
   });
-  it('names the two clone-capable engines and says Kokoro cannot clone', () => {
+  it('names the two clone-capable engines and says Kokoro and Gemini cannot clone', () => {
     const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
     expect(topic?.body).not.toContain('Both voice engines');
-    expect(topic?.body).toContain('Kokoro can’t');
+    expect(topic?.body).not.toContain('three voice engines');
+    expect(topic?.body).toContain('Kokoro and Gemini voices can’t');
   });
   it('does not promise Revoke erases chapters already made with the clone', () => {
     const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
