@@ -246,8 +246,10 @@ test('stop-app.mjs resolves its server base port via resolveConfiguredServerPort
 // always spawns NODE_ENV=production, so listenWithAutoRebind can rebind
 // LAN_HTTPS_PORT away from its configured value on conflict — a
 // server/.env-derived guess could still name a port this checkout never
-// bound, and there is no owner-note file (unlike .run/tts.owner.<port>.json) to
-// settle it. basePorts must stay resolver-derived only, never a literal
+// bound. The server's owner marker (#3264, .run/server.owner.<port>.json) does
+// name the bound port, but it names the pid stop-app has already reaped (and
+// prunes), so the sweep does not read it. basePorts must stay resolver-derived
+// only, never a literal
 // 8443 added back in.
 test('stop-app.mjs never assembles a literal 8443 into basePorts', () => {
   const source = readFileSync(resolve(__dirname, '..', 'stop-app.mjs'), 'utf8');
