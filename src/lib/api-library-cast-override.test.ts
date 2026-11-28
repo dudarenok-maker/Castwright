@@ -25,10 +25,11 @@ describe('overrideLibraryCast error codes', () => {
   it('a 409 book_busy rejects with code book_busy and the server sentence', async () => {
     const { api } = await import('./api');
     fetchMock.mockResolvedValueOnce(
-      json(409, { error: 'This book is busy (analysing).', code: 'book_busy' }),
+      json(409, { error: 'This book is busy (analysing).', code: 'book_busy', bookId: 'b1' }),
     );
     await expect(api.overrideLibraryCast(args)).rejects.toMatchObject({
       code: 'book_busy',
+      bookId: 'b1',
       message: 'This book is busy (analysing).',
     });
   });

@@ -4896,15 +4896,21 @@ async function realOverrideLibraryCast(
   if (!res.ok) {
     let detail = '';
     let code: string | undefined;
+    let busyBookId: string | undefined;
     try {
-      const body = (await res.json()) as { error?: string; code?: string };
+      const body = (await res.json()) as { error?: string; code?: string; bookId?: string };
       detail = body.error ?? '';
       code = body.code;
+      busyBookId = body.bookId;
     } catch {
       /* not json */
     }
-    /* #4564 — `code` tells a `book_busy` refusal (an analysis holds either book) from a failure. */
-    throw Object.assign(new Error(detail || `Library override failed (${res.status}).`), { code });
+    /* #4564 — `code` tells a `book_busy` refusal (an analysis holds either book) from a failure;
+       `bookId` names the book that refused. */
+    throw Object.assign(new Error(detail || `Library override failed (${res.status}).`), {
+      code,
+      bookId: busyBookId,
+    });
   }
   return res.json();
 }

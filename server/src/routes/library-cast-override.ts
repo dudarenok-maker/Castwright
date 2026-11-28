@@ -92,8 +92,11 @@ libraryCastOverrideRouter.post('/library-cast/override', async (req: Request, re
 
   /* #4564 (owner ruling 2026-11-28) — refused while an analysis runs for EITHER book,
      inside both books' book-op span, so a job cannot register before the writes. */
-  const busy = castIdentityBusyRefusal(sourceBookId) ?? castIdentityBusyRefusal(targetBookId);
-  if (busy) return res.status(409).json(busy);
+  const sourceBusy = castIdentityBusyRefusal(sourceBookId);
+  const busy = sourceBusy ?? castIdentityBusyRefusal(targetBookId);
+  /* `bookId` names the book that refused: the sentence says "this book", which is the wrong
+     book when the busy one is not the one the client is looking at. */
+  if (busy) return res.status(409).json({ ...busy, bookId: sourceBusy ? sourceBookId : targetBookId });
 
   /* #1981 (Task 8) — this route writes up to two books' cast.json.
      withCastLocks dedupes+sorts, so the same-book case below (its guard

@@ -317,6 +317,9 @@ describe('#4564: the library cast override is refused while either of its books 
       const res = await send();
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
+      /* The body names the book that refused, so a client can name the right book. */
+      expect(res.body.bookId).toBe(busyId());
+      expect(Object.keys(res.body).sort()).toEqual(['bookId', 'code', 'error']);
       expect(res.body.error).toMatch(/read-only until the analysis finishes/);
       expect(res.text).not.toContain(workspaceRoot);
       expect([snapshot(bookDir), snapshot(otherDir)]).toEqual(before);

@@ -627,13 +627,14 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
     } as unknown as Character;
     const SERVER_SENTENCE = 'This book is busy (analysing). Its cast is read-only while it is analysing.';
     const syncArgs = { sourceCharacterId: 'coalfall', targetBookId: 'b0', targetCharacterId: 'x' };
-    const busy = () => Object.assign(new Error(SERVER_SENTENCE), { code: 'book_busy' });
+    /* The 409 body names the book that refused (`bookId`). */
+    const busy = (bookId: string) => Object.assign(new Error(SERVER_SENTENCE), { code: 'book_busy', bookId });
     const toastsOf = (store: ReturnType<typeof makeGatedStore>) =>
       store.getState().notifications.toasts.filter((t) => /Profile sync not applied/.test(t.message));
 
     it('names the LIBRARY book when the book on screen is free', async () => {
       getBookStateMock.mockResolvedValue(reply(MATCHED));
-      overrideLibraryCastMock.mockRejectedValue(busy());
+      overrideLibraryCastMock.mockRejectedValue(busy('b0'));
       const store = makeGatedStore([MATCHED]);
       renderRoute(store);
       await act(async () => {
@@ -647,12 +648,13 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
       expect(toasts[0].message).not.toContain(SERVER_SENTENCE);
     });
 
-    it('names THIS book when the book on screen is the busy one', async () => {
-      getBookBusyMock.mockResolvedValue(['analysis']);
+    /* The server names the book on screen as the refuser. No era is latched: that is the state
+       the view can actually be in (it sends the sync only when it knows of no run); the
+       real-view case lives in confirm-library-sync-busy.test.tsx. */
+    it('names THIS book when the server says the book on screen is the busy one', async () => {
       getBookStateMock.mockResolvedValue(reply(MATCHED));
-      overrideLibraryCastMock.mockRejectedValue(busy());
+      overrideLibraryCastMock.mockRejectedValue(busy(GATED_BOOK));
       const store = makeGatedStore([MATCHED]);
-      store.dispatch(castActions.latchAnalysisEra({ bookId: GATED_BOOK }));
       renderRoute(store);
       await act(async () => {
         await viewProps.current!.onOverrideLibrary(syncArgs).catch(() => {});

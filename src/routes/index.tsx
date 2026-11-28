@@ -939,16 +939,18 @@ export function ConfirmRoute() {
             /* #4564 (owner decision, PR #4862 pass 1) — a book started analysing after the
                screen loaded, so the server refused the sync. Say so by name (the server's
                sentence says "this book", wrong when the busy one is the library book) and
-               rethrow: the view still logs it and confirms the cast. */
+               rethrow: the view still logs it and confirms the cast. The 409 body carries the
+               refusing book's id (this client may not know yet which one started). */
             if ((err as { code?: unknown } | null)?.code === 'book_busy') {
-              const busyTitle = castReadOnly
+              const busyIsThisBook = (err as { bookId?: unknown }).bookId === bookId;
+              const busyTitle = busyIsThisBook
                 ? manuscript.title || THIS_BOOK_FALLBACK_TITLE
                 : characters.find((c) => c.id === sourceCharacterId)?.matchedFrom?.bookTitle || targetBookId;
               dispatch(
                 notificationsActions.pushToast({
                   kind: 'error',
                   message: librarySyncBusyToast(busyTitle),
-                  dedupeKey: `library-sync-busy:${castReadOnly ? bookId : targetBookId}`,
+                  dedupeKey: `library-sync-busy:${busyIsThisBook ? bookId : targetBookId}`,
                 }),
               );
             }
