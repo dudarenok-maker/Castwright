@@ -84,6 +84,7 @@ async function writeThuridBook(
         characterId: 'thurid',
         sentenceIds: r.sentenceIds,
         renderedFallbackEngine: null,
+        renderedModelKey: 'qwen3-tts-1.7b', // #4225: a known anchor tier, so the audition row is reusable
       })),
       characterSnapshots: { thurid: snapshot },
     }),

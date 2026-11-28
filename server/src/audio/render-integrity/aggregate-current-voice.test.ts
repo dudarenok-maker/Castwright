@@ -92,6 +92,7 @@ async function writeChapter(dir: string, slug: string, chapterId: number, axis: 
         characterId: 'thurid',
         sentenceIds: r.sentenceIds,
         renderedFallbackEngine: null,
+        renderedModelKey: 'qwen3-tts-1.7b', // #4225: a known anchor tier, so the audition row is reusable
       })),
       characterSnapshots: {
         thurid: { voiceEngine: 'qwen', modelKey: 'qwen3-tts-1.7b', resolvedVoiceName: voice },

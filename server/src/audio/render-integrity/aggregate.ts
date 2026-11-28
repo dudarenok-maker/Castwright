@@ -999,25 +999,10 @@ export async function scoreBook(
           if (lineVoiceOf(seg, cd.snapshots, rowCharId) !== currentVoice) continue;
         }
         anchorVecsByChar.get(rowCharId)!.push(row.vec);
-        /* #3518 — the tier THIS anchor's chapter rendered the character at (the audition's
-           render key chain minus its 0.6B default and minus the chapter key: an unrecorded tier stays unknown). */
-        const anchorSnap = cd.snapshots[rowCharId];
-        /* A partial write (qa-repair, splice / Fix audio) keeps `renderedModelKey` frozen at the full
-           render's tier while re-recording lines at another one (finalize-chapter-write.ts), so a
-           snapshot whose two keys differ proves the chapter holds this character's lines at BOTH tiers:
-           this anchor's tier is unknown (-> no stamp -> the row is dropped / not reused). Known residual:
-           a later same-tier partial write makes the keys agree again while the earlier off-tier lines
-           remain; only a per-segment tier stamp at finalize closes that (#4225). The chapter-level `modelKey`
-           is deliberately NOT a fallback: a partial write rewrites it to its own tier and carries an
-           untouched character's snapshot forward unchanged, so for a snapshot with no key of its own
-           (written before 2026-07-06) — or no snapshot at all — it no longer describes that character's
-           takes. Such an anchor is unknown-tier, so the pre-2026-07-06 chapters' in-book reference is
-           normally dropped until the chapter is regenerated. Second known residual (#4225): finalize's freeze
-           seed (`prior?.renderedModelKey ?? prior?.modelKey ?? priorFile?.modelKey`) can copy a chapter key
-           that another character's partial write already moved onto a legacy snapshot, giving it equal keys
-           at the moved tier, so that row IS stamped (with the moved tier) and not dropped. */
-        const bothKeysDisagree = anchorSnap?.renderedModelKey != null && anchorSnap.modelKey != null && anchorSnap.renderedModelKey !== anchorSnap.modelKey;
-        anchorTiersByChar.get(rowCharId)!.add(bothKeysDisagree ? undefined : (anchorSnap?.renderedModelKey ?? anchorSnap?.modelKey));
+        /* #3518, #4225 — an anchor's tier is its own segment's stamp: the tier that very line was
+           synthesised at. An unstamped (legacy) segment is unknown and fails closed (no in-book
+           stamp). Never inferred from the snapshot's or the chapter's keys. */
+        anchorTiersByChar.get(rowCharId)!.add(seg?.renderedModelKey);
       }
     }
   }

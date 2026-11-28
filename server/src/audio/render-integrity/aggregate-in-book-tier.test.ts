@@ -40,6 +40,7 @@ const CHAPTERS = [
 ];
 
 interface Tier {
+  /** per-segment renderedModelKey (#4225); absent = a legacy, unstamped segment */ seg?: string;
   /** snapshot.renderedModelKey */ rendered?: string;
   /** snapshot.modelKey */ snap?: string;
   /** segments-file modelKey */ chapter?: string;
@@ -59,7 +60,10 @@ async function writeChapter(dir: string, slug: string, chapterId: number, tier: 
     JSON.stringify({
       chapterId,
       ...(tier.chapter ? { modelKey: tier.chapter } : {}),
-      segments: rows.map((r) => ({ characterId: 'thurid', sentenceIds: r.sentenceIds, renderedFallbackEngine: tier.fallback ?? null, voiceName: tier.voice ?? 'qwen-new' })),
+      segments: rows.map((r) => ({
+        characterId: 'thurid', sentenceIds: r.sentenceIds, renderedFallbackEngine: tier.fallback ?? null, voiceName: tier.voice ?? 'qwen-new',
+        ...(tier.seg ? { renderedModelKey: tier.seg } : {}),
+      })),
       characterSnapshots: {
         thurid: {
           voiceEngine: 'qwen',
@@ -95,48 +99,44 @@ async function inBookRow(tiers: [Tier, Tier]) {
 
 describe('scoreBook stamps the pooled anchors tier on the in-book row (#3518)', () => {
   it('uniform tier: the row carries that model key', async () => {
-    const row = await inBookRow([{ snap: T17 }, { snap: T17 }]);
+    const row = await inBookRow([{ seg: T17 }, { seg: T17 }]);
     expect(row.inBookModelKey).toBe(T17);
   });
 
   it('mixed tiers across chapters: the row is stamped mixed (a minority tier still counts)', async () => {
-    const row = await inBookRow([{ snap: T06 }, { snap: T17 }]);
+    const row = await inBookRow([{ seg: T06 }, { seg: T17 }]);
     expect(row.inBookModelKey).toBe(IN_BOOK_MIXED_TIER);
   });
 
-  it('an anchor whose tier is unknown leaves the row without a concrete key', async () => {
-    const row = await inBookRow([{ snap: T17 }, {}]);
+  it('an anchor whose tier is unknown (an unstamped segment) leaves the row without a concrete key', async () => {
+    const row = await inBookRow([{ seg: T17 }, { snap: T17 }]);
     expect(row.inBookModelKey).toBeUndefined();
   });
 
-  it('a snapshot whose renderedModelKey and modelKey differ (partial write at another tier) is an unknown-tier anchor', async () => {
-    const row = await inBookRow([{ rendered: T06, snap: T17 }, { rendered: T06, snap: T17 }]);
-    expect(row.inBookModelKey).toBeUndefined();
-  });
-
-  it('precedence per anchor: renderedModelKey wins over the chapter modelKey when the snapshot has no modelKey', async () => {
-    const row = await inBookRow([{ rendered: T06, chapter: T17 }, { rendered: T06, chapter: T17 }]);
+  it("the segment's own stamp decides, whatever the snapshot and chapter keys say (#4225)", async () => {
+    const tier = { seg: T06, rendered: T17, snap: T17, chapter: T17 };
+    const row = await inBookRow([tier, tier]);
     expect(row.inBookModelKey).toBe(T06);
   });
 
-  it('precedence per anchor: snapshot.modelKey wins over the chapter modelKey', async () => {
-    const row = await inBookRow([{ snap: T17, chapter: T06 }, { snap: T17, chapter: T06 }]);
-    expect(row.inBookModelKey).toBe(T17);
-  });
-
-  it('does NOT fall back to the chapter modelKey when the snapshot carries none: the anchor is unknown-tier (P3-1)', async () => {
-    const row = await inBookRow([{ chapter: T06 }, { chapter: T06 }]);
+  it.each<[string, Tier]>([
+    ['both snapshot keys', { rendered: T06, snap: T06 }],
+    ['snapshot.renderedModelKey only', { rendered: T06 }],
+    ['snapshot.modelKey only', { snap: T17 }],
+    ['the chapter modelKey only (P3-1)', { chapter: T06 }],
+  ])('a legacy unstamped segment is unknown-tier and the row gets no stamp, with %s', async (_label, tier) => {
+    const row = await inBookRow([tier, tier]);
     expect(row.inBookModelKey).toBeUndefined();
   });
 
   /* The stamp covers exactly the POOLED anchors: a line the pool filters out must not leak its tier. */
   it('an old-voice line at another tier is not pooled, so it does not touch the stamp', async () => {
-    const row = await inBookRow([{ snap: T17 }, { snap: T06, voice: 'qwen-old' }]);
+    const row = await inBookRow([{ seg: T17 }, { seg: T06, voice: 'qwen-old' }]);
     expect(row.inBookModelKey).toBe(T17);
   });
 
   it('a per-segment fallback line at another tier is not pooled, so it does not touch the stamp', async () => {
-    const row = await inBookRow([{ snap: T17 }, { snap: T06, fallback: 'kokoro' }]);
+    const row = await inBookRow([{ seg: T17 }, { seg: T06, fallback: 'kokoro' }]);
     expect(row.inBookModelKey).toBe(T17);
   });
 });
