@@ -182,7 +182,7 @@ test('toBacklogIssues skips a project item whose content is a PullRequest or Dra
   assert.equal(featureIssues[0].id, 'fs-9');
 });
 
-test('parseWhatBenefit takes the ## What section, not a later "**What it does not have:**" bold line or "## What integration..." heading (#4913)', () => {
+test('parseWhatBenefit takes the ## What section, not a later "**What it does not have:**" bold line (#4913)', () => {
   const body = [
     '## What',
     '',
@@ -211,6 +211,9 @@ test('parseWhatBenefit ignores over-matching inline labels but accepts the legal
   assert.equal(parseWhatBenefit('**What it does not have:** nope').what, null);
   assert.equal(parseWhatBenefit('- _What integration would involve:_ nope').what, null);
   assert.equal(parseWhatBenefit('**Benefits we lose:** nope').benefit, null);
+  assert.equal(parseWhatBenefit('**Benefit for the operator:** x').benefit, null);
+  assert.equal(parseWhatBenefit('- _Benefit to users:_ x').benefit, null);
+  assert.equal(parseWhatBenefit('## Benefit for users\n\nx').benefit, null);
   assert.equal(parseWhatBenefit('## What integration would involve\n\nnope').what, null);
   assert.equal(parseWhatBenefit('**What:** a').what, 'a');
   assert.equal(parseWhatBenefit('**What (user):** b').what, 'b');
