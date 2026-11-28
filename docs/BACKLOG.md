@@ -271,8 +271,8 @@ _Full detail + acceptance:_ [#1798](https://github.com/dudarenok-maker/Castwrigh
 
 #### `fs-80` — Revisit Audio8-TTS-Realistic-Air as a synth engine for languages Qwen cannot speak ([#4876](https://github.com/dudarenok-maker/Castwright/issues/4876))
 
-- _What:_ preset voices, voice design from a text description, or any emotion / instruct / style control. It is clone-only (it can also generate with no reference, in an uncontrolled voice).
-- _Benefit:_ *Benefit (user):* books in up to 13 languages Castwright cannot voice today, without making users record a clip per character.
+- _What:_ Revisit adding **Audio8-TTS-Realistic-Air** (Edge0, released late October 2026) as a fourth synth engine in the sidecar, alongside Qwen, Kokoro and Coqui. A spike on 2026-11-28 found **no measurable gain for Russian**, so this was not taken forward. The open case is the languages Qwen cannot speak. This ticket records the findings so the next look does not start from zero. No design exists yet; if this is picked up it goes through a design pass first.
+- _Benefit:_ books in up to 13 languages Castwright cannot voice today, without making users record a clip per character.
 _Full detail + acceptance:_ [#4876](https://github.com/dudarenok-maker/Castwright/issues/4876).
 
 ## Won't (this round) — explicitly parked
