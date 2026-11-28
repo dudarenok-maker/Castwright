@@ -59,6 +59,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
 import {
   assignVoice,
+  fetchVoiceLibrary,
   unassignVoice,
   promoteCharacterVoice,
   type VoiceLibraryEntry,
@@ -421,6 +422,32 @@ export function ProfileDrawer({
     (s) => (s as { voiceLibrary?: { entries: VoiceLibraryEntry[] } }).voiceLibrary?.entries,
   );
   const myVoices = myVoicesEntries ?? EMPTY_MY_VOICES;
+  /* Whether the qwen voice in play is a CLONE: the live cast slot says so
+     (`assignMyVoice` mirrors `provenance` into it), OR the My voices entry the
+     slot points at is cloned / consented / linked to a clone (the slot's copy
+     of `provenance` can lag a relabelled entry). "Save to my voices" would copy
+     a clone into an unconsented `designed` entry that Revoke can't reach, so
+     the server refuses it (403) and the drawer must not offer it. */
+  const qwenSlot = character.overrideTtsVoices?.qwen;
+  const qwenSlotEntry = qwenSlot?.libraryUuid
+    ? myVoices.find((e) => e.voiceUuid === qwenSlot.libraryUuid)
+    : undefined;
+  /* The Cast drawer never loads the library itself, so the entry may simply not
+     be in the store yet: fetch it, and treat Save as unavailable until it has
+     loaded (a failed load stays unavailable — we can't prove it isn't a clone). */
+  const libraryStatus = useAppSelector(
+    (s) => (s as { voiceLibrary?: { status: string } }).voiceLibrary?.status,
+  );
+  const qwenEntryPending = !!qwenSlot?.libraryUuid && !qwenSlotEntry && libraryStatus !== 'ready';
+  useEffect(() => {
+    if (qwenEntryPending && libraryStatus === 'idle') void dispatch(fetchVoiceLibrary());
+  }, [qwenEntryPending, libraryStatus, dispatch]);
+  const qwenVoiceIsClone =
+    qwenEntryPending ||
+    qwenSlot?.provenance === 'cloned' ||
+    qwenSlotEntry?.provenance === 'cloned' ||
+    !!qwenSlotEntry?.consent ||
+    !!(qwenSlotEntry as { clonedFrom?: unknown } | undefined)?.clonedFrom;
 
   /* Assigns a "My voices" entry to THIS character (fs-38 spec §2/§5's
      assign flow) — the server writes cast.json directly, so mirror the
@@ -1394,6 +1421,7 @@ export function ProfileDrawer({
               designPhase={slicePhase}
               designPlaying={designPlaying}
               designedVoiceId={designedVoiceId}
+              designedVoiceIsClone={qwenVoiceIsClone}
               error={engineError}
               qwen17bAvailable={qwen17bAvailable}
               charModelKey={charModelKey}
@@ -1470,7 +1498,7 @@ export function ProfileDrawer({
                     </div>
                   </div>
                 )}
-                {effectiveEngine === 'qwen' && designedVoiceId && (
+                {effectiveEngine === 'qwen' && designedVoiceId && !qwenVoiceIsClone && (
                   <button
                     type="button"
                     disabled={libraryActionBusy === 'promote'}
