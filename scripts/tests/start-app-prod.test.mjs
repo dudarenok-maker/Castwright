@@ -226,9 +226,34 @@ function makeRunDir(t) {
 // succeeds, and no HTTP(S) probe can ever read an answer from it.
 async function listenSilently(t, port = 0) {
   const server = net.createServer((socket) => socket.destroy());
-  await new Promise((r) => server.listen(port, '127.0.0.1', r));
+  await new Promise((resolve, reject) => {
+    server.once('error', reject); // an occupied port rejects instead of crashing the run
+    server.listen(port, '127.0.0.1', resolve);
+  });
   t.after(() => new Promise((r) => server.close(r)));
   return server.address().port;
+}
+
+// Two silent listeners on adjacent ports, returning startPort. startPort + 1 is
+// not ours to reserve, so when something else holds it, release startPort and
+// retry on a fresh one. firstPort seeds only the first attempt.
+async function listenSilentlyPair(t, firstPort = 0) {
+  for (let attempt = 0; ; attempt++) {
+    const first = net.createServer((socket) => socket.destroy());
+    const startPort = await new Promise((resolve, reject) => {
+      first.once('error', reject);
+      first.listen(attempt === 0 ? firstPort : 0, '127.0.0.1', () => resolve(first.address().port));
+    });
+    try {
+      await listenSilently(t, startPort + 1);
+    } catch (err) {
+      await new Promise((r) => first.close(r));
+      if (err.code !== 'EADDRINUSE' || attempt >= 20) throw err;
+      continue;
+    }
+    t.after(() => new Promise((r) => first.close(r)));
+    return startPort;
+  }
 }
 
 // A port that was free a moment ago and has nothing listening on it.
@@ -287,10 +312,37 @@ test('scanForOwnServer: a marker for port P that records a different port is not
   assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
 });
 
+// The retry helper itself: a neighbour somebody else holds must not crash the
+// test (listenSilently rejects on EADDRINUSE; the pair helper moves on).
+test('listenSilentlyPair: retries on a fresh startPort when startPort + 1 is already taken', async (t) => {
+  let free;
+  let blocker;
+  for (;;) {
+    free = await closedPort();
+    try {
+      blocker = await listenSilently(t, free + 1);
+      break;
+    } catch (err) {
+      assert.equal(err.code, 'EADDRINUSE'); // the neighbour of this candidate was taken too: pick another
+    }
+  }
+  assert.equal(blocker, free + 1);
+  // Without the retry: startPort binds, its neighbour is held, and the bind rejects.
+  await assert.rejects(listenSilently(t, free + 1), { code: 'EADDRINUSE' });
+  const startPort = await listenSilentlyPair(t, free);
+  assert.notEqual(startPort, free); // `free`'s neighbour is held, so the first attempt was abandoned
+  for (const port of [startPort, startPort + 1]) {
+    await new Promise((resolve, reject) => {
+      const socket = net.connect(port, '127.0.0.1', resolve);
+      socket.on('error', reject);
+      socket.on('close', () => socket.destroy());
+    });
+  }
+});
+
 test('scanForOwnServer: finds OUR OWN server anywhere in the range on the first pass', async (t) => {
   const runDir = makeRunDir(t);
-  const startPort = await listenSilently(t); // foreign: no marker in our run dir
-  await listenSilently(t, startPort + 1);
+  const startPort = await listenSilentlyPair(t); // foreign: no marker in our run dir
   writeServerOwner({ runDir, port: startPort + 1, https: false, pid: process.pid });
   assert.equal(await scanForOwnServer(startPort, 3, false, runDir), startPort + 1);
 });
@@ -389,8 +441,7 @@ test('confirmOwnServerFromMarker: marker + live pid + answering port is confirme
 
 test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on a rebound port', async (t) => {
   const runDir = makeRunDir(t);
-  const startPort = await listenSilently(t); // foreign: no marker in our run dir
-  await listenSilently(t, startPort + 1);
+  const startPort = await listenSilentlyPair(t); // foreign: no marker in our run dir
   writeServerOwner({ runDir, port: startPort + 1, https: false, pid: process.pid });
   const found = await waitForOwnServer({
     startPort,
