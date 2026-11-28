@@ -1083,7 +1083,7 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
        and writes it back as `provenance: 'designed'` with no `consent`. From a
        CLONED source that launders the recording into a voice that
        `purgeCloneArtifacts` (keyed on the clone's own uuid) can never reach, so
-       Revoke would leave a playable copy behind. Fails CLOSED like
+       Revoke would leave a playable copy behind. Refuses like
        `clonedRedesignRefusal`, via the fail-safe single-engine predicate on the
        QWEN slot only — the slot the copy below reads (`sourceKey`); a cloned
        coqui slot says nothing about those bytes. `/assign` stamps the slot
@@ -1104,6 +1104,21 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
         error:
           'This voice was cloned from a recording, so it cannot be saved to My voices as a ' +
           'designed voice — the copy would outlive a revoke. Use the cloned voice from My voices instead.',
+      });
+    }
+
+    /* Fail CLOSED on absent evidence: the slot names an entry whose manifest
+       can't be read (corrupt, EBUSY, an offline placeholder) while its bytes
+       exist, so "not a clone" can't be proven. Refuse with a retryable message
+       that makes no claim about the voice; a missing `.pt` has nothing to copy
+       and still takes the persona-only path below. */
+    if (
+      assignedLibraryUuid &&
+      !sourceEntry &&
+      existsSync(qwenVoicePtPath(`qwen-${assignedLibraryUuid}`))
+    ) {
+      return res.status(503).json({
+        error: "Couldn't read this voice's details just now, so it wasn't saved. Try again in a moment.",
       });
     }
 

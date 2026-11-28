@@ -10495,9 +10495,10 @@ async function realPromoteToLibrary(body: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
-  /* The server's cloned-source 403 carries a curated `{ error }` sentence —
-     surface just that, like realAssignLibraryVoice's 409 below. */
-  if (res.status === 403) {
+  /* The server's cloned-source 403 and unreadable-source 503 carry a curated
+     `{ error }` sentence — surface just that, like realAssignLibraryVoice's 409
+     below. */
+  if (res.status === 403 || res.status === 503) {
     const err = await res.json().catch(() => ({}));
     throw new Error((err as { error?: string }).error || 'Voice library promote failed.');
   }
