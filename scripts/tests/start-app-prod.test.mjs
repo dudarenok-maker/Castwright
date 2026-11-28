@@ -14,7 +14,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -451,6 +451,40 @@ test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on 
     runDir,
   });
   assert.equal(found, startPort + 1);
+});
+
+// #3264 pass 2: the post-spawn scan knows which pid it spawned. A stale marker
+// on the target port whose pid was reused (alive, listening foreign process,
+// even one that answers /api/health) must not be taken for the child.
+test('waitForOwnServer: with ownerPid, a stale marker (live foreign pid) on startPort loses to the child on startPort + 1', async (t) => {
+  const runDir = makeRunDir(t);
+  const startPort = await listenSilentlyPair(t); // foreign listener on startPort and startPort + 1
+  const reused = spawn(process.execPath, ['-e', 'setInterval(() => {}, 1000)'], {
+    stdio: 'ignore',
+    windowsHide: true,
+  });
+  t.after(() => reused.kill());
+  writeServerOwner({ runDir, port: startPort, https: false, pid: reused.pid }); // stale, pid alive
+  writeServerOwner({ runDir, port: startPort + 1, https: false, pid: process.pid }); // our child
+  const found = await waitForOwnServer({
+    startPort,
+    maxPorts: 3,
+    timeoutMs: 2000,
+    lanHttps: false,
+    runDir,
+    ownerPid: process.pid,
+  });
+  assert.equal(found, startPort + 1);
+});
+
+test('confirmOwnServerFromMarker: ownerPid, when given, must equal the marker pid', async () => {
+  const probes = {
+    readServerOwner: (_runDir, port) => ({ pid: 4242, port, https: true, startedAt: '' }),
+    probePort: async () => true,
+    pidIsAlive: () => true,
+  };
+  assert.equal(await confirmOwnServerFromMarker(8443, '/repo/.run', { ...probes, ownerPid: 4242 }), true);
+  assert.equal(await confirmOwnServerFromMarker(8443, '/repo/.run', { ...probes, ownerPid: 4243 }), false);
 });
 
 test('waitForOwnServer: maxPorts=1 times out when nothing listens at startPort', async () => {

@@ -317,10 +317,11 @@ function healthNamesOtherRunDir(served, ownRunDir) {
    marker whose pid was reused before either ran, while a foreign process holds
    the same port, reads as ours here. In decideLaunchAction (target and
    alternate ports, and the pre-spawn rebound scan) a readable /api/health
-   naming another runDir overrides it; the post-spawn scan has no such check,
-   and a foreign listener that does not answer /api/health is the case left,
-   rare but not impossible.
-   Exported for scripts/tests/start-app-prod.test.mjs. */
+   naming another runDir overrides it. The post-spawn scan instead passes
+   `ownerPid`, the pid of the server this launcher just spawned: the marker
+   must record exactly that pid, so a stale marker on another port (reused pid,
+   foreign listener, answering /api/health or not) can never be taken for the
+   child. Exported for scripts/tests/start-app-prod.test.mjs. */
 export async function confirmOwnServerFromMarker(
   port,
   runDir,
@@ -328,10 +329,12 @@ export async function confirmOwnServerFromMarker(
     probePort: probePortFn = probePort,
     pidIsAlive: pidIsAliveFn = pidIsAlive,
     readServerOwner: readServerOwnerFn = readServerOwner,
+    ownerPid = null,
   } = {},
 ) {
   const owner = readServerOwnerFn(runDir, port);
   if (!owner || !pidIsAliveFn(owner.pid)) return false;
+  if (ownerPid !== null && owner.pid !== ownerPid) return false;
   return probePortFn(port);
 }
 
@@ -351,7 +354,8 @@ export async function confirmOwnServerFromMarker(
    port with NO confirming marker is ours only if its body names our runDir (a
    server started before the marker existed). Only the pre-spawn scan passes it;
    waitForOwnServer's post-spawn scan stays marker-only, since the child it just
-   spawned always writes a marker. Exported for
+   spawned always writes a marker, and passes `ownerPid` (that child's pid) so
+   only a marker recording it counts. Exported for
    scripts/tests/start-app-prod.test.mjs. */
 export async function scanForOwnServer(
   startPort,
@@ -360,11 +364,12 @@ export async function scanForOwnServer(
   runDir,
   deadline = Infinity,
   probeServedFn = null,
+  ownerPid = null,
 ) {
   for (let i = 0; i < maxPorts; i += 1) {
     if (Date.now() >= deadline) return null;
     const candidate = startPort + i;
-    const marked = await confirmOwnServerFromMarker(candidate, runDir);
+    const marked = await confirmOwnServerFromMarker(candidate, runDir, { ownerPid });
     if (!probeServedFn) {
       if (marked) return candidate;
       continue;
@@ -403,13 +408,13 @@ export async function scanForOwnServer(
    must read — not a port a consumer merely asked for or guessed
    (Castwright#3030 round 2, finding F1). Exported for
    scripts/tests/start-app-prod.test.mjs. */
-export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir }) {
+export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir, ownerPid = null }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (maxPorts === 1) {
       if (await probePort(startPort)) return startPort;
     } else {
-      const found = await scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline);
+      const found = await scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline, null, ownerPid);
       if (found !== null) return found;
     }
     await new Promise((r) => setTimeout(r, 500));
@@ -653,6 +658,9 @@ async function main() {
     timeoutMs: HEALTH_TIMEOUT_MS,
     lanHttps,
     runDir,
+    // spawn() above runs node directly (no shell/wrapper), so child.pid is the
+    // server's process.pid, which is what its owner marker records.
+    ownerPid: child.pid,
   });
   if (boundPort === null) {
     fail(
