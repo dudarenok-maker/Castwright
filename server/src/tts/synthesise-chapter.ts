@@ -42,6 +42,7 @@ import { textHashForStale } from '../audio/segments-io.js';
 import { resamplePcm16 } from './resample-pcm16.js';
 import { withTtsRetry, isTransient } from './retry.js';
 import { getResolvedSidecarUrl, getLastKnownCoquiInstallState } from '../workspace/user-settings.js';
+import { waitForDesignMintIdle, QWEN_EVICT_DESIGN_WAIT_MS } from './qwen-evict-wait.js';
 import {
   UnresolvableClonedVoiceError,
   resolveClonedVoicesForChapter,
@@ -1044,7 +1045,24 @@ async function evictEngineForPhase(engine: CloneEngine, signal?: AbortSignal): P
   }
 }
 
+/* #4568 — the sidecar's Qwen unload also drops the models another book's voice
+   design or variant mint is using, so wait (bounded) for those to finish first. On
+   timeout the eviction still goes ahead and the design loses. Both call sites run
+   this inside `withCallTimeout`, so the chapter's abort reaches the wait. */
 async function evictQwenForCoquiPhase(signal?: AbortSignal): Promise<void> {
+  const w = await waitForDesignMintIdle({ signal });
+  if (w.timedOut) {
+    console.warn(
+      `[synthesise-chapter] qwen evict for coqui phase: a voice design/mint was still in flight ` +
+        `after the ${QWEN_EVICT_DESIGN_WAIT_MS}ms bound; evicting Qwen anyway, so the in-flight ` +
+        `design may fail`,
+    );
+  } else if (w.waited) {
+    console.info(
+      `[synthesise-chapter] qwen evict for coqui phase: waited ${w.waitedMs}ms for an in-flight ` +
+        `voice design/mint to finish`,
+    );
+  }
   return evictEngineForPhase('qwen', signal);
 }
 
