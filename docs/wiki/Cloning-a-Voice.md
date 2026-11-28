@@ -57,7 +57,7 @@ Open a character's profile drawer on the Cast screen and pick the clone under **
   <img alt="Profile drawer: the Narrator cast on a cloned voice from My voices" src="images/cloning-a-voice/04-cast-cloned-voice.png">
 </picture>
 
-A clone is protected once it's cast. A redesign or **Design full cast** won't overwrite it, and emotion variants aren't offered for it, because they wouldn't be the recording you were given permission to use.
+A clone is protected from being overwritten once it's cast. A redesign or **Design full cast** won't overwrite it, and emotion variants aren't offered for it, because they wouldn't be the recording you were given permission to use.
 
 ## Both engines
 
@@ -65,7 +65,7 @@ A clone works on **Qwen** and on **Coqui XTTS v2** ([Voice Engines](Voice-Engine
 
 ## It stays on your machine
 
-Cloning runs on your own computer with the local Qwen and Coqui engines. Your sample and the voice built from it stay on your machine. **Revoke** erases the recording and everything built from it, after telling you exactly what you'll lose. This can't be undone.
+Cloning runs on your own computer with the local Qwen and Coqui engines. Your sample and the voice built from it stay on your machine. **Revoke** erases the recording and the voice built from it, after telling you exactly what you'll lose. This can't be undone. Chapters you've already generated keep the cloned voice until you re-cast that character and regenerate them.
 
 ## Related
 
