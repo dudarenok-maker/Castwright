@@ -941,6 +941,24 @@ export async function resolveDesignedVoicesForChapter(
 ): Promise<ResolveDesignedVoicesResult> {
   const softFailedUuids = new Set<string>();
 
+  /* #4952 — consent beats presence for a designed SLOT whose library entry is
+     `cloned`: the auto-link migration (workspace/clone-copy-autolink.ts)
+     re-labels a pre-fix copy of a clone without rewriting cast slots, so the
+     slot still says `designed` and would otherwise render whatever `.pt`
+     survives a revoke (failed purge, crash mid-run). Checked up front for the
+     whole chapter, outside the per-voice soft-fail try below, so every such
+     voice is reported in one throw — a revoked person's voice must never be
+     rendered or substituted. */
+  const revokedClones: BrokenClonedVoice[] = [];
+  for (const { characterName, libraryUuid } of requests) {
+    if (!libraryUuid) continue;
+    const entry = await deps.readEntry(libraryUuid).catch(() => null);
+    if (entry?.provenance === 'cloned' && (!entry.consent || entry.consent.revokedAt)) {
+      revokedClones.push({ name: characterName, reason: 'revoked' });
+    }
+  }
+  if (revokedClones.length > 0) throw UnresolvableClonedVoiceError.fromList(revokedClones);
+
   for (const { characterName, characterId, libraryUuid, engine } of requests) {
     if (!libraryUuid) continue;
 
