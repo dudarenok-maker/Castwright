@@ -5307,6 +5307,7 @@ delete-first/write-last ordering invariant in
 `docs/features/282-ort-pip-consistency-marker.md`, and the `pipInstall` anchors in
 the design doc's §Changed files; run sheet §9 in
 `docs/testing/ort-marker-onbox-acceptance.md`.
+> **Known limitation (#2583, 2026-11-28):** `ensureOrtMarker`'s (`server/tts-sidecar/scripts/install-ort.mjs`) `owner === 'plain'` and `owner === 'none'` branches have no on-box acceptance and are covered only by the automated tests (`server/src/tts/ort-ensure-marker.test.ts`), by owner decision (no row added).
 
 > **Wave-3 step 2, 2026-08-20 — STILL OWED, not run.** Needs a real installed
 > Castwright release directory (`release/` layout).
