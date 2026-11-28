@@ -564,10 +564,16 @@ test('#3587 (c): a BLK row is placed among BLK rows by number', () => {
 
 
 test('#3587 (e) CLI: --build-union writes a union carrying a BLK row, and --publishing of it exits 0', () => {
+  // The other lane's row takes the ID the real register would mint next, so this
+  // fixture never collides with a Blocked row the register really carries.
+  const nextBlk = REAL_REGISTER_TEXT.match(/<!-- next-id: (BLK\d+) -->/);
+  assert.ok(nextBlk, 'the register has a BLK next-id marker');
+  const otherId = nextBlk[1];
+  assert.ok(!REAL_LIVE_VIEW_HTML.includes(`<span class="num">${otherId}</span>`), 'the next BLK id is not already a live row');
   const block = `    <details class="item">
-      <summary><span class="num">BLK107</span><span class="iname">other lane blocked row</span><span class="risk">default</span></summary>
+      <summary><span class="num">${otherId}</span><span class="iname">other lane blocked row</span><span class="risk">default</span></summary>
       <div class="body">
-        <p>body BLK107</p>
+        <p>body ${otherId}</p>
       </div>
     </details>`;
   const section = REAL_LIVE_VIEW_HTML.match(/<section\b[^>]*id="blocked"[\s\S]*?<\/section>/);
@@ -579,10 +585,10 @@ test('#3587 (e) CLI: --build-union writes a union carrying a BLK row, and --publ
     const unionPath = join(dirname(publishedPath), 'union.html');
     const without = runCli(['--against-published', publishedPath], env);
     assert.equal(without.status, 1, without.stderr);
-    assert.match(without.stderr, /unmerged-lane-row: BLK107/);
+    assert.ok(without.stderr.includes(`unmerged-lane-row: ${otherId}`), without.stderr);
     const built = runCli(['--against-published', publishedPath, '--build-union', unionPath], env);
     assert.equal(built.status, 0, `stdout: ${built.stdout}\nstderr: ${built.stderr}`);
-    assert.ok(readFileSync(unionPath, 'utf8').includes('<span class="num">BLK107</span>'));
+    assert.ok(readFileSync(unionPath, 'utf8').includes(`<span class="num">${otherId}</span>`));
     const checked = runCli(['--against-published', publishedPath, '--publishing', unionPath], env);
     assert.equal(checked.status, 0, `stdout: ${checked.stdout}\nstderr: ${checked.stderr}`);
   });
