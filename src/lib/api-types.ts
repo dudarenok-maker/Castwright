@@ -6108,7 +6108,7 @@ export interface components {
                 bookId?: string;
                 characterId?: string;
             };
-            /** @description voiceUuid of the cloned voice this entry is a byte-identical copy of (set by the one-time auto-link migration, #4952); revoking that clone revokes this entry. */
+            /** @description voiceUuid of the cloned voice this entry is a saved copy of (set by the start-up auto-link, #4952, for copies made before "Save to my voices" refused cloned sources); revoking or deleting that clone revokes this entry and erases its voice files. */
             clonedFrom?: string;
             createdAt: string;
             updatedAt: string;

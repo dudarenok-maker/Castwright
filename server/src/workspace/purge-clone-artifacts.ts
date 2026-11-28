@@ -476,8 +476,8 @@ export async function purgeCloneArtifacts(
       xttsEvictResult.detail,
     );
   }
-  /* #4952 — cascade to byte-identical copies of this clone that the one-time
-     auto-link migration (`clone-copy-autolink.ts`) re-labelled `clonedFrom`
+  /* #4952 — cascade to saved copies of this clone that the start-up
+     auto-link (`clone-copy-autolink.ts`) re-labelled `clonedFrom`
      this uuid: stamp each copy revoked (so the consent gates read it as
      revoked, exactly like the clone) and erase its artifacts. The copy's
      manifest is kept — only the clone's own delete removes a manifest. A copy

@@ -1363,8 +1363,8 @@ The tests prove the link on synthetic libraries. They cannot show a real library
 - **Before the first start of this build,** copy `<workspace>/voice-library` aside and list your saved designed voices (name and uuid) so you can tell which should and should not change.
 - **Start the server and read the log.** Each `[clone-copy-autolink] linked voice "<uuid>" to its source clone "<uuid>"` line must name a voice you know is a copy of a cloned voice. A line naming a voice you designed yourself is a failure; stop and report it. A `looks like copies … left unchanged` line is expected only for a voice you cannot account for.
 - **A linked copy now behaves as the clone.** In My voices it shows as cloned with the clone's consent. Revoking the original clone also revokes the copy; its `qwen-<copy uuid>.pt` and `.json` are gone from `voices/qwen/`, the entry stays, and a book whose character uses it stops with a "(revoked)" message instead of rendering.
-- **A copy of an already-revoked clone** (if you have one) is linked as revoked on that start and its files are gone.
-- **A second start** logs no `linked` lines and changes nothing.
+- **A copy of an already-revoked clone** (if you have one): a copy saved before 1.15.0 is linked as revoked on that start and its files are gone. A copy saved on 1.15.0 is linked only if its character still names the revoked clone; otherwise it stays a designed voice and the log reports a count, which is expected.
+- **A second start** logs no `linked` lines and changes nothing. **Delete check:** deleting a cloned voice that has a linked copy used by a book lists that book in the confirmation.
 
 **Setup:** A real install with a populated My voices; ideally a pre-#4954 "Save to my voices" copy of a clone. No GPU, sidecar or analyzer needed. If the install has no such copy, the row can only confirm that no designed voice was linked.
 
