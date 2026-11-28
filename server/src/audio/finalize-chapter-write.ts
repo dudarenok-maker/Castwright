@@ -566,8 +566,8 @@ async function finalizeChapterAudioWriteInner(
          best record of what it rendered under, so seed the freeze from it (a repair never moves
          the reference). Still no `renderedAt` — it keeps sorting oldest. */
       const frozenEngine = prior?.renderedEngine ?? prior?.voiceEngine;
-      // #4225: for a pre-2026-07-06 prior (no key of its own) `priorFile?.modelKey` is the chapter key, which a
-      // partial write by another character may already have moved; aggregate.ts then stamps the moved tier.
+      // #4225: this seed still feeds the audition render key (a keyless pre-2026-07-06 prior may take a moved
+      // chapter key). The in-book anchor tier does not read it: that comes from each segment's own stamp.
       const frozenModelKey = prior?.renderedModelKey ?? prior?.modelKey ?? priorFile?.modelKey;
       if (frozenEngine) snapshot.renderedEngine = frozenEngine;
       if (frozenModelKey) snapshot.renderedModelKey = frozenModelKey;
