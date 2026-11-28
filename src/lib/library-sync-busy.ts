@@ -11,4 +11,4 @@ export const librarySyncPausedReason = (busyTitle: string): string =>
 
 /** Toast for a sync the server refused with 409 `book_busy` after the screen loaded. */
 export const librarySyncBusyToast = (busyTitle: string): string =>
-  `Profile sync not applied — "${busyTitle}" is re-analysing. Run the sync again once it finishes.`;
+  `Profile sync not applied — "${busyTitle}" is re-analysing. Neither book's profile was changed.`;

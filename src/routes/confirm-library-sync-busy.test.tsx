@@ -138,6 +138,9 @@ describe('Confirm cast — library sync refused 409 book_busy (real view)', () =
     await waitFor(() => expect(syncToasts(store)).toHaveLength(1));
     expect(syncToasts(store)[0].message).toContain('"Book Two" is re-analysing');
     expect(syncToasts(store)[0].message).not.toContain('Book One');
+    // No UI path can rerun the sync once the cast confirm moves on, so the copy gives no such instruction.
+    expect(syncToasts(store)[0].message).toContain("Neither book's profile was changed.");
+    expect(syncToasts(store)[0].message).not.toMatch(/again|once it finishes/i);
   });
 
   it('names the library book when the server says that one is busy', async () => {
