@@ -127,6 +127,18 @@ describe('wrapped Gemini 429 (RetryInfo inside the message string)', () => {
     expect(parseRetryDelayMs(wrapped())).toBe(37000);
   });
 
+  it('parseRetryDelayMs returns null for a non-array details instead of throwing', () => {
+    const msg = JSON.stringify({ error: { message: 'x', details: { a: 1 } } });
+    expect(parseRetryDelayMs(new ApiError({ status: 429, message: msg }))).toBeNull();
+  });
+
+  it('parseRetryDelayMs skips a null details entry and still reads the RetryInfo after it', () => {
+    const msg = JSON.stringify({
+      error: { message: 'x', details: [null, 'junk', { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '5s' }] },
+    });
+    expect(parseRetryDelayMs(new ApiError({ status: 429, message: msg }))).toBe(5000);
+  });
+
   it('withTransportRetry blocks the limiter for the delay Google asked for and classifies rate-limit', async () => {
     const limiter = fakeLimiter();
     const err = wrapped();

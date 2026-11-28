@@ -18,7 +18,7 @@ export function tryParseApiError(raw: string): ApiErrorEnvelope | null {
    the classifier rejects but the retry helper still has to honour. */
 export function readApiErrorDetails(raw: string): unknown[] {
   const unwrapped = tryParseApiError(raw)?.details;
-  if (unwrapped) return unwrapped;
+  if (Array.isArray(unwrapped)) return unwrapped;
   const start = raw.indexOf('{');
   if (start < 0) return [];
   try {

@@ -97,9 +97,10 @@ export function parseRetryDelayMs(err: unknown): number | null {
   const raw = (err as Error)?.message ?? String(err);
   /* Same unwrap as the failure taxonomy: the SDK's wrapper puts Google's envelope (and its
      RetryInfo) inside `error.message`, so the outer object has no `details` of its own. */
-  const details = readApiErrorDetails(raw) as Array<{ '@type'?: string; retryDelay?: string }>;
+  const details = readApiErrorDetails(raw) as Array<{ '@type'?: string; retryDelay?: string } | null>;
   for (const d of details) {
-    const type = d['@type'] ?? '';
+    if (!d || typeof d !== 'object') continue; // a malformed entry must not turn a 429 into a TypeError
+    const type = typeof d['@type'] === 'string' ? d['@type'] : '';
     const delay = d.retryDelay;
     if (typeof delay === 'string' && type.includes('RetryInfo')) {
       /* Common shapes: "15s", "1.5s", "500ms", "0.5s". */
