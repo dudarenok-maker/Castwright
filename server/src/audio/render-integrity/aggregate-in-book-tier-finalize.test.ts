@@ -1,6 +1,6 @@
 /* #3518 pass-3 P3-1 — a partial write by ANOTHER character rewrites the chapter file's `modelKey` and
-   carries an untouched character's snapshot forward verbatim. A snapshot with no tier of its own
-   (written before 2026-07-06) must therefore be an UNKNOWN-tier anchor: the chapter-level key no longer
+   carries an untouched character's snapshot and segments forward verbatim. A legacy character (no
+   segment stamp, #4225) must therefore stay an UNKNOWN-tier anchor: the chapter-level key no longer
    describes that character's takes. Driven through the real finalizeChapterAudioWrite + scoreBook. */
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { mkdtempSync, writeFileSync, mkdirSync, readFileSync, rmSync } from 'node:fs';
@@ -91,10 +91,11 @@ async function renderAt06() {
   });
 }
 
-/** Strip Castor's snapshot to its pre-2026-07-06 shape: no tier key of any kind. */
+/** Strip Castor to its pre-2026-07-06 shape: unstamped segments and no snapshot tier key of any kind. */
 function makeCastorLegacy() {
   const f = readSegs();
   for (const k of ['modelKey', 'renderedModelKey', 'renderedAt', 'renderedEngine']) delete f.characterSnapshots.castor[k];
+  for (const s of f.segments) if (s.characterId === 'castor') delete s.renderedModelKey;
   writeFileSync(join(bookDir, 'audio', 'ch1.segments.json'), JSON.stringify(f));
 }
 
@@ -117,7 +118,7 @@ async function castorRow() {
   return row;
 }
 
-describe('scoreBook after a real partial finalize — a snapshot with no tier of its own is an unknown-tier anchor (#3518 P3-1)', () => {
+describe('scoreBook after a real partial finalize — a legacy unstamped character is an unknown-tier anchor (#3518 P3-1)', () => {
   it("legacy Castor (no tier key) is NOT stamped 1.7B after Bram's line is re-recorded at 1.7B: no stamp at all", async () => {
     await renderAt06();
     makeCastorLegacy();
@@ -133,7 +134,7 @@ describe('scoreBook after a real partial finalize — a snapshot with no tier of
     expect((await castorRow()).inBookModelKey).toBeUndefined();
   });
 
-  it("control: a modern Castor snapshot stays stamped 0.6B after Bram's line is re-recorded at 1.7B", async () => {
+  it("control: a modern (stamped) Castor stays stamped 0.6B after Bram's line is re-recorded at 1.7B", async () => {
     await renderAt06();
     await rerecordBramAt17();
     expect((await castorRow()).inBookModelKey).toBe(T06);

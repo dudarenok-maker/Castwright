@@ -475,6 +475,11 @@ export interface ChapterSegment {
       and its removed `buildSnapshotIdResolver` doc comment for the bug class
       this closes. */
   resolvedCharacterId?: string;
+  /** #4225 — the model key this segment's audio was rendered under, stamped by
+      `finalize-chapter-write.ts` on the segments that write re-synthesised; an
+      untouched segment keeps its stamp or its absence. Absent on a legacy or
+      fallback-engine segment: the tier is unknown. */
+  renderedModelKey?: TtsModelKey;
 }
 
 /** Silence padding bookending the spoken chapter-title narration. Each chapter

@@ -7,7 +7,7 @@
    Real ffmpeg throughout (encode + decode + gain) — no mocks at the audio
    boundary, matching the rest of the audio suite. */
 
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, vi } from 'vitest';
 import { mkdtempSync, rmSync, mkdirSync, writeFileSync, existsSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -1522,6 +1522,145 @@ describe('POST /:bookId/chapters/:chapterId/splice — unset book language (Task
   });
 });
 
+
+/* #4225 — both splice modes hand every line they did not re-record to the real finalize with its
+   rendered model key (or the absence of one) intact. */
+describe('POST /:bookId/chapters/:chapterId/splice — per-segment rendered model key (#4225)', () => {
+  const T06 = 'qwen3-tts-0.6b';
+  const T17 = 'qwen3-tts-1.7b';
+  const author = 'Tier Stamp Author';
+  const series = 'Standalones';
+  const title = 'Tier Stamp Story';
+  let stampBookId: string;
+  let segPath: string;
+
+  /* Castor owns lines 0 (stamped), 1 (stamped) and 2 (legacy, no stamp); Amy owns line 3. */
+  const line = (i: number, characterId: string, extra: object) => ({
+    groupIndex: i,
+    characterId,
+    sentenceIds: [40 + i],
+    startSec: i,
+    endSec: i + 1,
+    voiceName: `qwen-${characterId}`,
+    resolvedCharacterId: characterId,
+    ...extra,
+  });
+  const prior = [
+    line(0, 'castor', { renderedModelKey: T06 }),
+    line(1, 'castor', { renderedModelKey: T06 }),
+    line(2, 'castor', {}),
+    line(3, 'amy', { renderedModelKey: T06 }),
+  ];
+
+  beforeEach(async () => {
+    const [{ makeBookId }, mp3] = await Promise.all([import('../workspace/paths.js'), import('../tts/mp3.js')]);
+    stampBookId = makeBookId(author, series, title);
+    const bookDir = join(workspaceRoot, 'books', author, series, title);
+    const stampAudioRoot = join(bookDir, 'audio');
+    segPath = join(stampAudioRoot, `${SLUG}.segments.json`);
+    rmSync(bookDir, { recursive: true, force: true });
+    mkdirSync(stampAudioRoot, { recursive: true });
+    mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+    writeFileSync(join(bookDir, 'manuscript.txt'), 'placeholder');
+    writeFileSync(
+      join(bookDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: stampBookId,
+        manuscriptId: 'm_tier_stamp',
+        title,
+        author,
+        series,
+        seriesPosition: null,
+        isStandalone: true,
+        manuscriptFile: 'manuscript.txt',
+        castConfirmed: true,
+        language: 'en',
+        chapters: [{ id: 1, title: 'Chapter 1', slug: SLUG, duration: '0:04' }],
+        coverGradient: ['#000', '#fff'],
+        createdAt: new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      }),
+    );
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: ['castor', 'amy'].map((id) => ({
+          id,
+          name: id,
+          gender: 'female',
+          attributes: [],
+          ttsEngine: 'qwen',
+          overrideTtsVoices: { qwen: { name: `${id}-voice`, libraryUuid: id } },
+        })),
+      }),
+    );
+    /* The half second of tail keeps the decoded length clear of the last segment's end. */
+    const mp3Bytes = await mp3.encodePcmToAudio(tone(4.5, 6000), SR, { format: 'mp3', quality: 2 });
+    writeFileSync(join(stampAudioRoot, `${SLUG}.mp3`), mp3Bytes);
+    writeFileSync(
+      segPath,
+      JSON.stringify({
+        bookId: stampBookId,
+        chapterId: 1,
+        chapterTitle: 'Chapter 1',
+        durationSec: 4.5,
+        sampleRate: SR,
+        modelKey: T06,
+        synthesizedAt: new Date().toISOString(),
+        segments: prior,
+        characterSnapshots: {
+          castor: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-castor', modelKey: T06 },
+          amy: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-amy', modelKey: T06 },
+        },
+      }),
+    );
+  });
+
+  async function splice(body: object): Promise<Array<Record<string, unknown>>> {
+    const res = await request(app)
+      .post(`/api/books/${encodeURIComponent(stampBookId)}/chapters/1/splice`)
+      .send(body);
+    expect(
+      parseSse(res.text).some((e) => e.type === 'splice_complete'),
+      `expected splice_complete, got ${res.text}`,
+    ).toBe(true);
+    return JSON.parse(readFileSync(segPath, 'utf8')).segments;
+  }
+
+  it('rerecord of one segment stamps it with the re-record key; every other entry stays byte-identical', async () => {
+    const [{ loadAnalysisCache }, { synthesiseChapter }] = await Promise.all([
+      import('../store/analysis-cache.js'),
+      import('../tts/synthesise-chapter.js'),
+    ]);
+    vi.mocked(loadAnalysisCache).mockResolvedValueOnce({
+      chapters: { 1: [{ id: 41, chapterId: 1, characterId: 'castor', text: 'Yes.' }] },
+    });
+    /* As long as the line it replaces, so no later line is retimed. */
+    vi.mocked(synthesiseChapter).mockResolvedValueOnce({
+      pcm: tone(1.0, 9000),
+      sampleRate: SR,
+      segments: [],
+      durationSec: 1.0,
+      rerecordMs: 0,
+      transcribeMs: 0,
+      embedMs: 0,
+    });
+
+    const after = await splice({ mode: 'rerecord', characterId: 'castor', segmentIndices: [1], modelKey: T17 });
+
+    expect(after).toHaveLength(4);
+    expect(after[1]).toHaveProperty('renderedModelKey', T17);
+    for (const i of [0, 2, 3]) expect(JSON.stringify(after[i])).toBe(JSON.stringify(prior[i]));
+    expect(after[2]).not.toHaveProperty('renderedModelKey');
+  });
+
+  it('remix re-synthesises nothing: every entry keeps its prior stamp and the legacy one stays unstamped', async () => {
+    const after = await splice({ mode: 'remix', characterId: 'castor', gainDb: 6 });
+
+    expect(after.map((s) => JSON.stringify(s))).toEqual(prior.map((s) => JSON.stringify(s)));
+    expect(after[2]).not.toHaveProperty('renderedModelKey');
+  });
+});
 
 /* #4233 — the catch-all's `chapter_failed` frame must never carry a node fs
    error's or a lock timeout's own message: both embed the absolute workspace
