@@ -1,28 +1,29 @@
 #requires -Version 5.1
 # Pester runner for PowerShell harness tests under scripts\tests\.
-# Hard requirement: Pester >= 5.0. The Windows-shipped 3.4 module's API
-# is incompatible with the syntax used in *.Tests.ps1.
+# Hard requirement: Pester 5.x (>= 5.0, < 6.0). The Windows-shipped 3.4
+# module's API is incompatible with the syntax used in *.Tests.ps1, and
+# Pester 6 fails every case, so we pin the highest 5.x, not the highest installed.
 
 $ErrorActionPreference = 'Stop'
 
 $here = Split-Path -Parent $MyInvocation.MyCommand.Path
+. (Join-Path $here "..\lib\select-pester5.ps1")
 
-$pester = Get-Module -ListAvailable -Name Pester |
-    Where-Object { $_.Version -ge [Version]'5.0.0' } |
-    Sort-Object Version -Descending |
-    Select-Object -First 1
+$pester = Select-Pester5Module -Modules (Get-Module -ListAvailable -Name Pester)
 
 if (-not $pester) {
-    Write-Host "Pester >= 5.0 is required for PowerShell harness tests."
-    Write-Host ""
-    Write-Host "Install once (current user, no admin needed):"
-    Write-Host "  Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck"
-    Write-Host ""
-    Write-Host "Then re-run: npm run test:scripts"
+    Get-Pester5InstallHint | ForEach-Object { Write-Host $_ }
     exit 1
 }
 
-Import-Module $pester -Force
+$tooNew = Find-LoadedPesterTooNew -Modules (Get-Module -Name Pester)
+if ($tooNew) {
+    Write-Host "Pester $($tooNew.Version) is already loaded in this session and cannot be replaced by 5.x."
+    Write-Host "Start a fresh session or use: npm run test:scripts"
+    exit 1
+}
+
+Import-Module $pester.Path -RequiredVersion $pester.Version -Force
 
 $config = New-PesterConfiguration
 $config.Run.Path        = $here

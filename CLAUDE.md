@@ -340,8 +340,8 @@ Design rationale:
 - `npm run test:server-slow` — Vitest single-run for 11 timeout-prone server test files (analyzer/gemini, a parsers PDF test, and routes tests), pinned to one fork via `server/vitest.config.slow.ts`. Runs in the cloud `verify.yml` battery and the full local `npm run verify`, not in `verify:fast:branch` or `verify:fast` — and, as of ops-2997, not in any git hook (see "Commit gate"). See `docs/features/archive/45-vitest-pool-tuning.md` for the rationale.
 - `npm run test:server:routes` / `:tts` / `:analyzer` / `:workspace` and `npm run test:components` / `:store` / `:lib` / `:views` — opt-in, manual, subsystem-scoped test runs (`vitest run <subdir>` under the hood) for a fast local loop when you know you're only touching one area. Not part of the automated verify pipeline — not in `STEPS[]`, not cached, not gated by any hook, and carry no coverage guarantee (a `routes/` change that breaks something in `workspace/` isn't caught by `test:server:routes` alone). The four server-side scripts cover 76.9% of `test:server`'s **tests** (file counts differ: `test:server:routes` selects 137 files, not the 146 a raw file search under `server/src/routes/` would find — 9 are in `vitest.config.slow.ts`'s `SLOW_FILES` and excluded from `test:server` itself, so this matches, not a gap); the four frontend scripts cover 86.3% of `test`'s tests (as of 2026-09-02; these figures will drift as test files are added or removed). See `docs/superpowers/specs/2026-09-01-verify-scope-branch-timing-design.md` Decision E.
 - `npm run test:scripts` — Pester 5 single-run for `scripts/lib/` PowerShell helpers
-  (log rotation/pruning). Requires Pester >= 5.0; install once with
-  `Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck`.
+  (log rotation/pruning). Requires Pester 5.x (>= 5.0, < 6.0; Pester 6 fails every case); install once with
+  `Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck`.
 - `npm run test:sidecar` — pytest single-run for `server/tts-sidecar/tests/`.
   Uses the sidecar venv at `server/tts-sidecar/.venv\Scripts\python.exe`; emits
   a SKIP banner and exits 0 when the venv isn't bootstrapped yet (fresh clone).
@@ -1553,11 +1553,11 @@ clone, run `npm install` once and you're done.
 
 Additional one-time setup:
 
-- **Pester >= 5.0** for the PowerShell-scripts harness (Windows-bundled Pester 3.4 isn't API-compatible). Install once per user:
+- **Pester 5.x (>= 5.0, < 6.0)** for the PowerShell-scripts harness (Windows-bundled Pester 3.4 isn't API-compatible; Pester 6 fails every case). Install once per user:
 
-      Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
+      Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
 
-  `scripts/tests/run.ps1` prints this same hint if it can't find Pester 5+.
+  `scripts/tests/run.ps1` prints this same hint if it can't find a Pester 5.x.
 
 - **Playwright chromium** for the e2e harness:
 

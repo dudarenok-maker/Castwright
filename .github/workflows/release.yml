@@ -75,8 +75,9 @@ jobs:
       - name: Guard — committed release notes are real
         run: node scripts/release-notes-gate.mjs "${{ github.ref_name }}"
 
-      # Full battery (incl. build). Sidecar pytest + Pester skip with a banner on
-      # a fresh runner (no venv / no Pester 5), as the old verify:quick leg did.
+      # Full battery (incl. build). Sidecar pytest skips with a banner on a
+      # fresh runner (no venv); the Pester leg does not skip (exits 1 without a
+      # Pester 5.x).
       - name: Verify
         run: npm run verify
 
@@ -127,7 +128,8 @@ jobs:
         run: sudo ifconfig lo0 alias 127.0.0.2 up
 
       # `verify:quick` is `test:all` (hooks + frontend + server + scripts +
-      # sidecar; sidecar/Pester skip with a banner on a fresh runner).
+      # sidecar; sidecar skips with a banner on a fresh runner, Pester exits 1
+      # without a Pester 5.x).
       - name: Verify
         run: npm run verify:quick
 

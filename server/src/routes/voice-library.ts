@@ -34,6 +34,7 @@ import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import {
   CLONE_ENGINE_LIST,
+  hasClonedProvenance,
   cloneStorageKey,
   isArtifactVersionStale,
   isCloneEngine,
@@ -1077,6 +1078,50 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
        WITHOUT touching `character.voiceUuid`) wins outright; only fall back
        to the character-id-derived qwenStorageKey when no libraryUuid is set. */
     const assignedLibraryUuid = character.overrideTtsVoices?.qwen?.libraryUuid;
+
+    /* Consent gate — "Save to my voices" copies the source `.pt` under a NEW uuid
+       and writes it back as `provenance: 'designed'` with no `consent`. From a
+       CLONED source that launders the recording into a voice that
+       `purgeCloneArtifacts` (keyed on the clone's own uuid) can never reach, so
+       Revoke would leave a playable copy behind. Refuses like
+       `clonedRedesignRefusal`, via the fail-safe single-engine predicate on the
+       QWEN slot only — the slot the copy below reads (`sourceKey`); a cloned
+       coqui slot says nothing about those bytes. `/assign` stamps the slot
+       from the entry. */
+    /* The slot carries a COPY of the entry's provenance and the two can disagree
+       (a relabelled pre-fix copy still sits in a `designed` slot), so the entry
+       whose bytes are copied is read too: cloned, or carrying consent / a
+       `clonedFrom` link (read defensively — the field lands with the migration),
+       refuses. */
+    const sourceEntry = assignedLibraryUuid ? await readEntry(assignedLibraryUuid) : null;
+    const sourceEntryIsClone =
+      !!sourceEntry &&
+      (sourceEntry.provenance === 'cloned' ||
+        !!sourceEntry.consent ||
+        !!(sourceEntry as { clonedFrom?: unknown }).clonedFrom);
+    if (hasClonedProvenance(character, 'qwen') || sourceEntryIsClone) {
+      return res.status(403).json({
+        error:
+          'This voice was cloned from a recording, so it cannot be saved to My voices as a ' +
+          'designed voice — the copy would outlive a revoke. Use the cloned voice from My voices instead.',
+      });
+    }
+
+    /* Fail CLOSED on absent evidence: the slot names an entry whose manifest
+       can't be read (corrupt, EBUSY, an offline placeholder) while its bytes
+       exist, so "not a clone" can't be proven. Refuse with a retryable message
+       that makes no claim about the voice; a missing `.pt` has nothing to copy
+       and still takes the persona-only path below. */
+    if (
+      assignedLibraryUuid &&
+      !sourceEntry &&
+      existsSync(qwenVoicePtPath(`qwen-${assignedLibraryUuid}`))
+    ) {
+      return res.status(503).json({
+        error: "Couldn't read this voice's details just now, so it wasn't saved. Try again in a moment.",
+      });
+    }
+
     const sourceKey = assignedLibraryUuid
       ? `qwen-${assignedLibraryUuid}`
       : qwenStorageKey({ voiceUuid: character.voiceUuid, voiceId: character.voiceId }, characterId);

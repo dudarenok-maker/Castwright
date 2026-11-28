@@ -4,8 +4,9 @@
 # Wired into `npm run test:all` (and therefore the pre-push gate). A fresh
 # clone won't have the sidecar venv bootstrapped yet, so this runner emits a
 # loud SKIP banner and exits 0 when the venv (or pytest inside it) is
-# missing -- the rest of the gate still runs. Same convention as the Pester
-# runner's "install Pester" hint at scripts/tests/run.ps1.
+# missing -- the rest of the gate still runs. (The Pester runner,
+# scripts/tests/run.ps1, does NOT skip: with no Pester 5.x it prints the
+# install hint from scripts/lib/select-pester5.ps1 and exits 1.)
 #
 # ASCII-only by design (see CLAUDE.md / feedback_powershell_ascii_only).
 
