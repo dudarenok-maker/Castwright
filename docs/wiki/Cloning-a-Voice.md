@@ -11,7 +11,7 @@ The wizard won't build a clone without a consent record. Fill in:
 - **Person's name**: whose voice this is.
 - **Relationship**: **This is my own voice**, **A family member, with their permission**, or **My child (I'm their guardian)**.
 - **Your name (the attester)**: asked only when the voice isn't yours, so the record says who gave consent. Castwright refuses the clone without it.
-- The attestation box. For your own voice or a family member's, it reads "I attest I have this person's permission to clone their voice." For a child, it reads "I attest, as this child's guardian, that I consent to cloning their voice."
+- The attestation box. Its sentence fits the relationship you picked: for a family member it says you have their permission to clone their voice, and for a child it reads "I attest, as this child's guardian, that I consent to cloning their voice."
 
 The consent record stays with the voice. Its My voices card shows the person and the relationship under a **Cloned** badge.
 
