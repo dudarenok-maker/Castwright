@@ -152,6 +152,9 @@ export function RestructureView({ bookId }: Props) {
                post-restructure re-hydrate too. */
             characterIdAliases: fresh.characterIdAliases,
             paragraphsMergedChapters: fresh.paragraphsMergedChapters,
+            /* #3435 / #3507 — the analysis gaps, and the no-text chapters that
+               stay done without audio. */
+            analysis: fresh.analysis,
           }),
         );
       }

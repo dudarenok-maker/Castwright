@@ -340,3 +340,26 @@ describe('#4227 the learn after a restructure is scoped to the manuscript slice'
     expect(sent[1].baseRevision).toEqual({ castConfirmed: 'state-old' });
   });
 });
+
+/* #3507 — the post-restructure re-hydrate must hand the slice the re-read's
+   `analysis`, or a skipped no-text chapter drops back to Queued until the next
+   full book read. */
+describe('#3507 a restructure keeps a skipped no-text chapter done', () => {
+  it("the re-read's noTextChapterIds reach the chapters slice", async () => {
+    const store = makeStore();
+    apiMock.getBookState.mockResolvedValue({
+      state: {
+        chapters: [
+          { id: 1, title: 'One', slug: '01-one' },
+          { id: 2, title: 'Two', slug: '02-two' },
+        ],
+      },
+      completedSlugs: [],
+      manuscriptEdits: { sentences: CLIENT },
+      analysis: { failedChapterIds: [], noTextChapterIds: [2] },
+    });
+    apiMock.refreshChapterTitles.mockResolvedValue({ sentenceRemap: identity(CLIENT), warnings: [] });
+    await run(store, 'refresh');
+    expect(store.getState().chapters.chapters[1]).toMatchObject({ state: 'done', skippedNoText: true });
+  });
+});

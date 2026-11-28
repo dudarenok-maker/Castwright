@@ -584,6 +584,9 @@ export interface BookStateResponse {
     stage1Ready?: boolean;
     resumeRequired?: boolean;
     unattributedChapterIds?: number[];
+    /** #3507 — non-excluded chapters with no narratable text; they count as
+        complete without audio. */
+    noTextChapterIds?: number[];
   };
 }
 

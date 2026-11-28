@@ -2049,3 +2049,143 @@ describe('paragraphsMergedChapterIds (#2254)', () => {
     expect(state.paragraphsMergedChapterIds).toEqual([]);
   });
 });
+
+/* #3507 — an included chapter with no narratable text is skipped at generation
+   and counts as complete. No audio exists for it, so the slice learns it from
+   the book-state's `noTextChapterIds` (hydrate) or the tick's `skippedNoText`. */
+describe('chaptersSlice — a skipped no-text chapter is done (#3507)', () => {
+  type HydrateArg = Parameters<typeof chaptersActions.hydrateFromBookState>[0];
+  const characters = [{ id: 'narrator' }, { id: 'eliza' }] as HydrateArg['characters'];
+  const row = (id: number, overrides: Partial<HydrateArg['chapters'][number]> = {}) => ({
+    id,
+    title: `Chapter ${id}`,
+    slug: `0${id}-chapter`,
+    ...overrides,
+  });
+  /* Chapter 2 is the subject; chapter 1 is an ordinary queued neighbour. */
+  const hydrate = ({
+    second = row(2),
+    completedSlugs = [],
+    analysis = { noTextChapterIds: [2] },
+  }: {
+    second?: HydrateArg['chapters'][number];
+    completedSlugs?: string[];
+    analysis?: HydrateArg['analysis'];
+  } = {}) =>
+    chaptersSlice.reducer(
+      baseState([]),
+      chaptersActions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [row(1), second],
+        completedSlugs,
+        characters,
+        analysis,
+      }),
+    );
+
+  it('(a) a hydrate marks a listed chapter with no audio done, flagged, with every character done', () => {
+    const next = hydrate();
+    expect(next.chapters[1]).toMatchObject({ state: 'done', progress: 1, skippedNoText: true });
+    expect(next.chapters[1].characters).toEqual({ narrator: 'done', eliza: 'done' });
+    expect(next.chapters[0]).toMatchObject({ state: 'queued', progress: 0 });
+    expect(next.chapters[0].skippedNoText).toBeUndefined();
+  });
+
+  it('(a) a skipped chapter carries no audio fields, even ones left on the persisted row', () => {
+    const next = hydrate({
+      second: row(2, {
+        duration: '04:10',
+        audioQa: { status: 'suspect', reasons: [] } as unknown as HydrateArg['chapters'][number]['audioQa'],
+        audioModelKey: 'kokoro-v1',
+        audioEngines: { kokoro: 1 } as unknown as Chapter['audioEngines'],
+        audioRenderedAt: '2026-01-01T00:00:00Z',
+      }),
+    });
+    const ch = next.chapters[1];
+    expect(ch.skippedNoText).toBe(true);
+    expect(ch.duration).toBe('00:00');
+    expect(ch.audioQa).toBeUndefined();
+    expect(ch.audioModelKey).toBeUndefined();
+    expect(ch.audioEngines).toBeUndefined();
+    expect(ch.audioRenderedAt).toBeUndefined();
+  });
+
+  it('(b) an excluded chapter in the list is not done and carries no flag', () => {
+    const ch = hydrate({ second: row(2, { excluded: true }) }).chapters[1];
+    expect(ch).toMatchObject({ state: 'queued', progress: 0, excluded: true });
+    expect(ch.skippedNoText).toBeUndefined();
+  });
+
+  it('(c) audio on disk wins: done, no flag, audio fields kept', () => {
+    const ch = hydrate({
+      second: row(2, { audioModelKey: 'kokoro-v1', audioRenderedAt: '2026-01-01T00:00:00Z' }),
+      completedSlugs: ['02-chapter'],
+    }).chapters[1];
+    expect(ch).toMatchObject({
+      state: 'done',
+      progress: 1,
+      audioModelKey: 'kokoro-v1',
+      audioRenderedAt: '2026-01-01T00:00:00Z',
+    });
+    expect(ch.skippedNoText).toBeUndefined();
+  });
+
+  it('(d) the skip wins over a stale persisted failure', () => {
+    const ch = hydrate({
+      second: row(2, {
+        generationState: 'failed',
+        generationError: 'This chapter has no text to narrate.',
+        generationErrorCode: 'unknown',
+        generationRemediation: 'Exclude it.',
+      }),
+    }).chapters[1];
+    expect(ch).toMatchObject({ state: 'done', progress: 1, skippedNoText: true });
+    expect(ch.errorReason).toBeUndefined();
+    expect(ch.generationErrorCode).toBeUndefined();
+    expect(ch.generationRemediation).toBeUndefined();
+  });
+
+  it('(e) a chapter_complete tick with skippedNoText flags the row; a later real render clears it', () => {
+    const queued = baseState([makeChapter(2, { currentLine: 7 })]);
+    const skipped = chaptersSlice.reducer(
+      queued,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_complete', chapterId: 2, progress: 1, totalLines: 0, skippedNoText: true }),
+      ),
+    );
+    expect(skipped.chapters[0]).toMatchObject({
+      state: 'done',
+      progress: 1,
+      currentLine: 0,
+      skippedNoText: true,
+    });
+    expect(skipped.chapters[0].characters).toEqual({ narrator: 'done', halloran: 'done', eliza: 'done' });
+
+    const rendered = chaptersSlice.reducer(
+      skipped,
+      chaptersActions.applyGenerationTick(
+        tick({ type: 'chapter_complete', chapterId: 2, progress: 1, totalLines: 12, durationSec: 60 }),
+      ),
+    );
+    expect(rendered.chapters[0].state).toBe('done');
+    expect(rendered.chapters[0].skippedNoText).toBeUndefined();
+  });
+
+  it('(f) an older server with no noTextChapterIds leaves the hydrate unchanged', () => {
+    for (const analysis of [undefined, {}]) {
+      const next = chaptersSlice.reducer(
+        baseState([]),
+        chaptersActions.hydrateFromBookState({
+          bookId: 'b1',
+          chapters: [row(1), row(2, { generationState: 'failed', generationError: 'Broke.' })],
+          completedSlugs: [],
+          characters,
+          analysis,
+        }),
+      );
+      expect(next.chapters[0]).toMatchObject({ state: 'queued', progress: 0 });
+      expect(next.chapters[1]).toMatchObject({ state: 'failed', progress: 0, errorReason: 'Broke.' });
+      expect(next.chapters.map((c) => c.skippedNoText)).toEqual([undefined, undefined]);
+    }
+  });
+});

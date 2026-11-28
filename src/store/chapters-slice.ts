@@ -141,6 +141,7 @@ export const ANALYSIS_GAP_MESSAGE = "Analysis didn't finish for this chapter.";
 type AnalysisGapFacts = {
   unattributedChapterIds?: number[];
   failedChapterErrors?: Record<string, { message: string }>;
+  noTextChapterIds?: number[];
 };
 
 /* #3435 — the server's gaps: chapters with no current take, and every failure
@@ -387,10 +388,13 @@ export const chaptersSlice = createSlice({
         renderedInstructByChapter?: Record<number, Record<number, string>>;
         /** #3435 — the book-state's analysis gaps: chapters with no current
           take, and per-chapter failure records. Absent (older server) → no
-          gaps. Excluded chapters get no entry. */
+          gaps. Excluded chapters get no entry.
+          #3507 — `noTextChapterIds`: chapters with no narratable text, which
+          hydrate as done (skipped) with no audio. Absent → none. */
         analysis?: {
           unattributedChapterIds?: number[];
           failedChapterErrors?: Record<string, { message: string }>;
+          noTextChapterIds?: number[];
         };
       }>,
     ) => {
@@ -432,6 +436,26 @@ export const chaptersSlice = createSlice({
         for (const id of source) out[id] = 'done';
         return out;
       };
+      const noText = new Set(analysis?.noTextChapterIds ?? []);
+      /* #3507 — an included chapter with no narratable text and no audio on disk
+         was skipped by generation and counts as complete. It has no audio, so
+         nothing audio-derived or left over from an earlier failure carries over. */
+      const skippedRow = (c: (typeof chapters)[number]): Partial<Chapter> =>
+        !c.excluded && !done.has(c.slug) && noText.has(c.id)
+          ? {
+              state: 'done',
+              progress: 1,
+              characters: seedDone(c.id),
+              skippedNoText: true,
+              duration: '00:00',
+              errorReason: undefined,
+              generationErrorCode: undefined,
+              generationRemediation: undefined,
+              audioModelKey: undefined,
+              audioEngines: undefined,
+              audioRenderedAt: undefined,
+            }
+          : {};
       s.chapters = chapters.map(
         (c) =>
           ({
@@ -492,6 +516,7 @@ export const chaptersSlice = createSlice({
            map key absent (older server) → undefined. The listen-view
            report card distinguishes both from "all-target" data. */
             lufs: chapterLufs ? (chapterLufs[c.id] ?? null) : undefined,
+            ...skippedRow(c),
           }) as Chapter,
       );
       s.lastError = null;
@@ -655,6 +680,9 @@ export const chaptersSlice = createSlice({
         ch.state = 'done';
         ch.progress = 1;
         ch.phase = null;
+        /* #3507 — a skip (no narratable text) completes without audio; any
+           later real render clears the flag. */
+        ch.skippedNoText = ev.skippedNoText === true ? true : undefined;
         if (ev.totalLines != null) ch.currentLine = ev.totalLines;
         /* Every non-skipped character is done by definition; preserve
            `skipped` for characters not in this chapter. */
