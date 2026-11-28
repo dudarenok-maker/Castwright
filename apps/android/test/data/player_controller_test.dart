@@ -1249,6 +1249,385 @@ void main() {
     });
   });
 
+  group('a pulled point the player did not take is never saved (#4722)', () {
+    const oldStamp = '2026-06-01T10:00:00.000Z';
+    const pulledStamp = '2026-06-07T20:00:00.000Z';
+    const playTime = '2026-06-06T12:00:00.000Z'; // make()'s fixed clock
+    const local = PlaybackPoint(
+        chapterUuid: 'u1', positionMs: 100000, listenedAt: oldStamp);
+    const chapters = [
+      PlayableChapter(
+          uuid: 'u1',
+          path: '/b1/u1.mp3',
+          audioUrl: '/api/books/b1/chapters/1/audio.mp3'),
+      PlayableChapter(
+          uuid: 'u2',
+          path: '/b1/u2.mp3',
+          audioUrl: '/api/books/b1/chapters/2/audio.mp3'),
+    ];
+    const other = [PlayableChapter(uuid: 'v1', path: '/b2/v1.mp3')];
+
+    Future<PlayerController> player(
+      FakeAudioEngine engine,
+      MemPlaybackStore store, {
+      required bool streamOn,
+      Set<String> downloaded = const {'/b1/u1.mp3'},
+      Future<bool> Function()? onHomeLan,
+      PlaylistLoader? loader,
+    }) async {
+      final fs = InMemoryFileStore();
+      for (final p in downloaded) {
+        await fs.writeBytes(p, const [0]); // seed as "exists"
+      }
+      return PlayerController(
+        audioEngine: engine,
+        playbackStore: store,
+        playlistLoader:
+            loader ?? (bookId) async => bookId == 'b1' ? chapters : other,
+        clock: () => DateTime.utc(2026, 6, 6, 12),
+        streaming: StreamingConfig(
+          fileStore: fs,
+          streamOverLan: () => streamOn,
+          onHomeLan: onHomeLan ?? () async => true,
+          urlResolver: (path) => Uri.parse('https://lan:8443$path'),
+          proxy: FakeProxy(),
+          onRepairNeeded: () {},
+        ),
+      );
+    }
+
+    // The web listened to [uuid] at 900 s, later than the local row.
+    ResumeSyncService syncFor(
+            PlayerController pc, MemPlaybackStore store, String uuid) =>
+        ResumeSyncService(
+            progressApi: FakeProgressApi(RemoteProgress(
+                chapterUuid: uuid,
+                chapterId: 2,
+                currentSec: 900,
+                updatedAt: pulledStamp)),
+            playbackStore: store,
+            chapterIdResolver: (_, _) async => 2,
+            onPulled: pc.applyPulledResume);
+
+    String row(MemPlaybackStore store) {
+      final p = store.map['b1']!;
+      return '${p.chapterUuid}/${p.positionMs}/${p.listenedAt}';
+    }
+
+    Future<void> settle() => Future<void>.delayed(Duration.zero);
+
+    test(
+        'chapter not downloaded, streaming off: nothing moves, the next save '
+        'keeps the old point, and the next sync pulls again', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: false);
+      await pc.openBook('b1');
+      final shown = <String>[];
+      final prompts = <String>[];
+      pc.nowPlayingStream.listen((n) => shown.add(n!.id));
+      pc.needsDownloadStream.listen(prompts.add);
+      engine.calls.clear();
+      final sync = syncFor(pc, store, 'u2');
+
+      expect(await sync.syncBook('b1'), ResumeAction.pullRemote);
+      await settle();
+
+      expect(pc.currentChapterUuid, 'u1');
+      expect(engine.calls, isEmpty);
+      expect(shown, isEmpty);
+      expect(prompts, isEmpty);
+      await pc.saveNow();
+      expect(row(store), 'u1/100000/$oldStamp');
+      expect(await sync.syncBook('b1'), ResumeAction.pullRemote);
+      await pc.dispose();
+    });
+
+    test('streaming on but the chapter has no audio url: not touched', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store,
+          streamOn: true,
+          loader: (_) async => [
+                chapters.first,
+                const PlayableChapter(uuid: 'u2', path: '/b1/u2.mp3'),
+              ]);
+      await pc.openBook('b1');
+      engine.calls.clear();
+      await syncFor(pc, store, 'u2').syncBook('b1');
+      expect(pc.currentChapterUuid, 'u1');
+      expect(engine.calls, isEmpty);
+      await pc.saveNow();
+      expect(row(store), 'u1/100000/$oldStamp');
+      await pc.dispose();
+    });
+
+    test('chapter cannot load: switchBook leaves the pulled row untouched',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: false);
+      await pc.openBook('b1');
+      await syncFor(pc, store, 'u2').syncBook('b1');
+      await pc.switchBook('b2');
+      expect(row(store), 'u2/900000/$pulledStamp');
+      await pc.dispose();
+    });
+
+    test('chapter cannot load: play + pause saves the old chapter', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: false);
+      await pc.openBook('b1');
+      await syncFor(pc, store, 'u2').syncBook('b1');
+      await pc.play();
+      await settle();
+      await pc.pause();
+      expect(row(store), 'u1/100000/$playTime');
+      await pc.dispose();
+    });
+
+    test('play pressed during the can-load check: nothing changes', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      Completer<bool>? lan;
+      final pc = await player(engine, store,
+          streamOn: true, onHomeLan: () => lan?.future ?? Future.value(true));
+      await pc.openBook('b1');
+      store.map['b1'] = const PlaybackPoint(
+          chapterUuid: 'u2', positionMs: 900000, listenedAt: pulledStamp);
+      lan = Completer<bool>();
+      engine.calls.clear();
+      final apply = pc.applyPulledResume('b1');
+      await settle();
+      await pc.play();
+      lan.complete(true);
+      await apply;
+      expect(engine.calls, ['play']);
+      expect(pc.currentChapterUuid, 'u1');
+      await pc.dispose();
+    });
+
+    test(
+        'stream load of a later chapter throws: back on the previous chapter '
+        'and ms, old stamp, no replay signal', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      final replays = <String>[];
+      pc.bookReplayedStream.listen(replays.add);
+      engine.throwOnStream = true;
+
+      await syncFor(pc, store, 'u2').syncBook('b1');
+      await settle();
+
+      expect(pc.currentChapterUuid, 'u1');
+      expect(engine.loadedPath, '/b1/u1.mp3');
+      expect(engine.position, const Duration(seconds: 100));
+      expect(replays, isEmpty);
+      await pc.switchBook('b2');
+      expect(row(store), 'u2/900000/$pulledStamp',
+          reason: 'nothing changed since the last save');
+      await pc.dispose();
+    });
+
+    test('a failed load keeps the held stamp for the next save', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      engine.throwOnStream = true;
+      await syncFor(pc, store, 'u2').syncBook('b1');
+      await pc.saveNow();
+      expect(row(store), 'u1/100000/$oldStamp');
+      await pc.dispose();
+    });
+
+    test('stream load of an earlier chapter throws: no replay signal', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u2', positionMs: 100000, listenedAt: oldStamp);
+      final pc = await player(engine, store,
+          streamOn: true, downloaded: {'/b1/u2.mp3'});
+      await pc.openBook('b1');
+      final replays = <String>[];
+      pc.bookReplayedStream.listen(replays.add);
+      engine.throwOnStream = true;
+      await syncFor(pc, store, 'u1').syncBook('b1');
+      await settle();
+      expect(pc.currentChapterUuid, 'u2');
+      expect(engine.position, const Duration(seconds: 100));
+      expect(replays, isEmpty);
+      await pc.dispose();
+    });
+
+    test('an earlier chapter that does load still signals a replay', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()
+        ..map['b1'] = const PlaybackPoint(
+            chapterUuid: 'u2', positionMs: 100000, listenedAt: oldStamp);
+      final pc = await player(engine, store,
+          streamOn: true, downloaded: {'/b1/u2.mp3'});
+      await pc.openBook('b1');
+      final replays = <String>[];
+      pc.bookReplayedStream.listen(replays.add);
+      await syncFor(pc, store, 'u1').syncBook('b1');
+      await settle();
+      expect(pc.currentChapterUuid, 'u1');
+      expect(replays, ['b1']);
+      await pc.dispose();
+    });
+
+    test(
+        'saveNow while the pulled chapter is loading does not write the pulled '
+        'stamp; once loaded, it does', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      engine.streamGate = Completer<void>();
+      final syncing = syncFor(pc, store, 'u2').syncBook('b1');
+      await settle();
+      expect(pc.currentChapterUuid, 'u2', reason: 'the load is in flight');
+
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, oldStamp);
+
+      engine.streamGate!.complete();
+      await syncing;
+      expect(engine.position, const Duration(seconds: 900));
+      await pc.saveNow();
+      expect(row(store), 'u2/900000/$pulledStamp');
+      await pc.dispose();
+    });
+
+    test(
+        'unsaved listening: a save during the load keeps the old stamp, and '
+        'after a failed load the next save stamps the listening', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      await pc.play();
+      await settle();
+      await engine.pause(); // out-of-band stop: nothing saved
+      await settle();
+      engine.streamGate = Completer<void>();
+      final syncing = syncFor(pc, store, 'u2').syncBook('b1');
+      await settle();
+
+      await pc.saveNow();
+      expect(store.map['b1']!.listenedAt, oldStamp);
+
+      engine.streamGate!.completeError(Exception('stream load failed'));
+      await syncing;
+      await pc.saveNow();
+      expect(row(store), 'u1/100000/$playTime');
+      await pc.dispose();
+    });
+
+    test('a second pull during a load that then fails adopts nothing', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      store.map['b1'] = const PlaybackPoint(
+          chapterUuid: 'u2', positionMs: 900000, listenedAt: pulledStamp);
+      engine.streamGate = Completer<void>();
+      final first = pc.applyPulledResume('b1');
+      await settle();
+      final second = pc.applyPulledResume('b1');
+      await settle();
+      engine.streamGate!.completeError(Exception('stream load failed'));
+      await first;
+      await second;
+      await pc.saveNow();
+      expect(row(store), 'u1/100000/$oldStamp');
+      await pc.dispose();
+    });
+
+    test('a failed load the user has since overtaken is not undone', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true);
+      await pc.openBook('b1');
+      engine.streamGate = Completer<void>();
+      final syncing = syncFor(pc, store, 'u2').syncBook('b1');
+      await settle();
+      await pc.playChapter('u1'); // the user picks a chapter meanwhile
+      engine.calls.clear();
+      engine.streamGate!.completeError(Exception('interrupted'));
+      await syncing;
+      expect(engine.calls, isEmpty, reason: 'no way back over the user');
+      expect(pc.currentChapterUuid, 'u1');
+      await pc.dispose();
+    });
+
+    test('a pull during a held openBook is applied after it', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final pc = await player(engine, store, streamOn: true, downloaded: {});
+      engine.streamGate = Completer<void>();
+      final opening = pc.openBook('b1');
+      await settle();
+      // Not awaited before the gate opens: the pull waits for the open.
+      final syncing = syncFor(pc, store, 'u1').syncBook('b1');
+      await settle();
+      engine.streamGate!.complete();
+      await opening;
+      expect(await syncing, ResumeAction.pullRemote);
+
+      expect(engine.position, const Duration(seconds: 900));
+      await pc.saveNow();
+      expect(row(store), 'u1/900000/$pulledStamp');
+      await pc.dispose();
+    });
+
+    test('an open that fails does not fail the pull waiting on it', () async {
+      final engine = FakeAudioEngine();
+      final store = MemPlaybackStore()..map['b1'] = local;
+      final playlist = Completer<List<PlayableChapter>>();
+      final pc = await player(engine, store,
+          streamOn: true, loader: (_) => playlist.future);
+      final opening = expectLater(pc.openBook('b1'), throwsStateError);
+      final apply = pc.applyPulledResume('b1');
+      playlist.completeError(StateError('no playlist'));
+      await opening;
+      await expectLater(apply, completes);
+      await pc.dispose();
+    });
+
+    test('an open that starts during the pull\'s store read takes over',
+        () async {
+      final engine = FakeAudioEngine();
+      final store = GatedStore()..map['b1'] = local;
+      Completer<void>? loaderGate;
+      final pc = await player(engine, store, streamOn: true, loader: (_) async {
+        await loaderGate?.future;
+        return chapters;
+      });
+      await pc.openBook('b1');
+      store.map['b1'] = const PlaybackPoint(
+          chapterUuid: 'u1', positionMs: 900000, listenedAt: pulledStamp);
+      final readGate = Completer<void>();
+      store.gate = readGate;
+      final apply = pc.applyPulledResume('b1');
+      store.gate = null;
+      loaderGate = Completer<void>();
+      final reopening = pc.openBook('b1');
+      engine.calls.clear();
+      readGate.complete();
+      await apply;
+      expect(engine.calls, isEmpty, reason: 'the open owns the player');
+      loaderGate.complete();
+      await reopening;
+      expect(engine.position, const Duration(seconds: 900));
+      await pc.dispose();
+    });
+  });
+
   group('switchBook skips an unchanged save (#4722)', () {
     const localStamp = '2026-06-01T10:00:00.000Z';
     const pulledStamp = '2026-06-02T20:00:00.000Z';

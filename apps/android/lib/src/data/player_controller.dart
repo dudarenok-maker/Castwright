@@ -248,6 +248,13 @@ class PlayerController {
   /// what lets [switchBook] skip a save with nothing new in it (#4722).
   ({String book, String uuid, int ms})? _lastSaved;
 
+  /// Completes when the latest [openBook] ends, successfully or not; null when
+  /// none is in flight.
+  Future<void>? _opening;
+
+  /// True while [applyPulledResume] is loading a pulled chapter.
+  bool _loadingPull = false;
+
   /// Live playback duration of the loaded chapter (null until known).
   Stream<Duration?> get durationStream => _engine.durationStream;
   Duration? get duration => _engine.duration;
@@ -306,6 +313,18 @@ class PlayerController {
   /// point (or start at the first chapter), and seek there.
   Future<void> openBook(String bookId,
       {String bookTitle = '', String? artPath}) async {
+    final done = Completer<void>();
+    _opening = done.future;
+    try {
+      await _openBook(bookId, bookTitle: bookTitle, artPath: artPath);
+    } finally {
+      if (identical(_opening, done.future)) _opening = null;
+      done.complete();
+    }
+  }
+
+  Future<void> _openBook(String bookId,
+      {required String bookTitle, String? artPath}) async {
     // fs-16: create or retarget the accumulator for this book.
     final ld = _localDate;
     if (_statsDb != null && _sessionId != null && ld != null) {
@@ -357,7 +376,10 @@ class PlayerController {
     }
   }
 
-  Future<bool> _loadIndex(int index, {int seekMs = 0, bool userInitiated = false}) async {
+  Future<bool> _loadIndex(int index,
+      {int seekMs = 0,
+      bool userInitiated = false,
+      bool signalReplay = true}) async {
     if (index < 0 || index >= _playlist.length) return false;
     // Capture prior index BEFORE reassigning — used for the backward-nav replay signal.
     final prev = _index;
@@ -391,7 +413,7 @@ class PlayerController {
     // Emit the replay signal when the user navigates BACKWARD (genuine replay).
     // prev=-1 on the initial openBook restore → excluded by `prev >= 0`.
     // forward auto-advance: newIndex > prev → excluded by `index < prev`.
-    if (prev >= 0 && index < prev && _bookId != null) {
+    if (signalReplay && prev >= 0 && index < prev && _bookId != null) {
       _bookReplayed.add(_bookId!);
     }
     return loaded;
@@ -413,12 +435,7 @@ class PlayerController {
       await _engine.setFilePath(c.path); // legacy: offline-first only
       return true;
     }
-    final src = resolvePlaybackSource(
-      localFileExists: await cfg.fileStore.exists(c.path),
-      onHomeLan: await cfg.onHomeLan(),
-      streamingEnabled: cfg.streamOverLan(),
-    );
-    switch (src) {
+    switch (await _resolveSource(cfg, c)) {
       case PlaybackSource.localFile:
         await _engine.setFilePath(c.path);
         return true;
@@ -445,6 +462,26 @@ class PlayerController {
         if (userInitiated) _notifyDownloadToPlay(); // else auto-advance: halt quietly
         return false;
     }
+  }
+
+  Future<PlaybackSource> _resolveSource(
+          StreamingConfig cfg, PlayableChapter c) async =>
+      resolvePlaybackSource(
+        localFileExists: await cfg.fileStore.exists(c.path),
+        onHomeLan: await cfg.onHomeLan(),
+        streamingEnabled: cfg.streamOverLan(),
+      );
+
+  /// Whether [_loadSource] would try to set a source for [c], by the same rules
+  /// and with no side effects.
+  Future<bool> _canLoad(PlayableChapter c) async {
+    final cfg = _streaming;
+    if (cfg == null) return true;
+    return switch (await _resolveSource(cfg, c)) {
+      PlaybackSource.localFile => true,
+      PlaybackSource.lanStream => c.audioUrl != null,
+      PlaybackSource.needsDownload => false,
+    };
   }
 
   /// The single §7 failure router, shared by the initial-load throw (which passes
@@ -570,34 +607,87 @@ class PlayerController {
 
   /// Adopt a resume point that a resume-sync pull has just written for the open
   /// book: seek to it and take on its `listenedAt`, so the next save doesn't
-  /// put the stale local position back over it (#4722).
+  /// put the stale local position back over it (#4722). A chapter that cannot
+  /// load is left alone, and a load that fails is undone.
   ///
   /// Only while paused — owner decision (2026-11-27): a pull never makes playing
   /// audio jump. A pull for any other book is left for its next [openBook].
   /// Never starts playback.
   Future<void> applyPulledResume(String bookId) async {
-    if (_bookId != bookId) return;
     if (_engine.playing) return;
+    // An open still in flight would load over the seek: let it finish first.
+    while (_opening != null) {
+      await _opening;
+    }
+    if (_bookId != bookId || _engine.playing) return;
     final saved = await _store.loadPlayback(bookId);
     if (saved == null) return;
     // The user may have pressed play or switched book during the read.
     if (_bookId != bookId || _engine.playing) return;
     final i = _playlist.indexWhere((c) => c.uuid == saved.chapterUuid);
     if (i < 0) return;
+    if (i != _index) {
+      // Nothing moves for a chapter that cannot load: no prompt either, as the
+      // user did nothing.
+      if (!await _canLoad(_playlist[i])) return;
+      if (_bookId != bookId || _engine.playing) return;
+    }
+    // An open, or another pull's load, that started meanwhile owns the player.
+    if (_opening != null || _loadingPull) return;
+    if (i != _index) return _loadPulledChapter(bookId, i, saved);
     // Adopted before the seek, so a save its position tick triggers carries the
     // pulled stamp. Unsaved local listening is older than the pulled point.
     _lastListenedAt = saved.listenedAt;
     _playedSinceSave = false;
-    if (i == _index) {
-      await _engine.seek(Duration(milliseconds: saved.positionMs));
-    } else {
-      final loaded =
-          await _loadIndex(i, seekMs: saved.positionMs, userInitiated: true);
-      if (!loaded) return;
-    }
+    await _engine.seek(Duration(milliseconds: saved.positionMs));
     if (_bookId == bookId) {
       _lastSaved =
           (book: bookId, uuid: saved.chapterUuid, ms: saved.positionMs);
+    }
+  }
+
+  /// Load a pulled point in another chapter. Its stamp is adopted only once the
+  /// engine is there, so a save during the load cannot write it; a load that
+  /// fails puts the player back where it was (#4722).
+  Future<void> _loadPulledChapter(
+      String bookId, int index, PlaybackPoint saved) async {
+    final fromIndex = _index;
+    final fromMs = _engine.position.inMilliseconds;
+    final played = _playedSinceSave;
+    final lastSaved = _lastSaved;
+    // So a save during the load writes the held stamp. Audio playing meanwhile
+    // sets this again.
+    _playedSinceSave = false;
+    _loadingPull = true;
+    try {
+      var loaded = false;
+      final loading = _loadIndex(index,
+          seekMs: saved.positionMs, signalReplay: false);
+      final gen = _streamGen; // this load's, taken before any newer one
+      try {
+        loaded = await loading;
+      } catch (e) {
+        if (kDebugMode) debugPrint('pulled chapter load failed: $e');
+      }
+      // Switched away: the flags now belong to the other book.
+      if (_bookId != bookId) return;
+      // A reopen or a newer load: the player is theirs now.
+      final superseded = _opening != null || gen != _streamGen;
+      if (loaded && !superseded) {
+        _lastListenedAt = saved.listenedAt;
+        _lastSaved =
+            (book: bookId, uuid: saved.chapterUuid, ms: saved.positionMs);
+        if (index < fromIndex) _bookReplayed.add(bookId);
+        return;
+      }
+      if (!superseded) {
+        await _loadIndex(fromIndex, seekMs: fromMs, signalReplay: false);
+        if (_bookId != bookId) return;
+        _lastSaved = lastSaved;
+      }
+      _playedSinceSave = _playedSinceSave || played;
+    } finally {
+      _loadingPull = false;
     }
   }
 
