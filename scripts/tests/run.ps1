@@ -16,6 +16,13 @@ if (-not $pester) {
     exit 1
 }
 
+$tooNew = Find-LoadedPesterTooNew -Modules (Get-Module -Name Pester)
+if ($tooNew) {
+    Write-Host "Pester $($tooNew.Version) is already loaded in this session and cannot be replaced by 5.x."
+    Write-Host "Start a fresh session or use: npm run test:scripts"
+    exit 1
+}
+
 Import-Module $pester.Path -RequiredVersion $pester.Version -Force
 
 $config = New-PesterConfiguration

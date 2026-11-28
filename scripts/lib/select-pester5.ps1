@@ -22,3 +22,11 @@ function Get-Pester5InstallHint {
         "Then re-run: npm run test:scripts"
     )
 }
+
+# A Pester 6+ already loaded in the session cannot be swapped for 5.x:
+# Import-Module -Force leaves 6's Pester.dll in the process and the 5.x import
+# then dies with an opaque type error. Returns the offending module, if any.
+function Find-LoadedPesterTooNew {
+    param([AllowNull()][AllowEmptyCollection()][object[]]$Modules)
+    $Modules | Where-Object { $_.Version -ge [Version]'6.0.0' } | Select-Object -First 1
+}

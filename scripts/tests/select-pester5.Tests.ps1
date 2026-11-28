@@ -39,6 +39,28 @@ Describe 'run.ps1 on a host with no Pester at all' {
     }
 }
 
+Describe 'Find-LoadedPesterTooNew' {
+    It 'flags a loaded Pester 6 and ignores 3.x / 5.x' {
+        (Find-LoadedPesterTooNew -Modules @((New-FakeModule '6.1.0'))).Version | Should -Be ([Version]'6.1.0')
+        Find-LoadedPesterTooNew -Modules @((New-FakeModule '5.7.1')) | Should -BeNullOrEmpty
+        Find-LoadedPesterTooNew -Modules $null | Should -BeNullOrEmpty
+    }
+    It 'makes run.ps1 stop with a clear message when Pester 6 is loaded' {
+        $shell = (Get-Process -Id $PID).Path
+        $runner = (Resolve-Path (Join-Path $PSScriptRoot 'run.ps1')).Path
+        $cmd = @"
+function Get-Module { param([switch]`$ListAvailable, `$Name)
+  if (`$ListAvailable) { [pscustomobject]@{ Name='Pester'; Version=[Version]'5.7.1'; Path='x' } }
+  else { [pscustomobject]@{ Name='Pester'; Version=[Version]'6.1.0'; Path='x' } } }
+& '$runner'; exit `$LASTEXITCODE
+"@
+        $out = & $shell -NoProfile -ExecutionPolicy Bypass -Command $cmd 2>&1 | Out-String
+        $LASTEXITCODE | Should -Be 1
+        $out | Should -Match 'fresh session'
+        $out | Should -Not -Match 'CreateRuntimeDefinedParameterDictionary'
+    }
+}
+
 Describe 'Get-Pester5InstallHint' {
     It 'mentions the 5.x pin and the 6-present case' {
         $h = (Get-Pester5InstallHint) -join "`n"
