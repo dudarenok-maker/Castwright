@@ -30,7 +30,7 @@ type MockCall = {
 type Win = {
   __store__: {
     getState: () => {
-      ui: { stage: { kind: string; bookId?: string } };
+      ui: { stage: { kind: string; bookId?: string; openProfileId?: string | null } };
       loadedBook: { loadedBookId: string | null };
     };
   };
@@ -200,6 +200,42 @@ test.describe('loaded-book edit gate', () => {
         ),
       ]);
     await expect.poll(booksSavedWithTheName).toEqual([CARRICKS_COMPASS.id]);
+  });
+
+  test("a profile link to a book still being read opens no drawer over the held book's character", async ({
+    page,
+  }) => {
+    await openCast(page, NORTHERN_STAR);
+    await page.evaluate(holdBookRead, CARRICKS_COMPASS.id);
+    /* The held book has a `narrator`, so its row could answer the new book's link. */
+    await page.evaluate((id) => {
+      location.hash = `#/books/${id}/cast?profile=narrator`;
+    }, CARRICKS_COMPASS.id);
+
+    const loading = page.getByTestId('book-loading');
+    await expect(loading).toBeVisible();
+    const openProfile = () =>
+      page.evaluate(() => (window as unknown as Win).__store__.getState().ui.stage.openProfileId);
+    await expect.poll(openProfile).toBe('narrator');
+    expect(await books(page)).toEqual({
+      stage: 'ready',
+      named: CARRICKS_COMPASS.id,
+      held: NORTHERN_STAR.id,
+    });
+    const drawer = page.getByRole('complementary').filter({ hasText: 'Also known as' });
+    await expect(drawer).toHaveCount(0);
+
+    /* This book has no narrator, so there is still nothing to open once it is read... */
+    await releaseBookRead(page);
+    await expect(loading).toHaveCount(0);
+    await expect(page.getByTestId(CARRICKS_COMPASS.row)).toBeVisible();
+    await expect(drawer).toHaveCount(0);
+
+    /* ...and a link to a character it does have opens the drawer on it. */
+    await page.evaluate((id) => {
+      location.hash = `#/books/${id}/cast?profile=greene`;
+    }, CARRICKS_COMPASS.id);
+    await expect(drawer.getByRole('heading', { name: 'First Mate Greene' })).toBeVisible();
   });
 
   test('moving between views of one book never shows the loading state', async ({ page }) => {

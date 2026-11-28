@@ -909,7 +909,10 @@ export function Layout() {
   /* #3519 — the book whose full read landed empty. With no other book held
      that read moves nothing in the loaded-book pair, so the edit gate would
      never clear on the pair alone; with the pair naming no book there is
-     nothing for an edit to land in but this one. */
+     nothing for an edit to land in but this one.
+
+     Anything rendered outside the gated view that can edit the held book
+     (the profile drawer, the modals, the player) checks `editsGated` too. */
   const [emptyReadBookId, setEmptyReadBookId] = useState<string | null>(null);
   const editsGated = useAppSelector(
     (s) =>
@@ -2395,7 +2398,7 @@ export function Layout() {
       {/* fs-1 — post-upgrade "What's new" banner, top of every view. Self-gated
           on the server's showWhatsNew flag (no-op in mock mode). */}
       <WhatsNewBanner />
-      <BulkReassignUndoBanner />
+      {!editsGated && <BulkReassignUndoBanner />}
       <SettingsCorruptBanner />
       <DuplicateBookRepairBanner />
       {/* #3713 — shown only when the repaired-id reload would loop (lib/repair-epoch.ts). */}
@@ -2462,7 +2465,10 @@ export function Layout() {
 
       {stageKind === 'ready' && bookId && (
         <MiniPlayer
-          chapter={trackChapter}
+          /* #3519 — no chapter while gated, so the player renders nothing and
+             saves nothing against the stage's book from a held chapter. It
+             stays mounted: its book-switch flush of listening time still runs. */
+          chapter={editsGated ? null : trackChapter}
           bookId={bookId}
           autoSeekToIssues={view === 'generate'}
           onClose={() => dispatch(uiActions.setCurrentTrack(null))}
@@ -2493,7 +2499,7 @@ export function Layout() {
         />
       )}
 
-      {ui.matchDetailFor && (
+      {ui.matchDetailFor && !editsGated && (
         <MatchDetailDrawer
           character={matchCharacter}
           voice={matchVoice}
@@ -2512,7 +2518,7 @@ export function Layout() {
           }}
         />
       )}
-      {ui.startGenPrompt && (
+      {ui.startGenPrompt && !editsGated && (
         <StartGenerationModal
           defaultTier={
             characters.some((c) => c.ttsModelKey === 'qwen3-tts-1.7b')
@@ -2622,9 +2628,9 @@ export function Layout() {
           }}
         />
       )}
-      <VoiceReadinessGateModal />
-      <CloneReadinessGateModal />
-      {ui.regenChapter && (
+      {!editsGated && <VoiceReadinessGateModal />}
+      {!editsGated && <CloneReadinessGateModal />}
+      {ui.regenChapter && !editsGated && (
         <RegenerateModal
           chapter={ui.regenChapter}
           defaultScope={ui.regenInitialScope ?? 'this'}
@@ -2685,7 +2691,7 @@ export function Layout() {
           }}
         />
       )}
-      {ui.regenCharacterCtx && (
+      {ui.regenCharacterCtx && !editsGated && (
         <CharacterRegenerateModal
           character={regenCharacter}
           chapters={chapters}
@@ -2740,7 +2746,7 @@ export function Layout() {
           }}
         />
       )}
-      {ui.showDriftReport && (
+      {ui.showDriftReport && !editsGated && (
         <DriftReportModal
           /* Multi-book grouping: each entry in driftGroupsByBook is one
              book's pre-grouped (character × snapshot) drift cards. Cast
@@ -2833,6 +2839,7 @@ export function Layout() {
         />
       )}
       {profileCharacter &&
+        !editsGated &&
         (() => {
           /* Build the manual-link picker's prior-roster list. Drop any
            candidate the cast has already pinned to a canonical identity —
@@ -3105,7 +3112,7 @@ export function Layout() {
           modal already dispatches the near-side reducer; we clear the open
           flag so a re-open recomputes against the now-suppressed candidate. */}
       <DuplicateReviewModal
-        open={duplicateReviewOpen && duplicateReviewPair !== null}
+        open={!editsGated && duplicateReviewOpen && duplicateReviewPair !== null}
         pair={duplicateReviewPair}
         loading={duplicateReviewLoading}
         onClose={() => setDuplicateReviewOpen(false)}
@@ -3115,12 +3122,12 @@ export function Layout() {
         }}
       />
 
-      {reassignSource && (
+      {reassignSource && !editsGated && (
         <ReassignLinesModal source={reassignSource} onClose={() => setReassignSource(null)} />
       )}
 
       {/* fs-26 — per-character "Fix audio" (loudness boost / re-record splice). */}
-      {fixAudioFor && bookId && (
+      {fixAudioFor && bookId && !editsGated && (
         <FixCharacterAudioModal
           characterId={fixAudioFor}
           characterName={characters.find((c) => c.id === fixAudioFor)?.name ?? 'Character'}
@@ -3134,7 +3141,7 @@ export function Layout() {
       )}
       <QueueModalContainer />
 
-      {shownRevision && openRevision && bookId && (
+      {shownRevision && openRevision && bookId && !editsGated && (
         <RevisionDiffPlayer
           revision={shownRevision}
           bookId={bookId}
@@ -3237,7 +3244,7 @@ export function Layout() {
           onClose={() => setResultDialog(null)}
         />
       )}
-      {reverseAnalyzerGuardModal}
+      {!editsGated && reverseAnalyzerGuardModal}
       {languageGuardModal}
       <TourOverlay />
     </div>

@@ -13,7 +13,7 @@
    effects the layout runs alongside. Those have their own paired tests. */
 
 import { describe, expect, it, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, waitFor, fireEvent, act, within } from '@testing-library/react';
+import { render, screen, waitFor, fireEvent, act, within, cleanup } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { configureStore, type Middleware, type UnknownAction } from '@reduxjs/toolkit';
 import { MemoryRouter, Routes, Route, useOutletContext } from 'react-router';
@@ -47,6 +47,7 @@ import { scriptReviewSlice } from '../store/script-review-slice';
 import { configSlice } from '../store/config-slice';
 import { ttsDeviceKeyFor } from '../lib/analyzer-endpoints';
 import { spliceSlice } from '../store/splice-slice';
+import { voiceLibrarySlice } from '../store/voice-library-slice';
 
 const getBookStateMock = vi.fn();
 const pollRevisionsMock = vi.fn();
@@ -281,6 +282,8 @@ vi.mock('../modals/profile-drawer', async () => {
             data-testid="mock-profile-unlink"
             onClick={() => void p.onUnlinkAlias?.(p.character.id, 'Liza', { mode: 'split' }).catch(() => {})}
           />
+          <button data-testid="mock-profile-reassign" onClick={() => p.onReassignLines?.(p.character.id)} />
+          <button data-testid="mock-profile-review-duplicate" onClick={() => p.onReviewDuplicate?.()} />
         </>
       ) : (
         <actual.ProfileDrawer {...p} />
@@ -366,6 +369,8 @@ function makeStore(extraMiddleware: Middleware[] = [], preloadedState?: Reloaded
       scriptReview: scriptReviewSlice.reducer,
       config: configSlice.reducer,
       splice: spliceSlice.reducer,
+      /* The clone-readiness gate reads the voice library. */
+      voiceLibrary: voiceLibrarySlice.reducer,
       /* Plan 291 — the cast gate's busy cache. */
       bookBusy: bookBusySlice.reducer,
     },
@@ -1006,6 +1011,272 @@ describe('Layout — edits are gated while the slices do not hold the stage book
     await expectGated();
     open(store, 'b1');
     await expectGated();
+  });
+});
+
+/* #3519 — Layout renders the profile drawer and other editing surfaces outside
+   the gated wrapper, over the same held slices, so the same gate holds them
+   back. Their reads never land here: the test moves the pair itself. */
+describe('Layout — editing surfaces outside the view are gated with it (#3519)', () => {
+  const neverLands = () => new Promise<never>(() => {});
+  /* `narrator` exists in both books under a different name; `eliza` carries the
+     voice the match drawer and the duplicate review need. */
+  const castOf = (bookId: string): Character[] => [
+    { id: 'narrator', name: `Narrator of ${bookId}`, role: '', color: 'narrator' },
+    { id: 'eliza', name: 'Eliza', role: '', color: 'narrator', voiceId: 'v-eliza' },
+  ];
+  const chapter = {
+    id: 1,
+    title: 'The Lee Shore',
+    duration: '00:05:00',
+    state: 'done',
+    progress: 1,
+    characters: { eliza: 'done' },
+  } as unknown as Chapter;
+  const seriesBook = (bookId: string) =>
+    ({ bookId, title: `Book ${bookId}`, author: 'Della Renwick', series: 'The Hollow Tide', seriesPosition: 1,
+      isStandalone: false, status: 'complete', chapterCount: 1, completedChapters: 1, characterCount: 2,
+      voiceCount: 1, lastWorkedOn: 'today', coverGradient: ['#000', '#fff'], tags: [] }) as unknown as LibraryBook;
+  const library = {
+    authors: [{ name: 'Della Renwick', series: [{ name: 'The Hollow Tide', books: [seriesBook('b1'), seriesBook('b2')] }] }],
+  } as unknown as LibraryResponse;
+  /* One voice reused across the series, under two names the duplicate detector
+     reads as the same person (an identical name counts as already linked). */
+  const voices = [['b1', 'Eliza Gray'], ['b2', 'Eliza Grayson']].map(
+    ([bookId, character]) =>
+      ({ id: 'v-eliza', character, bookId, bookTitle: `Book ${bookId}`, attributes: [],
+        ttsVoice: { provider: 'kokoro', name: 'af_heart' } }) as unknown as Voice,
+  );
+
+  beforeEach(() => {
+    getBookStateMock.mockImplementation(neverLands);
+    pollRevisionsMock.mockImplementation(neverLands);
+    getChapterAudioPreviousMock.mockResolvedValue(null);
+    vi.mocked(api.getLibrary).mockResolvedValue(library);
+    vi.mocked(api.getVoices).mockResolvedValue({ voices, dropped: [] } as never);
+    /* jsdom implements no media playback; the mini player calls all three. */
+    vi.spyOn(window.HTMLMediaElement.prototype, 'play').mockResolvedValue(undefined);
+    vi.spyOn(window.HTMLMediaElement.prototype, 'pause').mockImplementation(() => {});
+    vi.spyOn(window.HTMLMediaElement.prototype, 'load').mockImplementation(() => {});
+  });
+  afterEach(() => {
+    cleanup(); // unmount while the media stubs are still in place
+    vi.restoreAllMocks();
+    profileDrawerStub.on = false;
+    vi.mocked(api.getLibrary).mockImplementation(async () => ({ authors: [] }) as never);
+    vi.mocked(api.getVoices).mockImplementation(async () => ({ voices: [], dropped: [] }) as never);
+  });
+
+  type Store = ReturnType<typeof makeStore>;
+  /* Move the pair, with the cast and chapters, as the layout's read does. */
+  const hold = (store: Store, id: string) =>
+    act(() => {
+      store.dispatch(
+        manuscriptActions.hydrateFromBookState({
+          state: bookStateFor(id, null).state as never,
+          sentences: [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'The tide turned.' }],
+        }),
+      );
+      store.dispatch(castActions.hydrateCharacters(castOf(id)));
+      store.dispatch(chaptersSlice.actions.setChapters([chapter]));
+    });
+  const open = (store: Store, id: string) =>
+    act(() => { store.dispatch({ type: 'ui/openBook', payload: { id, status: 'complete' } }); });
+  function OpenFixAudio() {
+    const { openFixCharacterAudio } = useOutletContext<LayoutContext>();
+    return (
+      <button type="button" data-testid="open-fix-audio" onClick={() => openFixCharacterAudio({ characterId: 'eliza' })} />
+    );
+  }
+  async function renderApp(store: Store) {
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books/b1/cast']}>
+          <Routes>
+            <Route path="*" element={<Layout />}>
+              <Route path="*" element={<OpenFixAudio />} />
+            </Route>
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+    await screen.findAllByRole('banner'); // past the boot splash (some surfaces add one)
+    await act(async () => { await new Promise((r) => setTimeout(r, 0)); }); // mount hydrates land
+  }
+
+  it('does not render the profile drawer over the held book, and opens it on the new book once the read lands', async () => {
+    const store = makeStore();
+    hold(store, 'b2');
+    open(store, 'b1');
+    act(() => { store.dispatch(uiActions.setOpenProfileId('narrator')); });
+    await renderApp(store);
+
+    expect(screen.getByTestId('book-loading')).toBeInTheDocument();
+    expect(screen.queryByRole('button', { name: 'Rename character' })).toBeNull();
+    expect(screen.queryByText('Narrator of b2')).toBeNull();
+
+    hold(store, 'b1');
+    expect(await screen.findByRole('button', { name: 'Rename character' })).toBeInTheDocument();
+    expect(screen.getByRole('heading', { name: 'Narrator of b1' })).toBeInTheDocument();
+  });
+
+  /* Surfaces whose open state is in the store, which a book switch leaves set. */
+  it.each<[string, (store: Store) => void, () => HTMLElement | null]>([
+    [
+      'the match detail drawer',
+      (s) => s.dispatch(uiActions.setMatchDetailFor('eliza')),
+      () => screen.queryByText(/Why we matched/),
+    ],
+    [
+      'the start-generation prompt',
+      (s) => s.dispatch(uiActions.openStartGenPrompt()),
+      () => screen.queryByText('Choose the voice model'),
+    ],
+    [
+      'the voice-readiness gate',
+      (s) => s.dispatch(uiActions.openVoiceReadinessGate({ bookId: 'b1' })),
+      () => screen.queryByTestId('voice-readiness-gate'),
+    ],
+    [
+      'the clone-readiness gate',
+      (s) => s.dispatch(uiActions.openCloneReadinessGate({ bookId: 'b1' })),
+      () => screen.queryByTestId('clone-readiness-gate'),
+    ],
+    [
+      'the chapter regenerate modal',
+      (s) => s.dispatch(uiActions.setRegenChapter(chapter)),
+      () => screen.queryByText(/CH 01 ·/),
+    ],
+    [
+      'the character regenerate modal',
+      (s) => s.dispatch(uiActions.setRegenCharacterCtx({ characterId: 'eliza' })),
+      () => screen.queryByText('Regenerate character'),
+    ],
+    [
+      'the drift report',
+      (s) => {
+        s.dispatch(
+          revisionsActions.applyBackgroundPoll({
+            bookId: 'b1',
+            drift: [
+              { id: 'drift:b1:1:eliza:voice', bookId: 'b1', characterId: 'eliza', chapterId: 1, chapterTitle: 'The Lee Shore',
+                severity: 'moderate', factor: 'voice', factorLabel: 'Voice', description: 'Voice changed.', autoQueueable: false,
+                detected: '2026-01-01T00:00:00Z', suggestedAction: 'regenerate_chapter',
+                snapshot: { voiceId: 'old', tone: { warmth: 40, pace: 50 }, attributes: [] },
+                current: { voiceId: 'new', tone: { warmth: 40, pace: 50 }, attributes: [] } } as unknown as DriftEvent,
+            ],
+          }),
+        );
+        s.dispatch(uiActions.setShowDriftReport(true));
+      },
+      () => screen.queryByText(/1 chapter flagged/),
+    ],
+    [
+      'the A/B player',
+      (s) => {
+        s.dispatch(
+          revisionsActions.applyServerState({
+            ...revState('b1', F1, 1, []),
+            pending: [{ id: 'r1', chapterId: 1, characterId: 'eliza', triggeredBy: 'Voice change', segments: [], playable: true, hasPreviousAudio: true }],
+          } as never),
+        );
+        s.dispatch(uiActions.setOpenRevision({ kind: 'server', revisionId: 'r1', chapterId: 1 }));
+      },
+      () => screen.queryByTestId('revision-diff-player'),
+    ],
+    [
+      'the mini player',
+      (s) => s.dispatch(uiActions.setCurrentTrack(1)),
+      () => screen.queryByTestId('mini-player-volume-toggle'),
+    ],
+  ])('holds back %s until the read lands', async (_name, openSurface, find) => {
+    const store = makeStore();
+    hold(store, 'b2');
+    open(store, 'b1');
+    act(() => { openSurface(store); });
+    await renderApp(store);
+
+    expect(find()).toBeNull();
+
+    /* The same open state shows the surface once the slices hold the book. */
+    hold(store, 'b1');
+    await waitFor(() => expect(find()).not.toBeNull());
+  });
+
+  /* Surfaces opened from inside a loaded book (Layout's own state, or slice
+     state), still open when the stage moves on. */
+  it.each<[string, (store: Store) => void, (store: Store) => void, () => HTMLElement | null]>([
+    [
+      'the fix-audio modal',
+      () => fireEvent.click(screen.getByTestId('open-fix-audio')),
+      () => {},
+      () => screen.queryByTestId('fix-audio-backdrop'),
+    ],
+    [
+      'the reassign-lines modal',
+      (s) => {
+        act(() => { s.dispatch(uiActions.setOpenProfileId('narrator')); });
+        fireEvent.click(screen.getByTestId('mock-profile-reassign'));
+      },
+      () => {},
+      () => screen.queryByRole('dialog', { name: 'Reassign lines' }),
+    ],
+    [
+      'the duplicate review',
+      (s) => {
+        act(() => { s.dispatch(uiActions.setOpenProfileId('eliza')); });
+        fireEvent.click(screen.getByTestId('mock-profile-review-duplicate'));
+      },
+      /* A `?profile=` link keeps the review's pair resolvable on the next book. */
+      (s) => s.dispatch(uiActions.setOpenProfileId('eliza')),
+      () => screen.queryByText('Same person across books?'),
+    ],
+    [
+      'the bulk-reassign undo banner',
+      (s) =>
+        act(() => {
+          s.dispatch(
+            manuscriptActions.setSentencesCharacterBulk({
+              keys: [{ chapterId: 1, sentenceId: 1 }],
+              characterId: 'eliza',
+              targetLabel: 'Eliza',
+            }),
+          );
+        }),
+      () => {},
+      () => screen.queryByText(/Reassigned 1 line to Eliza/),
+    ],
+    [
+      'the pause-analysis prompt of a regenerate',
+      (s) => {
+        act(() => {
+          s.dispatch(
+            analysisActions.setActiveStream({
+              bookId: 'bX', manuscriptId: 'mns_bX', phaseId: 0, phaseLabel: 'Reading', phaseProgress: 0,
+              remainingMs: null, lastTickAt: Date.now(), state: 'running', engine: 'local',
+            }),
+          );
+          s.dispatch(uiActions.setRegenChapter(chapter));
+        });
+        fireEvent.click(screen.getByRole('button', { name: 'Regenerate' }));
+      },
+      () => {},
+      () => screen.queryByText('Pause analysis to generate?'),
+    ],
+  ])('closes off %s when the stage moves to a book the slices do not hold', async (_name, openSurface, afterMove, find) => {
+    profileDrawerStub.on = true;
+    const store = makeStore();
+    hold(store, 'b1');
+    open(store, 'b1');
+    await renderApp(store);
+    openSurface(store);
+    expect(find()).not.toBeNull();
+
+    open(store, 'b2');
+    act(() => { afterMove(store); });
+
+    expect(screen.getByTestId('book-loading')).toBeInTheDocument();
+    expect(find()).toBeNull();
   });
 });
 
@@ -6180,6 +6451,8 @@ describe('Layout — the stale-audio banner and the regenerate modal agree on ex
     profileDrawerStub.on = true;
   });
   afterEach(() => {
+    cleanup(); // unmount while the media stubs are still in place
+    vi.restoreAllMocks();
     profileDrawerStub.on = false;
   });
 
@@ -6228,6 +6501,8 @@ describe('Layout — a rejected profile-drawer merge re-reads the cast (plan 291
     profileDrawerStub.on = true;
   });
   afterEach(() => {
+    cleanup(); // unmount while the media stubs are still in place
+    vi.restoreAllMocks();
     profileDrawerStub.on = false;
   });
 
@@ -6595,6 +6870,8 @@ describe('Layout -- a manual prior-book link settling after a book switch (revie
     linkPriorMock.mockReset();
   });
   afterEach(() => {
+    cleanup(); // unmount while the media stubs are still in place
+    vi.restoreAllMocks();
     profileDrawerStub.on = false;
   });
 
