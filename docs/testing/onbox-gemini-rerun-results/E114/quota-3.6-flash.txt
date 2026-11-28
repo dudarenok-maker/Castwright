@@ -1,0 +1,10 @@
+# From an observe-only fetch preload (wiretap.mjs.txt): what the app sent to Gemini and what came back. No headers recorded.
+# "HTTP 200" with an error= field means the stream opened and then failed mid-stream.
+
+## Analysis at model-default, attempt 1
+start 2026-11-28 12:16:19 +11:00 POST /api/manuscripts/mns_V-NG5Zc8at/analysis {model:gemini-3.6-flash,fresh:true} reasoning=model-default
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemini 3.6 Flash daily quota exhausted — resets at 2026-11-29T00:00:00.000Z.","code":"analyzer-daily-quota","remediation":"Switch to a different analyzer model (GEMINI_MODEL in server/.env or Advanced Settings — each model has its own daily bucket), use the local Ollama analyzer, or wait for the quota reset shown in the error.","phase":"cast"}
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 1 chapter still needs cast detection (Chapter One — The Knock). Retry to continue."}
+end 2026-11-28 12:16:20 +11:00
+
+req 7 12:16:19 gemini-3.6-flash chars=8508 sent={"temperature":0.2,"maxOutputTokens":65536,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true}} -> HTTP 429 661ms finish=- thoughtsTokenCount=absent candidatesTokenCount=absent thoughtParts=0 thoughtChars=0 answerChars=0 error="{ "error": { "code": 429, "message": "You exceeded your current quota, please check your plan and billing details. For more information on this error, head to: https://aistudio.google.com/docs/rate-limits. To monitor your current usage, head to: https://ai.dev/rate-limit. \n* Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash, description: Generate content requests per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\nPlease retry in 6h43m39.901513221s.", "status": "RESOURCE_EXHAUSTED", "details": […"

@@ -479,16 +479,23 @@ a day, and §1 and §2 also use it; run this on a different day.
   decision to reopen.
 
 Test verdicts: 3.6-flash all five levels accepted; 3.8-flash and gemma-4-31b-it NOT RUN (API 503 / thinking-window stop, 5 attempts each). Result: partial
+Result (2026-11-28 re-run): gemma-4-31b-it `model-default`, `off`, `on` all accepted (PASS); 3.8-flash nothing recorded (its four level requests returned 200, then the schema check hit the daily quota); 3.8-flash Advanced row offers no `minimal`. Result: partial
 
 Thought tokens (`model-default` / `high`; Gemma `off` / `on`): not measured (3.6-flash chapter run gave no answer inside 120 s). Result: NOT RUN
+Result (2026-11-28 re-run): Gemma `off` no `thoughtsTokenCount` / `on` 3169 on the same stage-1 request (PASS); 3.6-flash not measured (daily quota). Result: partial
 
 A8, Gemma `on` step: no verdict (503 inconclusive). Result: STILL OWED
+Result (2026-11-28 re-run): `on` accepted (`thinkingLevel: HIGH` with `includeThoughts`, HTTP 200). Result: PASS
 
 G1, `on` vs default: not attempted (Gemma 503). Result: NOT RUN
+Result (2026-11-28 re-run, `config.maxOutputTokens=1200` on both legs, 31,140-byte chapter): `on` empty `MAX_TOKENS` → `analyzer-reasoning-overflow`, run stopped (PASS); default level also → `analyzer-reasoning-overflow`, no split, 2 of 2 (FAIL against this section; the behaviour in #4723). Result: on PASS, default FAIL
 
 Stale `minimal` refusal and row: refusal PASS (analyzer-request-rejected, when=before-start); row display not opened in a browser. Result: partial
+Result (2026-11-28 re-run, row display only): the row shows `minimal` selected beside the offered levels; refusal not re-run. Result: PASS
 
 Run by / date / SHA: claude lane (#4702) / 2026-11-26 / main 035ff80a; evidence docs/testing/onbox-batch-2-results/E114/
+
+Run by / date / SHA (re-run): claude lane (#4732) / 2026-11-28 / 2d6dcd62 (docs-only over main ddf1b3f0; evidence commit on chore/ops-onbox-gemini-rerun); evidence docs/testing/onbox-gemini-rerun-results/E114/. Step 5: an isolated settings file was used and restored.
 
 ## 14. Custom payload on real servers — register row A119
 
