@@ -32,4 +32,9 @@ describe('help categories', () => {
     const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
     expect(topic?.body).not.toContain('Repair');
   });
+  it('names the two clone-capable engines and says Kokoro cannot clone', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('Both voice engines');
+    expect(topic?.body).toContain('Kokoro can’t');
+  });
 });
