@@ -256,7 +256,7 @@ test('scanForOwnServer: #3264 own server that no HTTP(S) probe can read is confi
 test('scanForOwnServer: a marker whose pid is dead is not confirmation, even with the port listening', async (t) => {
   const runDir = makeRunDir(t);
   const port = await listenSilently(t);
-  const { pid } = spawnSync(process.execPath, ['-e', '']); // has exited by now
+  const { pid } = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }); // has exited by now
   writeServerOwner({ runDir, port, https: false, pid });
   assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
 });

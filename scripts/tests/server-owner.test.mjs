@@ -27,7 +27,7 @@ function tempRunDir(t) {
 
 /** The pid of a process that has already exited, checked to be gone. */
 function deadPid() {
-  const { pid } = spawnSync(process.execPath, ['-e', '']);
+  const { pid } = spawnSync(process.execPath, ['-e', ''], { windowsHide: true });
   assert.equal(pidIsAlive(pid), false, `pid ${pid} should be gone`);
   return pid;
 }
