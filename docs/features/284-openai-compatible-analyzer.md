@@ -88,7 +88,7 @@ owner: null
    - The endpoint's Max output tokens is read-only but kept and sent while a payload sets the cap (5b-D5).
    - A save judges only the payloads that change; the A7 payload comparison and `changedRequestControls` ignore key order (`isDeepStrictEqual`, 5b-D10, 5b-D14).
    - Privacy: payloads are never logged or persisted into analyzer files and are not a place for credentials. A string value of 8 or more raw characters is redacted from the errors of the request that carried it, in all three transports, and never from another request's errors (P29); a value under 8 raw characters is never redacted (5b-D11).
-   - On-box rows: A119 (custom payload on real servers) and E115 (Gemini config payload), run sheet sections 14 and 15.
+   - On-box rows: A119 (custom payload on real servers) and E115 (discharged 2026-11-28 (#4738), removed from the register) (Gemini config payload), run sheet sections 14 and 15.
 
 ## Test plan
 
