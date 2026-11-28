@@ -138,6 +138,14 @@ Grid cards crop the square covers to 16:10; the fixtures set a top-biased
 `account`, `profile-drawer`, `voice-library`. Desktop for all; phone + tablet
 variants for the core six.
 
+v1.15 voice cloning (#4864): `clone-voice-consent`, `clone-voice-sample`,
+`voice-library-cloned`, `cast-cloned-voice`, desktop only. They read the
+capture-only Hollow Tide "My voices" library (`HOLLOW_TIDE_VOICE_LIBRARY` in
+`src/mocks/marketing/hollow-tide.ts`), which `mockListVoiceLibrary` serves in
+place of the generic `src/mocks/voice-library.ts` fixtures under
+`VITE_DEMO_CAPTURE`: the fictional author Marin Vale's own cloned voice beside
+the series' designed voices, cast on The Drowning Bell's Narrator.
+
 ## Known follow-ups
 
 - **`analysing` scene** is deferred (see the commented row in `scenes.ts`): the

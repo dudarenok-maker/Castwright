@@ -79,7 +79,9 @@ describe('VoiceLibraryCard — cloned provenance', () => {
     const text = heading.closest('.bg-white')!.textContent!;
     expect(text).toMatch(/mum/i); // names the voice
     expect(text).toMatch(/used or played/i); // can no longer be used/played
-    expect(text).toMatch(/permanently deleted/i); // recording + derived artifacts gone
+    expect(text).toMatch(/recording and the voice built from it are permanently deleted/i);
+    expect(text).not.toMatch(/everything derived/i); // generated chapters are NOT deleted
+    expect(text).toMatch(/chapters you.ve already generated keep the voice until you re-cast/i);
     expect(text).toMatch(/can.t be undone/i); // irreversibility
     expect(text).toMatch(/fail to render until reassigned/i); // cast-character impact
   });
