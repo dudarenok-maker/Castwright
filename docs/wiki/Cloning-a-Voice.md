@@ -65,7 +65,7 @@ A clone works on **Qwen** and on **Coqui XTTS v2** ([Voice Engines](Voice-Engine
 
 ## It stays on your machine
 
-Cloning runs on your own computer with the local Qwen and Coqui engines. Your sample and the voice built from it stay on your machine. **Revoke** erases the recording and the voice built from it, after telling you exactly what you'll lose. This can't be undone. Chapters you've already generated keep the cloned voice until you re-cast that character and regenerate them.
+Cloning runs on your own computer with the local Qwen and Coqui engines. Your sample and the voice built from it stay on your machine. **Revoke** erases the recording and the voice built from it, after telling you what you'll lose. This can't be undone. Chapters you've already generated keep the cloned voice until you re-cast that character and regenerate them.
 
 ## Related
 
