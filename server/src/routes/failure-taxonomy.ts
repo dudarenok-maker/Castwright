@@ -24,6 +24,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { ApiError } from '@google/genai';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { tryParseApiError } from '../analyzer/api-error-envelope.js';
 import {
   AnalyzerTruncatedError,
   AnalyzerHttpError,
@@ -597,40 +598,7 @@ function trimQuotaMessage(message: string): string {
   return message.slice(0, 240) + (message.length > 240 ? '…' : '');
 }
 
-type ApiErrorEnvelope = { code?: number; message: string; status?: string; details?: unknown[] };
-
-export function tryParseApiError(raw: string): ApiErrorEnvelope | null {
-  const outer = readApiErrorEnvelope(raw);
-  /* #4718 — for a non-2xx body not served as application/json, `@google/genai` wraps the body text:
-     {"error":{"message":"<Google envelope>","code":400,"status":"Bad Request"}}. That outer status is
-     only the HTTP reason phrase, so whatever the code (the 429s and 503s are wrapped the same way),
-     a message that is itself an envelope is read instead. */
-  if (!outer || !outer.message.trimStart().startsWith('{')) return outer;
-  return readApiErrorEnvelope(outer.message) ?? outer;
-}
-
-function readApiErrorEnvelope(raw: string): ApiErrorEnvelope | null {
-  /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
-     Find the first '{' and try to parse from there. */
-  const start = raw.indexOf('{');
-  if (start < 0) return null;
-  try {
-    const obj = JSON.parse(raw.slice(start)) as {
-      error?: { code?: number; message?: string; status?: string; details?: unknown[] };
-    };
-    if (obj?.error?.message) {
-      return {
-        code: obj.error.code,
-        message: obj.error.message,
-        status: obj.error.status,
-        details: obj.error.details,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+export { tryParseApiError };
 
 /* Only Gemini's key-rejection signals — the envelope reasons and the "API key [<redacted key>] not
    valid / expired" wording. A bare mention of an `api_key` request field is a request-shape error. */
