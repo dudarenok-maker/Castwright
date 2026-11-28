@@ -13,11 +13,18 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import http from 'node:http';
+import net from 'node:net';
+import { spawnSync } from 'node:child_process';
+import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
+import { serverOwnerPath, writeServerOwner } from '../lib/server-owner.mjs';
 import {
   resolveLaunchTarget,
   isOwnServerInstance,
   waitForOwnServer,
   scanForOwnServer,
+  confirmOwnServerFromMarker,
   decideLaunchAction,
   defaultNormalizePathForCompare,
 } from '../start-app-prod.mjs';
@@ -146,12 +153,11 @@ test('defaultNormalizePathForCompare: on win32, folds case; elsewhere, exact', (
 });
 
 // Castwright#3030 round 2 (finding F1) — once a rebind is possible, the
-// launcher must confirm success by IDENTITY (this worktree's own runDir
-// answering /api/health), not by a bare TCP-connect to an assumed port: per
-// the srv-60 auto-rebind design doc, the actual bound port is the single
-// source of truth every consumer must read. These spin up real HTTP servers
-// (plain http, not TLS) answering /api/health with a controllable
-// configLoad.runDir, exactly the shape probeServed()/getJson() parse.
+// launcher must confirm success by IDENTITY (the owner marker in this
+// worktree's own runDir, #3264), not by a bare TCP-connect to an assumed port:
+// per the srv-60 auto-rebind design doc, the actual bound port is the single
+// source of truth every consumer must read. makeHealthServer is a real HTTP
+// server (plain http, not TLS) for the bare-TCP maxPorts=1 cases.
 function makeHealthServer(runDir) {
   return http.createServer((req, res) => {
     if (req.url === '/api/health') {
@@ -188,10 +194,10 @@ test('waitForOwnServer: resolves immediately when OUR OWN server already answers
 
 // Castwright#3030 round 3 (finding N2) — maxPorts=1 is a DELIBERATE bare
 // TCP-connect, exactly matching this launcher's pre-#3030 behaviour, so the
-// ordinary (no-foreign-occupant) boot path never depends on probeServed's
-// TLS-cert resolution (findRootCa()). Identity confirmation is reserved for
-// maxPorts>1, which main() only ever uses once it has independently
-// established a rebind is genuinely possible.
+// ordinary (no-foreign-occupant) boot path depends on nothing but the port
+// answering. Identity confirmation is reserved for maxPorts>1, which main()
+// only ever uses once it has independently established a rebind is genuinely
+// possible.
 test('waitForOwnServer: maxPorts=1 resolves on ANY listener, even a foreign one (deliberate — see N2)', async () => {
   const server = makeHealthServer('/other-worktree/.run');
   const port = await listenOnFreePort(server);
@@ -209,69 +215,122 @@ test('waitForOwnServer: maxPorts=1 resolves on ANY listener, even a foreign one 
   }
 });
 
+// A real run dir for real owner markers.
+function makeRunDir(t) {
+  const dir = mkdtempSync(join(tmpdir(), 'start-app-prod-owner-'));
+  t.after(() => rmSync(dir, { recursive: true, force: true }));
+  return dir;
+}
+
+// A real listening socket that drops every connection: the TCP connect
+// succeeds, and no HTTP(S) probe can ever read an answer from it.
+async function listenSilently(t, port = 0) {
+  const server = net.createServer((socket) => socket.destroy());
+  await new Promise((r) => server.listen(port, '127.0.0.1', r));
+  t.after(() => new Promise((r) => server.close(r)));
+  return server.address().port;
+}
+
+// A port that was free a moment ago and has nothing listening on it.
+async function closedPort() {
+  const probe = net.createServer();
+  const port = await listenOnFreePort(probe);
+  await new Promise((r) => probe.close(r));
+  return port;
+}
+
 // scanForOwnServer is the identity-confirming primitive waitForOwnServer
 // uses internally for maxPorts>1, and main() also uses it directly for the
 // pre-spawn "is a stale copy of MY OWN server already rebound somewhere in
 // this range" check (Castwright#3030 round 3, finding N1).
-test('scanForOwnServer: a single pass over a FOREIGN-only range finds nothing (no polling, no false positive)', async () => {
-  const server = makeHealthServer('/other-worktree/.run');
-  const port = await listenOnFreePort(server);
-  try {
-    const found = await scanForOwnServer(port, 1, false, '/repo/.run');
-    assert.equal(found, null);
-  } finally {
-    await new Promise((r) => server.close(r));
-  }
+
+// #3264 — cert files exist (the server bound HTTPS) and mkcert is unreachable,
+// so no network probe can read the healthy server. The marker must be enough.
+test('scanForOwnServer: #3264 own server that no HTTP(S) probe can read is confirmed from its marker', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir, port, https: true, pid: process.pid });
+  assert.equal(await scanForOwnServer(port, 1, true, runDir), port);
 });
 
-test('scanForOwnServer: finds OUR OWN server anywhere in the range on the first pass', async () => {
-  const foreign = makeHealthServer('/other-worktree/.run');
-  const startPort = await listenOnFreePort(foreign);
-  const own = makeHealthServer('/repo/.run');
-  await new Promise((r) => own.listen(startPort + 1, '127.0.0.1', r));
-  try {
-    const found = await scanForOwnServer(startPort, 3, false, '/repo/.run');
-    assert.equal(found, startPort + 1);
-  } finally {
-    await Promise.all([
-      new Promise((r) => foreign.close(r)),
-      new Promise((r) => own.close(r)),
-    ]);
-  }
+test('scanForOwnServer: a marker whose pid is dead is not confirmation, even with the port listening', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  const { pid } = spawnSync(process.execPath, ['-e', '']); // has exited by now
+  writeServerOwner({ runDir, port, https: false, pid });
+  assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
 });
 
-test('scanForOwnServer: an already-elapsed deadline aborts before probing the next candidate', async () => {
-  const own = makeHealthServer('/repo/.run');
-  const port = await listenOnFreePort(own);
-  try {
-    // Deadline already in the past — the very first candidate must be skipped.
-    const found = await scanForOwnServer(port, 1, false, '/repo/.run', Date.now() - 1);
-    assert.equal(found, null);
-  } finally {
-    await new Promise((r) => own.close(r));
-  }
+test('scanForOwnServer: a marker with nothing listening on its port is not confirmation', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await closedPort();
+  writeServerOwner({ runDir, port, https: false, pid: process.pid });
+  assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
 });
 
-test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on a rebound port', async () => {
-  const foreign = makeHealthServer('/other-worktree/.run');
-  const startPort = await listenOnFreePort(foreign);
-  const own = makeHealthServer('/repo/.run');
-  await new Promise((r) => own.listen(startPort + 1, '127.0.0.1', r));
-  try {
-    const found = await waitForOwnServer({
-      startPort,
-      maxPorts: 3,
-      timeoutMs: 2000,
-      lanHttps: false,
-      runDir: '/repo/.run',
-    });
-    assert.equal(found, startPort + 1);
-  } finally {
-    await Promise.all([
-      new Promise((r) => foreign.close(r)),
-      new Promise((r) => own.close(r)),
-    ]);
-  }
+test('scanForOwnServer: a listening port whose marker is only in a SIBLING run dir is not confirmed', async (t) => {
+  const runDir = makeRunDir(t);
+  const siblingRunDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir: siblingRunDir, port, https: false, pid: process.pid });
+  assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
+});
+
+test('scanForOwnServer: a marker for port P that records a different port is not confirmed', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeFileSync(
+    serverOwnerPath(runDir, port),
+    JSON.stringify({ pid: process.pid, port: port + 1, https: false, startedAt: '' }),
+    'utf8',
+  );
+  assert.equal(await scanForOwnServer(port, 1, false, runDir), null);
+});
+
+test('scanForOwnServer: finds OUR OWN server anywhere in the range on the first pass', async (t) => {
+  const runDir = makeRunDir(t);
+  const startPort = await listenSilently(t); // foreign: no marker in our run dir
+  await listenSilently(t, startPort + 1);
+  writeServerOwner({ runDir, port: startPort + 1, https: false, pid: process.pid });
+  assert.equal(await scanForOwnServer(startPort, 3, false, runDir), startPort + 1);
+});
+
+test('scanForOwnServer: an already-elapsed deadline aborts before probing the next candidate', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir, port, https: false, pid: process.pid });
+  // Deadline already in the past — the very first candidate must be skipped.
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Date.now() - 1), null);
+});
+
+test('confirmOwnServerFromMarker: marker + live pid + answering port is confirmed; a dead pid is not', async () => {
+  const probes = {
+    readServerOwner: (_runDir, port) => ({ pid: 4242, port, https: true, startedAt: '' }),
+    probePort: async () => true,
+  };
+  assert.equal(
+    await confirmOwnServerFromMarker(8443, '/repo/.run', { ...probes, pidIsAlive: () => true }),
+    true,
+  );
+  assert.equal(
+    await confirmOwnServerFromMarker(8443, '/repo/.run', { ...probes, pidIsAlive: () => false }),
+    false,
+  );
+});
+
+test('waitForOwnServer: scans past a foreign occupant to find OUR OWN server on a rebound port', async (t) => {
+  const runDir = makeRunDir(t);
+  const startPort = await listenSilently(t); // foreign: no marker in our run dir
+  await listenSilently(t, startPort + 1);
+  writeServerOwner({ runDir, port: startPort + 1, https: false, pid: process.pid });
+  const found = await waitForOwnServer({
+    startPort,
+    maxPorts: 3,
+    timeoutMs: 2000,
+    lanHttps: false,
+    runDir,
+  });
+  assert.equal(found, startPort + 1);
 });
 
 test('waitForOwnServer: maxPorts=1 times out when nothing listens at startPort', async () => {

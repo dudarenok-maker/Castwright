@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { enforceNodeRuntime } from './lib/node-runtime-guard.mjs';
 import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
+import { readServerOwner } from './lib/server-owner.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -293,22 +295,45 @@ export function isOwnServerInstance(served, ownRunDir, { normalize = defaultNorm
   return normalize(servedRunDir) === normalize(ownRunDir);
 }
 
+/* Is THIS worktree's own server the one serving `port`? Answered from the owner
+   marker the server writes for the port it actually bound (#3264,
+   lib/server-owner.mjs), with no /api/health request, so it works when the
+   server is on HTTPS and findRootCa() comes up empty. Identity comes from the
+   marker's LOCATION: it sits in this checkout's own runDir. It counts only if
+   the marker parses for this port, its pid is alive AND the port accepts a TCP
+   connect. Accepted residual: a dead server's leftover marker whose pid has
+   been reused, while a foreign process holds the same port, would read as ours.
+   That is vanishingly unlikely and deliberately not engineered around.
+   Exported for scripts/tests/start-app-prod.test.mjs. */
+export async function confirmOwnServerFromMarker(
+  port,
+  runDir,
+  {
+    probePort: probePortFn = probePort,
+    pidIsAlive: pidIsAliveFn = pidIsAlive,
+    readServerOwner: readServerOwnerFn = readServerOwner,
+  } = {},
+) {
+  const owner = readServerOwnerFn(runDir, port);
+  if (!owner || !pidIsAliveFn(owner.pid)) return false;
+  return probePortFn(port);
+}
+
 /* Single pass over [startPort, startPort + maxPorts) looking for THIS
-   worktree's own server, confirmed by IDENTITY (runDir via /api/health), not
-   merely a socket accepting a connection — a listening socket at a candidate
-   port could belong to a completely different process. `deadline`, when
-   given, additionally aborts the scan (returning null) before starting a new
-   candidate once time is up, so a caller's overall timeout budget can't be
+   worktree's own server, confirmed by IDENTITY (the owner marker in runDir),
+   not merely a socket accepting a connection — a listening socket at a
+   candidate port could belong to a completely different process. `deadline`,
+   when given, additionally aborts the scan (returning null) before starting a
+   new candidate once time is up, so a caller's overall timeout budget can't be
    blown open-ended by a slow multi-candidate pass (Castwright#3030 round 3,
-   finding N8). Exported for scripts/tests/start-app-prod.test.mjs. */
-export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline = Infinity) {
+   finding N8). `_lanHttps` is unused since #3264 (no network probe left to
+   pick a protocol for); it stays so the signature callers use is unchanged.
+   Exported for scripts/tests/start-app-prod.test.mjs. */
+export async function scanForOwnServer(startPort, maxPorts, _lanHttps, runDir, deadline = Infinity) {
   for (let i = 0; i < maxPorts; i += 1) {
     if (Date.now() >= deadline) return null;
     const candidate = startPort + i;
-    if (await probePort(candidate)) {
-      const served = await probeServed(candidate, lanHttps);
-      if (isOwnServerInstance(served, runDir)) return candidate;
-    }
+    if (await confirmOwnServerFromMarker(candidate, runDir)) return candidate;
   }
   return null;
 }
@@ -323,15 +348,14 @@ export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, de
    plausibly have taken the one port this launcher itself confirmed free a
    moment ago (short of the same vanishingly rare race this file has always
    tolerated), so identity confirmation buys nothing there and only adds a
-   dependency this path never needed before — going through probeServed's
-   TLS-cert resolution (findRootCa()) for every ordinary boot, on hardware
-   where cert FILES exist but the mkcert CA is not independently
-   discoverable, timed out for a server that was actually healthy
-   (Castwright#3030 round 3, finding N2: this is exactly the regression the
-   round-2 fix introduced by routing the ordinary path through identity
-   confirmation too).
+   dependency this path never needed before. When that dependency was an
+   /api/health probe, every ordinary boot went through its TLS-cert resolution
+   (findRootCa()) and, on hardware where cert FILES exist but the mkcert CA is
+   not independently discoverable, timed out for a server that was actually
+   healthy (Castwright#3030 round 3, finding N2).
 
-   Only the maxPorts>1 (rebind-possible) case needs identity confirmation —
+   Only the maxPorts>1 (rebind-possible) case needs identity confirmation,
+   which comes from the owner marker, not a network probe (#3264) —
    there, multiple candidates are plausible and a bare "something is
    listening" can't tell this worktree's own child apart from a different
    process that happens to occupy one of the scanned ports. Per the
