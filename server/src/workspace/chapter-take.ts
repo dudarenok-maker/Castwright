@@ -25,6 +25,8 @@ import { spawn } from 'node:child_process';
 import { mkdir, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
+import type { EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
+import type { VerdictRow } from '../audio/render-integrity/verdicts-io.js';
 import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
 import { canonicalDirKey } from './book-dir-key.js';
 import { withBookLock } from './book-lock.js';
@@ -50,9 +52,11 @@ import {
   parseTakeJournalName,
   previousAudioPath,
   previousPartPath,
+  stagedPartPath,
   takeJournalPath,
   type ChapterAudioExt,
   type JournalId,
+  type StagedSuffix,
   type TakeFields,
   type TakeId,
   type TakeSegmentsView,
@@ -987,6 +991,170 @@ export function bookLockKeyFor(handle: AnyBookHandle): string {
 export async function unlinkTakeJournal(handle: AnyBookHandle, path: string): Promise<void> {
   assertHeld(handle, 'unlinkTakeJournal');
   await withBookLock(bookLockKeyFor(handle), () => unlinkWithRetry(path));
+}
+
+/* ------------------------------------------------------------------ *
+ * Prepare: staging a new take (§5.A "Prepare"; N14, N15)
+ *
+ * NO LOCK is held, and the caller may have outlived the job's lease, so
+ * nothing here takes or asserts a `BookHandle`. Nothing live is touched. NO
+ * DIRECTORY IS EVER CREATED: every part is opened `wx` in the existing
+ * `audio/`, so a book that moved answers ENOENT and is never recreated.
+ * ------------------------------------------------------------------ */
+
+const staging = new Set<TakeId>();
+
+/** The take ids this process has staged and not yet released: the sweep keeps
+    their `.next-*` parts. Process-local (A10). */
+export const liveStaging: ReadonlySet<TakeId> = staging;
+
+/** Called by the commit, or by the job's exit: `takeId`'s staged parts are no
+    longer this process's to keep. */
+export function releaseStaging(takeId: TakeId): void {
+  staging.delete(takeId);
+}
+
+/** A segments file as the writer hands it over: any `takeId` in it is replaced. */
+export type PreparedSegments = TakeSegmentsView & { durationSec: number; synthesizedAt: string };
+
+/** QA repair's change to an existing verdict row (OD4). Not a file: it stays in
+    memory and the commit applies it. */
+export type VerdictPatch = Pick<
+  VerdictRow,
+  'sentenceIds' | 'cosine' | 'verdict' | 'severity' | 'fixable'
+>;
+
+/** A new take's payloads, already encoded and measured. An absent optional part
+    is not staged. */
+export interface PrepareTakeInput {
+  slug: string;
+  ext: ChapterAudioExt;
+  audio: Uint8Array;
+  segments: PreparedSegments;
+  peaks?: object;
+  lufs?: object;
+  /** Fresh rows only. */
+  embeddings?: { version: string; rows: readonly EmbeddingRow[] };
+  /** Fresh verdicts only. */
+  verdicts?: readonly VerdictRow[];
+  verdictPatches?: readonly VerdictPatch[];
+}
+
+export interface StagedTakePart {
+  suffix: StagedSuffix;
+  path: string;
+  size: number;
+}
+
+export interface StagedTake {
+  slug: string;
+  takeId: TakeId;
+  ext: ChapterAudioExt;
+  parts: StagedTakePart[];
+  verdictPatches?: readonly VerdictPatch[];
+  durationSec: number;
+  segments: PreparedSegments & { takeId: TakeId };
+  synthesizedAt: string;
+}
+
+const jsonBytes = (value: unknown): Buffer => Buffer.from(JSON.stringify(value, null, 2), 'utf8');
+
+/* The embeddings file's stored form (`embeddings-io.ts`: each vector is the
+   base64 of its Float32 buffer). `writeEmbeddings` cannot stage it: it creates
+   directories and renames over whatever holds the name. */
+function storedEmbeddingRows(rows: readonly EmbeddingRow[]) {
+  return rows.map((r) => ({
+    characterId: r.characterId,
+    sentenceIds: r.sentenceIds,
+    vec: Buffer.from(r.vec.buffer, r.vec.byteOffset, r.vec.byteLength).toString('base64'),
+  }));
+}
+
+/* Unlink every path, trying each even after a failure; returns the failures. */
+async function unlinkEach(paths: readonly string[]): Promise<Error[]> {
+  const failures: Error[] = [];
+  for (const path of paths) {
+    try {
+      await unlinkWithRetry(path);
+    } catch (err) {
+      failures.push(err as Error);
+    }
+  }
+  return failures;
+}
+
+/** Stage every part of a new take under `<slug>.next-<takeId>.<suffix>` and
+    describe it for the commit. The signal is checked before each part. On any
+    failure (an abort, a name already taken, `audio/` gone) the parts this call
+    created are removed, the id is released and the error is thrown. */
+export async function prepareTake(
+  handle: AnyBookHandle | { bookDir: string },
+  input: PrepareTakeInput,
+  signal: AbortSignal,
+): Promise<StagedTake> {
+  const root = audioDir(handle.bookDir);
+  const { slug, ext, verdictPatches } = input;
+  const takeId = mintTakeId();
+  const segments = { ...input.segments, takeId };
+
+  const payloads: Array<[StagedSuffix, Uint8Array]> = [
+    [ext, input.audio],
+    [TAKE_SIDECAR_SUFFIXES.segments, jsonBytes(segments)],
+  ];
+  if (input.peaks) payloads.push([TAKE_SIDECAR_SUFFIXES.peaks, jsonBytes(input.peaks)]);
+  if (input.lufs) payloads.push([TAKE_SIDECAR_SUFFIXES.lufs, jsonBytes(input.lufs)]);
+  if (input.embeddings) {
+    const { version, rows } = input.embeddings;
+    const stored = { version, rows: storedEmbeddingRows(rows), takeId };
+    payloads.push([TAKE_SIDECAR_SUFFIXES.embeddings, jsonBytes(stored)]);
+  }
+  if (input.verdicts) payloads.push([TAKE_SIDECAR_SUFFIXES.verdicts, jsonBytes(input.verdicts)]);
+
+  const parts: StagedTakePart[] = [];
+  /* Only names this call's own `wx` open created: a file that was already
+     there is not ours to remove. */
+  const created: string[] = [];
+  staging.add(takeId);
+  try {
+    for (const [suffix, data] of payloads) {
+      if (signal.aborted) throw new DOMException('prepareTake aborted', 'AbortError');
+      const path = stagedPartPath(root, slug, takeId, suffix);
+      const fh = await open(path, 'wx');
+      created.push(path);
+      try {
+        await fh.writeFile(data);
+        await fh.sync();
+      } finally {
+        await fh.close();
+      }
+      parts.push({ suffix, path, size: data.byteLength });
+    }
+  } catch (err) {
+    for (const failure of await unlinkEach(created)) {
+      console.warn(`[take] staged part removal failed for ${slug}: ${failure.message}`);
+    }
+    releaseStaging(takeId);
+    throw err;
+  }
+
+  return {
+    slug,
+    takeId,
+    ext,
+    parts,
+    ...(verdictPatches ? { verdictPatches } : {}),
+    durationSec: segments.durationSec,
+    segments,
+    synthesizedAt: segments.synthesizedAt,
+  };
+}
+
+/** Unlink every staged part (a missing one is fine), for every exit that does
+    not commit. Every part is tried; the first failure is then thrown. The id
+    stays in `liveStaging` until `releaseStaging`. */
+export async function discardStaged(staged: StagedTake): Promise<void> {
+  const [failure] = await unlinkEach(staged.parts.map((p) => p.path));
+  if (failure) throw failure;
 }
 
 /* ------------------------------------------------------------------ *

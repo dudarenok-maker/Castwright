@@ -221,6 +221,49 @@ export function isTakeId(x: unknown): x is TakeId {
 }
 
 /* ------------------------------------------------------------------ *
+ * Staged names (§5.A "Prepare")
+ * ------------------------------------------------------------------ */
+
+/** What a staged part's name can end in: a live audio ext or a sidecar suffix. */
+export type StagedSuffix =
+  | ChapterAudioExt
+  | (typeof TAKE_SIDECAR_SUFFIXES)[TakeSidecarPart];
+
+/** `<audioRoot>/<slug>.next-<takeId>.<suffix>`, one part of a take that is not
+    installed yet. No live or previous probe reads such a name, so it never
+    makes a take live. */
+export function stagedPartPath(
+  audioRoot: string,
+  slug: string,
+  takeId: TakeId,
+  suffix: StagedSuffix,
+): string {
+  return join(audioRoot, `${slug}.next-${takeId}.${suffix}`);
+}
+
+/** `stagedPartPath` for the audio part. */
+export function stagedAudioPath(
+  audioRoot: string,
+  slug: string,
+  takeId: TakeId,
+  ext: ChapterAudioExt,
+): string {
+  return stagedPartPath(audioRoot, slug, takeId, ext);
+}
+
+const STAGED_NAME_RE = /^(.+)\.next-([a-z2-7]{16})\.(.+)$/;
+
+/** The slug, take id and suffix a `.next-<takeId>.` name carries, or `null` for
+    any other name. The suffix is whatever follows the id (a `.tmp-*` leftover
+    of a staged name included): the sweep decides by the id. */
+export function parseStagedName(
+  name: string,
+): { slug: string; takeId: TakeId; suffix: string } | null {
+  const match = STAGED_NAME_RE.exec(name);
+  return match ? { slug: match[1], takeId: match[2], suffix: match[3] } : null;
+}
+
+/* ------------------------------------------------------------------ *
  * Take journal names (§5.A Commit step 3)
  * ------------------------------------------------------------------ */
 
