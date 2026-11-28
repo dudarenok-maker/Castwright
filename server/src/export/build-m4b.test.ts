@@ -18,9 +18,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll, beforeEach, vi } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, beforeEach, afterEach, vi } from 'vitest';
 import sharp from 'sharp';
 import { encodePcmToAudio } from '../tts/mp3.js';
+import { removeTakes, seedTakes } from '../test-utils/analysis-takes.js';
 import { reencodeToJpeg } from '../cover/reencode.js';
 import {
   buildM4b,
@@ -372,6 +373,76 @@ describeIfTools('buildM4b', () => {
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
   }, 15_000);
+
+  describe('a chapter with no narratable text (#3507)', () => {
+    const manuscriptId = 'mns_3507_m4b';
+    const state = () => makeState({ manuscriptId });
+    let noAudioDir: string; // chapters 1 and 4 have audio; chapter 2 has none.
+
+    beforeAll(async () => {
+      noAudioDir = join(tmpRoot, 'no-text');
+      mkdirSync(join(noAudioDir, 'audio'), { recursive: true });
+      const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
+      for (const slug of ['01-chapter-1', '04-chapter-3']) {
+        writeFileSync(join(noAudioDir, 'audio', `${slug}.mp3`), mp3);
+      }
+    });
+
+    afterEach(() => removeTakes(manuscriptId));
+
+    it('is left out when it has no audio, with no chapter mark for it', async () => {
+      await seedTakes(manuscriptId, { 1: 'words', 2: 'empty', 4: 'words' });
+      const out = join(tmpRoot, 'no-text.m4b');
+      const result = await buildM4b({ bookDir: noAudioDir, state: state(), outPath: out });
+
+      expect(result.chapterCount).toBe(2);
+      const probe = ffprobeJson(out);
+      expect(probe.chapters.map((c) => c.tags?.title)).toEqual([
+        'Chapter 1 — Opening',
+        'Chapter 3',
+      ]);
+      expect(probe.chapters[1].start).toBe(probe.chapters[0].end);
+    }, 30_000);
+
+    it.each([
+      ['has words', { 1: 'words', 2: 'words', 4: 'words' } as const, []],
+      ['has a [] take and a failure record', { 1: 'words', 2: 'empty', 4: 'words' } as const, [2]],
+    ])('still refuses a chapter with no audio that %s', async (_label, takes, failed) => {
+      await seedTakes(manuscriptId, takes, failed);
+      await expect(
+        buildM4b({
+          bookDir: noAudioDir,
+          state: state(),
+          outPath: join(tmpRoot, 'no-text-refused.m4b'),
+        }),
+      ).rejects.toMatchObject({ name: 'ExportIncompleteError', missing: ['02-chapter-2'] });
+    }, 30_000);
+
+    it('is still exported when it has audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'words', 2: 'empty', 4: 'words' });
+      const result = await buildM4b({
+        bookDir,
+        state: state(),
+        outPath: join(tmpRoot, 'no-text-with-audio.m4b'),
+      });
+      expect(result.chapterCount).toBe(3);
+    }, 30_000);
+
+    it('refuses and writes nothing when every chapter is no-text with no audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'empty', 2: 'empty', 4: 'empty' });
+      const emptyDir = join(tmpRoot, 'all-no-text');
+      mkdirSync(join(emptyDir, 'audio'), { recursive: true });
+      const out = join(tmpRoot, 'all-no-text.m4b');
+
+      await expect(
+        buildM4b({ bookDir: emptyDir, state: state(), outPath: out }),
+      ).rejects.toMatchObject({
+        name: 'ExportIncompleteError',
+        missing: ['01-chapter-1', '02-chapter-2', '04-chapter-3'],
+      });
+      expect(existsSync(out)).toBe(false);
+    });
+  });
 
   it('embeds the OpenLibrary cover (.audiobook/cover.jpg) as an attached_pic when present', async () => {
     /* Plan 36 A2: when the cover-art pipeline has cached a cover for

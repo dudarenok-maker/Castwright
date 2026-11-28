@@ -14,8 +14,9 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
-import { describe, expect, it, beforeAll, afterAll } from 'vitest';
+import { describe, expect, it, beforeAll, afterAll, afterEach } from 'vitest';
 import { encodePcmToAudio } from '../tts/mp3.js';
+import { removeTakes, seedTakes } from '../test-utils/analysis-takes.js';
 import { buildMp3Folder } from './build-mp3-folder.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
 import type { BookStateJson } from '../workspace/scan.js';
@@ -163,6 +164,75 @@ describeIfFfmpeg('buildMp3Folder', () => {
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
   }, 15_000);
+
+  describe('a chapter with no narratable text (#3507)', () => {
+    const manuscriptId = 'mns_3507_mp3folder';
+    const state = () =>
+      makeState({
+        manuscriptId,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: '01-chapter-1' },
+          { id: 2, title: 'Ornament', slug: '02-ornament' },
+          { id: 3, title: 'Chapter 2', slug: '02-chapter-2' },
+        ],
+      });
+    const mp3Names = (dir: string) =>
+      readdirSync(dir)
+        .filter((n) => n.endsWith('.mp3'))
+        .sort();
+
+    afterEach(() => removeTakes(manuscriptId));
+
+    it('is left out when it has no audio, with contiguous numbering', async () => {
+      await seedTakes(manuscriptId, { 1: 'words', 2: 'empty', 3: 'words' });
+      const outDir = join(tmpRoot, 'export-no-text', 'book');
+      await buildMp3Folder({ bookDir, state: state(), outDir });
+
+      expect(mp3Names(outDir)).toEqual(['01 - Chapter 1.mp3', '02 - Chapter 2.mp3']);
+      expect(
+        mp3Names(outDir).map((n) => readId3Frame(readFileSync(join(outDir, n)), 'TRCK')),
+      ).toEqual(['1/2', '2/2']);
+    }, 30_000);
+
+    it.each([
+      ['has words', { 1: 'words', 2: 'words', 3: 'words' } as const, []],
+      ['has a [] take and a failure record', { 1: 'words', 2: 'empty', 3: 'words' } as const, [2]],
+    ])('still refuses a chapter with no audio that %s', async (_label, takes, failed) => {
+      await seedTakes(manuscriptId, takes, failed);
+      await expect(
+        buildMp3Folder({
+          bookDir,
+          state: state(),
+          outDir: join(tmpRoot, 'export-no-text-refused', 'book'),
+        }),
+      ).rejects.toMatchObject({ name: 'ExportIncompleteError', missing: ['02-ornament'] });
+    }, 30_000);
+
+    it('is still exported when it has audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'empty', 2: 'words' });
+      const result = await buildMp3Folder({
+        bookDir,
+        state: makeState({ manuscriptId }),
+        outDir: join(tmpRoot, 'export-no-text-with-audio', 'book'),
+      });
+      expect(result.entries).toHaveLength(2);
+    }, 30_000);
+
+    it('refuses and writes nothing when every chapter is no-text with no audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'empty', 2: 'empty' });
+      const emptyDir = join(tmpRoot, 'all-no-text-book');
+      mkdirSync(join(emptyDir, 'audio'), { recursive: true });
+      const outDir = join(tmpRoot, 'export-all-no-text', 'book');
+
+      await expect(
+        buildMp3Folder({ bookDir: emptyDir, state: makeState({ manuscriptId }), outDir }),
+      ).rejects.toMatchObject({
+        name: 'ExportIncompleteError',
+        missing: ['01-chapter-1', '02-chapter-2'],
+      });
+      expect(existsSync(outDir)).toBe(false);
+    });
+  });
 
   it('overwrites the destination directory on rerun so stale chapter files do not survive', async () => {
     const outDir = join(tmpRoot, 'export-rerun', 'the Coalfall Commission');

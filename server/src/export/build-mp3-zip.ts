@@ -1,6 +1,6 @@
 /* MP3.ZIP packer — Phase A of the audiobook export pipeline.
 
-   Walks `state.chapters` (sorted by id, excluding any with `excluded === true`),
+   Walks the chapters `exportableChapters` returns (non-excluded, sorted by id),
    resolves each chapter's `.mp3` on disk via the shared findChapterAudio
    probe, re-tags each one with chapter/book ID3v2.4 metadata via
    applyId3v24Tags (no re-encode — `-c:a copy` only), then streams the
@@ -12,7 +12,7 @@
    accept the same shape.
 
    Refuses with `ExportIncompleteError` listing missing chapter slugs when
-   any non-excluded chapter has no `.mp3` on disk. Callers turn that into a
+   any covered chapter has no `.mp3` on disk. Callers turn that into a
    409 with a clickable "Regenerate missing chapters" hint in the export
    modal. */
 
@@ -27,6 +27,7 @@ import { findChapterAudio, type ChapterAudioExt } from '../workspace/chapter-tak
 const MP3_EXT: ChapterAudioExt = 'mp3';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
+import { exportableChapters } from './exportable-chapters.js';
 import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -194,9 +195,9 @@ export function createZipWritePipeline(
 export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3ZipResult> {
   const { bookDir, state, outPath, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
+  const chapters = await exportableChapters(bookDir, state);
 
-  /* Pre-flight: every non-excluded chapter must have an MP3 on disk.
+  /* Pre-flight: every chapter the export covers must have an MP3 on disk.
      Surface ALL missing slugs in one go so the user gets a full punch
      list, not one-at-a-time errors. */
   const root = audioDir(bookDir);

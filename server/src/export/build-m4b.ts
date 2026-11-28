@@ -13,8 +13,8 @@
    sidesteps that entirely).
 
    Refuses with `ExportIncompleteError` (re-exported from
-   build-mp3-zip.ts) when any non-excluded chapter lacks a current
-   `.mp3`. Callers turn that into a 409 with a "Regenerate missing
+   build-mp3-zip.ts) when any chapter `exportableChapters` returns lacks a
+   current `.mp3`. Callers turn that into a 409 with a "Regenerate missing
    chapters" hint, identical to the MP3.ZIP path. */
 
 import { spawn } from 'node:child_process';
@@ -25,6 +25,7 @@ import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio, liveAudioPath } from '../workspace/chapter-take.js';
 import { ffmpegFailure } from '../tts/ffmpeg-failure.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
+import { exportableChapters } from './exportable-chapters.js';
 import { artistForExport } from './narrator-credit.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
@@ -52,10 +53,10 @@ export interface BuildM4bResult {
 export async function buildM4b(opts: BuildM4bOptions): Promise<BuildM4bResult> {
   const { bookDir, state, outPath, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
+  const chapters = await exportableChapters(bookDir, state);
 
   /* Same precheck as buildMp3Zip — both formats require a current MP3
-     for every non-excluded chapter. Surface ALL missing slugs in one
+     for every chapter the export covers. Surface ALL missing slugs in one
      shot. */
   const root = audioDir(bookDir);
   const missing: string[] = [];

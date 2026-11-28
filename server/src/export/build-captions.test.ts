@@ -1,5 +1,14 @@
-import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { describe, it, expect, beforeAll, afterAll, afterEach, vi } from 'vitest';
+import {
+  mkdtempSync,
+  mkdirSync,
+  writeFileSync,
+  rmSync,
+  copyFileSync,
+  existsSync,
+  readFileSync,
+} from 'node:fs';
+import { removeTakes, seedTakes } from '../test-utils/analysis-takes.js';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -316,6 +325,100 @@ describeIfFfmpeg('buildCaptions', () => {
         outPath: join(bookDir, 'broken.srt'),
       }),
     ).rejects.toBeInstanceOf(ExportIncompleteError);
+  });
+
+  describe('a chapter with no narratable text (#3507)', () => {
+    const manuscriptId = 'mns_3507_captions';
+    /* Chapter 1 is the fixture book's rendered chapter; 2 has no audio; 3 is
+       given a copy of chapter 1's take below. */
+    const threeChapters = (): BookStateJson =>
+      ({
+        ...state,
+        manuscriptId,
+        chapters: [
+          { id: 1, title: 'Chapter One', slug: '01-chapter-one' },
+          { id: 2, title: 'Ornament', slug: '02-ornament' },
+          { id: 3, title: 'Chapter Two', slug: '03-chapter-two' },
+        ],
+      }) as BookStateJson;
+    const build = (bookState: BookStateJson, outPath: string, dir = bookDir) =>
+      buildCaptions({
+        bookDir: dir,
+        state: bookState,
+        captionFileFormat: 'srt',
+        captionGranularity: 'line',
+        captionScope: 'per-chapter',
+        outPath,
+      });
+    /* Entry names from the zip's central directory (46-byte records). */
+    const zipNames = (zipPath: string): string[] => {
+      const zip = readFileSync(zipPath);
+      const names: string[] = [];
+      let p = zip.indexOf(Buffer.from([0x50, 0x4b, 0x01, 0x02]));
+      while (p >= 0 && p + 46 <= zip.length && zip.readUInt32LE(p) === 0x02014b50) {
+        const nameLen = zip.readUInt16LE(p + 28);
+        names.push(zip.subarray(p + 46, p + 46 + nameLen).toString('utf8'));
+        p += 46 + nameLen + zip.readUInt16LE(p + 30) + zip.readUInt16LE(p + 32);
+      }
+      return names;
+    };
+
+    beforeAll(() => {
+      copyFileSync(
+        join(bookDir, 'audio', '01-chapter-one.mp3'),
+        join(bookDir, 'audio', '03-chapter-two.mp3'),
+      );
+      /* No segments, so no cue needs manuscript text for chapter 3. */
+      writeFileSync(
+        join(bookDir, 'audio', '03-chapter-two.segments.json'),
+        JSON.stringify({ chapterId: 3, chapterTitle: 'Chapter Two', segments: [] }),
+      );
+    });
+
+    afterEach(() => removeTakes(manuscriptId));
+
+    it('is left out when it has no audio, with contiguous numbering', async () => {
+      await seedTakes(manuscriptId, { 1: 'words', 2: 'empty', 3: 'words' });
+      const out = join(bookDir, 'no-text.zip');
+      await build(threeChapters(), out);
+
+      expect(zipNames(out)).toEqual(['01 - Chapter One.srt', '02 - Chapter Two.srt']);
+    });
+
+    it.each([
+      ['has words', { 1: 'words', 2: 'words', 3: 'words' } as const, []],
+      ['has a [] take and a failure record', { 1: 'words', 2: 'empty', 3: 'words' } as const, [2]],
+    ])('still refuses a chapter with no audio that %s', async (_label, takes, failed) => {
+      await seedTakes(manuscriptId, takes, failed);
+      await expect(
+        build(threeChapters(), join(bookDir, 'no-text-refused.zip')),
+      ).rejects.toMatchObject({ name: 'ExportIncompleteError', missing: ['02-ornament'] });
+    });
+
+    it('is still exported when it has audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'words', 3: 'empty' });
+      const bookState = threeChapters();
+      bookState.chapters.splice(1, 1);
+      const out = join(bookDir, 'no-text-with-audio.zip');
+      await build(bookState, out);
+
+      expect(zipNames(out)).toEqual(['01 - Chapter One.srt', '02 - Chapter Two.srt']);
+    });
+
+    it('refuses and writes nothing when every chapter is no-text with no audio', async () => {
+      await seedTakes(manuscriptId, { 1: 'empty', 2: 'empty', 3: 'empty' });
+      const emptyDir = mkdtempSync(join(tmpdir(), 'build-captions-no-text-'));
+      try {
+        const out = join(emptyDir, 'all-no-text.zip');
+        await expect(build(threeChapters(), out, emptyDir)).rejects.toMatchObject({
+          name: 'ExportIncompleteError',
+          missing: ['01-chapter-one', '02-ornament', '03-chapter-two'],
+        });
+        expect(existsSync(out)).toBe(false);
+      } finally {
+        rmSync(emptyDir, { recursive: true, force: true });
+      }
+    });
   });
 
   it('throws a clear error when manuscript-edits.json is missing', async () => {

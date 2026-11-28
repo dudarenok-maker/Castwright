@@ -40,6 +40,7 @@ import { buildM4b } from '../export/build-m4b.js';
 import { buildMp3Folder } from '../export/build-mp3-folder.js';
 import { buildCodecZip } from '../export/build-codec-zip.js';
 import { buildCaptions } from '../export/build-captions.js';
+import { exportableChapters } from '../export/exportable-chapters.js';
 import {
   commitSyncStage,
   discardSyncStage,
@@ -406,7 +407,7 @@ async function createExportJob(
   /* Pre-flight on missing audio so we 409 before allocating an exportId.
      Re-running the same check inside buildMp3Zip is harmless — it's the
      authoritative gate. */
-  const missing = preflightMissingChapters(located.state, located.bookDir);
+  const missing = await preflightMissingChapters(located.state, located.bookDir);
   if (missing.length > 0) {
     return res.status(409).json({ error: 'export_incomplete', missing });
   }
@@ -742,11 +743,13 @@ function estimateExportBytes(state: BookStateJson, bookDir: string, format: Book
   return Math.round(total * 1.2);
 }
 
-function preflightMissingChapters(state: BookStateJson, bookDir: string): string[] {
+async function preflightMissingChapters(
+  state: BookStateJson,
+  bookDir: string,
+): Promise<string[]> {
   const root = join(bookDir, 'audio');
   const out: string[] = [];
-  for (const chapter of state.chapters) {
-    if (chapter.excluded) continue;
+  for (const chapter of await exportableChapters(bookDir, state)) {
     /* Plan 72: a chapter is present when *any* recognised encoded file
        (mp3 / m4a / ogg) lives next to it. The per-format builder is the
        gate that surfaces a more specific missing list when the chapter

@@ -13,6 +13,7 @@ import { findChapterAudio, livePartPath } from '../workspace/chapter-take.js';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { probeDurationSec } from './build-m4b.js';
 import { createZipWritePipeline, ExportIncompleteError, sanitiseForZip, pad2 } from './build-mp3-zip.js';
+import { exportableChapters } from './exportable-chapters.js';
 import { loadManuscriptSentencesByChapter } from './manuscript-sentences.js';
 import {
   buildSentenceCues,
@@ -95,7 +96,7 @@ async function chapterCues(
 export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCaptionsResult> {
   const { bookDir, state, captionFileFormat, captionGranularity, captionScope, outPath, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
+  const chapters = await exportableChapters(bookDir, state);
   const root = audioDir(bookDir);
 
   const missing: string[] = [];

@@ -3,7 +3,7 @@
    the route with supertest, polls the job to completion, then asserts
    the download endpoint streams the zip with the expected Content-Type. */
 
-import { describe, it, expect, beforeAll, beforeEach, afterAll } from 'vitest';
+import { describe, it, expect, beforeAll, beforeEach, afterAll, afterEach } from 'vitest';
 import {
   mkdtempSync,
   mkdirSync,
@@ -34,6 +34,8 @@ const describeIfFfmpeg = ffmpegPresent ? describe : describe.skip;
 const AUTHOR = 'Test Author';
 const SERIES = 'Standalones';
 const TITLE = 'Bonus Story';
+/* This file's own id: the analysis cache dir is shared across test files. */
+const MANUSCRIPT_ID = 'mns_3507_export_route';
 
 let workspaceRoot: string;
 let bookDir: string;
@@ -72,7 +74,7 @@ beforeAll(async () => {
     join(bookDir, '.audiobook', 'state.json'),
     JSON.stringify({
       bookId,
-      manuscriptId: 'mns_test',
+      manuscriptId: MANUSCRIPT_ID,
       title: TITLE,
       author: AUTHOR,
       series: SERIES,
@@ -236,6 +238,83 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
       const mp3 = await encodePcmToAudio(Buffer.alloc(24_000 * 2 * 0.2), 24_000, { quality: 9 });
       writeFileSync(ch2, mp3);
     }
+  });
+
+  describe('a chapter with no narratable text (#3507)', () => {
+    const ch1 = () => join(audioRoot, '01-chapter-one.mp3');
+    const ch2 = () => join(audioRoot, '02-chapter-two.mp3');
+    let takes: typeof import('../test-utils/analysis-takes.js');
+    let mp3: Buffer;
+
+    beforeAll(async () => {
+      /* Imported late, like the router: WORKSPACE_DIR must be set first. */
+      takes = await import('../test-utils/analysis-takes.js');
+      mp3 = readFileSync(ch1());
+    });
+
+    afterEach(async () => {
+      await awaitInFlightJobs();
+      writeFileSync(ch1(), mp3);
+      writeFileSync(ch2(), mp3);
+      await takes.removeTakes(MANUSCRIPT_ID);
+    });
+
+    const post = () =>
+      request(app)
+        .post(`/api/books/${bookId}/exports`)
+        .send({ format: 'mp3-zip', destination: 'download' });
+
+    const finishedZip = async (exportId: string): Promise<string> => {
+      const { body: done } = await waitForDone(exportId, 45_000);
+      expect(done.status).toBe('done');
+      return readFileSync(join(bookDir, 'exports', done.filename as string)).toString('latin1');
+    };
+
+    it('is left out when it has no audio, and the export succeeds with contiguous numbering', async () => {
+      await takes.seedTakes(MANUSCRIPT_ID, { 1: 'empty', 2: 'words' });
+      rmSync(ch1());
+
+      const res = await post();
+      expect(res.status).toBe(201);
+      const zip = await finishedZip(res.body.id as string);
+      expect(zip).toContain('01 - Chapter Two.mp3');
+      expect(zip).not.toContain('Chapter One.mp3');
+    }, 60_000);
+
+    it.each([
+      ['has words', { 1: 'words', 2: 'words' } as const, []],
+      ['has a [] take and a failure record', { 1: 'words', 2: 'empty' } as const, [2]],
+    ])('still refuses a chapter with no audio that %s', async (_label, seeded, failed) => {
+      await takes.seedTakes(MANUSCRIPT_ID, seeded, failed);
+      rmSync(ch2());
+
+      const res = await post();
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('export_incomplete');
+      expect(res.body.missing).toEqual(['02-chapter-two']);
+    });
+
+    it('is still exported when it has audio', async () => {
+      await takes.seedTakes(MANUSCRIPT_ID, { 1: 'empty', 2: 'words' });
+
+      const res = await post();
+      expect(res.status).toBe(201);
+      const zip = await finishedZip(res.body.id as string);
+      expect(zip).toContain('01 - Chapter One.mp3');
+      expect(zip).toContain('02 - Chapter Two.mp3');
+    }, 60_000);
+
+    it('refuses and writes no file when every chapter is no-text with no audio', async () => {
+      await takes.seedTakes(MANUSCRIPT_ID, { 1: 'empty', 2: 'empty' });
+      rmSync(ch1());
+      rmSync(ch2());
+
+      const res = await post();
+      expect(res.status).toBe(409);
+      expect(res.body.error).toBe('export_incomplete');
+      expect(res.body.missing).toEqual(['01-chapter-one', '02-chapter-two']);
+      expect(existsSync(join(bookDir, 'exports'))).toBe(false);
+    });
   });
 
   it('rejects unsupported format / destination', async () => {

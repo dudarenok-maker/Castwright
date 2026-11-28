@@ -26,6 +26,7 @@ const MP3_EXT: ChapterAudioExt = 'mp3';
 import { sanitizeIdSegment } from '../util/safe-path.js';
 import { applyId3v24Tags, type Id3Tags } from './id3-tags.js';
 import { ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
+import { exportableChapters } from './exportable-chapters.js';
 import { DEFAULT_NARRATOR_CREDIT, artistForExport } from './narrator-credit.js';
 import { bookStateLanguage, type BookStateJson } from '../workspace/scan.js';
 
@@ -55,7 +56,7 @@ export interface BuildMp3FolderResult {
 export async function buildMp3Folder(opts: BuildMp3FolderOptions): Promise<BuildMp3FolderResult> {
   const { bookDir, state, outDir, onProgress, signal } = opts;
 
-  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
+  const chapters = await exportableChapters(bookDir, state);
 
   /* Same precheck as buildMp3Zip — surface ALL missing slugs at once. */
   const root = audioDir(bookDir);

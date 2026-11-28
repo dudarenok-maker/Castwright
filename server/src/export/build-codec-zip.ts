@@ -1,6 +1,7 @@
 /* Shared codec-zip packer for the AAC/M4A and Opus/Ogg chapter formats
-   (plan 72). Mirrors `build-mp3-zip.ts` in spirit: walks `state.chapters`,
-   resolves each chapter's encoded file via `findChapterAudio`, packs them
+   (plan 72). Mirrors `build-mp3-zip.ts` in spirit: walks the chapters
+   `exportableChapters` returns, resolves each one's encoded file via
+   `findChapterAudio`, packs them
    into a zip with deterministic per-track filenames, surfaces a
    `ExportIncompleteError` listing any missing chapter slugs.
 
@@ -15,7 +16,7 @@
    files surface filename ordering for chapter sequencing.
 
    Refuses with `ExportIncompleteError` listing missing chapter slugs when
-   any non-excluded chapter has no encoded file in the matching format
+   any covered chapter has no encoded file in the matching format
    on disk. Re-uses the same modal 409 banner copy as the MP3.ZIP path. */
 
 import type { ReadStream } from 'node:fs';
@@ -24,6 +25,7 @@ import { ZipFile } from 'yazl';
 import { audioDir } from '../workspace/paths.js';
 import { findChapterAudio } from '../workspace/chapter-take.js';
 import { createZipWritePipeline, ExportIncompleteError, pad2, sanitiseForZip } from './build-mp3-zip.js';
+import { exportableChapters } from './exportable-chapters.js';
 import type { BookStateJson } from '../workspace/scan.js';
 
 export type CodecZipFormat = 'aac-m4a' | 'opus';
@@ -58,7 +60,7 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
   const { bookDir, state, outPath, format, onProgress, signal } = opts;
   const meta = FORMAT_TABLE[format];
 
-  const chapters = [...state.chapters].filter((c) => !c.excluded).sort((a, b) => a.id - b.id);
+  const chapters = await exportableChapters(bookDir, state);
 
   const root = audioDir(bookDir);
   const missing: string[] = [];
