@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (discharged 2026-11-28 (#4738), removed from the register; §15, Gemini config payload).
+> Register rows: A113 (§6), A116 (§9), E110 (§1), E111 (§2), E112 (discharged 2026-11-28 (#4728), removed from the register; §5), A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (discharged 2026-11-28 (#4738), removed from the register; §15, Gemini config payload).
 
 ---
 
@@ -212,7 +212,7 @@ Short-context tags — Result:
 
 Run by / date / SHA:
 
-## 4. Ollama structured-output modes — register row B105
+## 4. Ollama structured-output modes — register row B105 — removed from the register 2026-11-28 by owner ruling, #4883
 
 Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfall-commission.md`).
 

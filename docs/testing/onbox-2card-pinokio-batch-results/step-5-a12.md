@@ -1,6 +1,6 @@
 # Step 5 — A12 bullets 1, 3, 4: device-pin respawn survival
 
-Castwright#2968. On-box confirmation of register row A12 —
+Castwright#2968. On-box confirmation of register row A12 (discharged and removed from the register 2026-11-28, #4883) —
 `docs/testing/onbox-acceptance-register.md:1596-1620` (PR #1870, closes
 #1857) — "Device-pin resolution survives a respawn." Bullet 2 (enumeration
 order changing between boots) is explicitly out of scope for this step: it
@@ -37,7 +37,7 @@ active lanes' processes currently on it, and was **not attempted**.
    `GET /api/sidecar/health` again reports **`qwenDeviceKey: "cuda:1"`**.
 
 Confirms the pin is re-resolved and lands on the same card on both
-respawns, not just the first one — the respawn-survival behaviour row A12
+respawns, not just the first one — the respawn-survival behaviour row A12 (discharged and removed from the register 2026-11-28, #4883)
 bullet 1 asks for.
 
 ## Bullet 3 — Qwen codec device pin is actually honoured, not silently dropped to CPU
