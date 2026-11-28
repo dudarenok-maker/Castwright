@@ -358,7 +358,7 @@ comparison, see the edge list above). The merge step that closes this, run
        `--build-union` writes, but nothing checked it at the time.
      - **Let that lane merge first.** Coordinate through its PR.
      - **Retire the row.** If its PR was closed without merging, add the row
-       to "Retired carried rows" below, under that PR.
+       to "Retired carried rows" in the register, under that PR.
    - **`publishing-file: <ID>`** — the `--publishing` file is not exactly the
      union: it drops or alters one of your tracked rows, carries a row that
      is not on the live page, carries a live row with changes (another lane's

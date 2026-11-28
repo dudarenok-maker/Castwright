@@ -27,7 +27,7 @@ On 2026-09-24 the shipped bulk `POST /books/:id/cast/design` was run against bot
 
 The v1.15.0 cut (tag pushed 2026-11-13, release workflow run `43375535330`, the first real tag after the fix) passed every observation. The "Resolve + guard release body" step succeeded and logged `[release-body] OK — wrote release/tag-notes.md from docs/release-notes-next.md (56404 bytes)`, so the file was the source. The published GitHub release body matches `git show v1.15.0:docs/release-notes-next.md` (56,404 bytes in the file; the release body differs only by one trailing blank line). The annotation checks ran in that step and it exited 0. Nothing is owed; the row can be removed.
 
-For D2, the native-ear listen to the zh and ja voices stays tracked on issue #1600, which is open. For A33, the one check that never passed (a machine with no CUDA device at all) was attempted and measured as unreachable on the owner's box.
+For D2, the native-ear listen to the zh and ja voices stays tracked on issue #1600, which is open. For A33, the one check that never passed (a machine with no CUDA device at all) was attempted and measured as unreachable on the owner's box. That check is carried as Blocked row BLK107.
 
 ## Rows waived by the owner on 2026-11-28 (#4883)
 

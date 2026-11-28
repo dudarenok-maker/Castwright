@@ -309,7 +309,7 @@ up.
 > **Step 11 below is STALE** — it still describes the pre-fix expected behaviour
 > from #2070's original design and does not yet cover the new
 > `deviceKey`-qualification or caller-abort cases PR #2797 added. The register
-> row's own body (bullets 4–6) is the current source of truth for what to run
+> row's own Owed list is the current source of truth for what to run
 > next; re-derive this sitting pack's step 11 from there before using it again,
 > rather than following the text below as-is.
 
