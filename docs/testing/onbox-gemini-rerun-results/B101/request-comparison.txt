@@ -1,0 +1,75 @@
+currentoff 57300-1 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-2 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-3 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-4 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-5 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-6 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-7 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+currentoff 57300-8 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26
+currentoff 57300-9 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-10 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-11 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=60
+currentoff 57300-12 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-13 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0
+currentoff 57300-14 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-15 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-16 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-17 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-18 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-19 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=59
+currentoff 57300-20 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-21 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-22 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-23 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-24 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-25 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+currentoff 57300-26 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26
+currentoff 57300-27 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-28 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-29 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=59
+currentoff 57300-30 escalation sys=15/b28c94b219 user=1570 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15
+currentoff 57300-31 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-32 attribution sys=9580/0bceb10e77 user=6207 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+currentoff 57300-33 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-34 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26
+currentoff 57300-35 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-36 cast sys=16290/2144004ae2 user=8928 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 unparsed
+currentoff 57300-37 cast sys=16290/2144004ae2 user=13437 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-38 cast sys=16290/2144004ae2 user=13437 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+currentoff 57300-39 cast sys=16290/2144004ae2 user=13437 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+currentoff 57300-40 attribution sys=9580/0bceb10e77 user=6211 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+currentoff 57300-41 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0
+baseoff 45220-1 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+baseoff 45220-2 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=429 
+baseoff 45220-3 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+baseoff 45220-4 attribution sys=9580/0bceb10e77 user=6109 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+baseoff 45220-5 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26
+baseoff 45220-6 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+baseoff 45220-7 attribution sys=9580/0bceb10e77 user=6107 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+baseoff 45220-8 attribution sys=9580/0bceb10e77 user=6107 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+baseoff 45220-9 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27
+baseoff 45220-10 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+baseoff 45220-11 cast sys=16290/2144004ae2 user=8925 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawCharacters=6
+baseoff 45220-12 attribution sys=9580/0bceb10e77 user=6107 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 rawSentences=78
+baseoff 45220-13 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=503 
+baseoff 45220-14 escalation sys=15/b28c94b219 user=1576 {"temperature":0.2,"maxOutputTokens":8192,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} topKeys=contents,systemInstruction,generationConfig status=200 0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,25,26,27
+--- attribution user text: lines only in current / only in base
+manuscriptId: mns_GomuRovAHW
+- Title: B101 Knock current
+- Manuscript ID: mns_GomuRovAHW
+id). Name, aliases and role are included for disambiguation when the manuscript
+    "role": "Master smith",
+    "aliases": [
+      "Master Oduvan"
+    ]
+    "role": "Apprentice smith",
+    "aliases": [
+      "Sparrow"
+    ]
+---
+manuscriptId: mns_ZvwASlFfb3
+- Title: B101 Knock base
+- Manuscript ID: mns_ZvwASlFfb3
+id). Name and role are included for disambiguation when the manuscript
+    "role": "Master smith"
+    "role": "Apprentice"

@@ -21,6 +21,16 @@ function job(overrides: Partial<BookExportJob>): BookExportJob {
   } as BookExportJob;
 }
 
+describe('bookExportJobToQueueItem — status mapping (srv-96)', () => {
+  it.each([
+    ['queued', 'in_progress'],
+    ['cancelling', 'cancelling'],
+    ['cancelled', 'failed'],
+  ] as const)('maps a %s job to a %s queue item', (status, expected) => {
+    expect(bookExportJobToQueueItem(job({ status })).status).toBe(expected);
+  });
+});
+
 describe('bookExportJobToQueueItem — captions (fs-52)', () => {
   it('badges a whole-book .srt export as srt', () => {
     const item = bookExportJobToQueueItem(

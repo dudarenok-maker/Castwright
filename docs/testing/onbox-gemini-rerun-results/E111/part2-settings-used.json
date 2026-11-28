@@ -1,0 +1,21 @@
+{
+  "part2-auto-36flash": {
+    "analyzerReasoningByEngine": {},
+    "analyzerExtraParamsByEngine": {},
+    "configOverrides": {}
+  },
+  "part2-8192-36flash": {
+    "analyzerReasoningByEngine": {},
+    "analyzerExtraParamsByEngine": {},
+    "configOverrides": {
+      "analyzer.gemini.maxOutputTokens": 8192
+    }
+  },
+  "part2-8192-37flash": {
+    "analyzerReasoningByEngine": {},
+    "analyzerExtraParamsByEngine": {},
+    "configOverrides": {
+      "analyzer.gemini.maxOutputTokens": 8192
+    }
+  }
+}

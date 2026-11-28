@@ -200,7 +200,7 @@ if (isDirectlyInvoked(import.meta.url)) {
   // would mislabel itself if the file ever happened to be byte-identical to
   // the annotation. Minor 5 — the operator's only way to sanity-check the
   // published body against `git show <tag>:docs/release-notes-next.md`
-  // (on-box register row G2) without a full `cat` of a body that can run to
+  // (on-box register row G2, discharged and removed from the register 2026-11-28, #4883) without a full `cat` of a body that can run to
   // tens of KB.
   const sourceLabel = res.source === 'annotation' ? ANNOTATION_LABEL : DEFAULT_NOTES_FILE;
   const bodyBytes = Buffer.byteLength(body, 'utf8');

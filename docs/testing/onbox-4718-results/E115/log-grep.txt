@@ -1,0 +1,5 @@
+# Run from the worktree root after both analysis runs (09:19 API, 09:22 browser).
+(Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value' | Measure-Object).Count  ->  0
+(Select-String -Path logs\server.err.log -SimpleMatch 'castwright-onbox-probe-value' | Measure-Object).Count  ->  0
+(Select-String -Path logs\server.log -SimpleMatch '[redacted]' | Measure-Object).Count  ->  6
+(Select-String -Path logs\server.err.log -SimpleMatch '[redacted]' | Measure-Object).Count  ->  6

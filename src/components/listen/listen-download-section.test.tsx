@@ -3,7 +3,7 @@
    onPortableBundleExport callback wiring. */
 
 import { describe, it, expect, vi } from 'vitest';
-import { render, screen, fireEvent } from '@testing-library/react';
+import { render, screen, fireEvent, within } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { ListenDownloadSection } from './listen-download-section';
 
@@ -53,6 +53,36 @@ describe('ListenDownloadSection — Portable bundle tile (plan 75)', () => {
     const tile = screen.getByTestId('download-tile-portable');
     const button = tile.querySelector('button') as HTMLButtonElement;
     expect(button.disabled).toBe(true);
+  });
+});
+
+describe('ListenDownloadSection — export queue filter with a cancelling job (srv-96)', () => {
+  const row = (id: string, status: 'done' | 'cancelling') => ({
+    id,
+    filename: `${id}.zip`,
+    format: 'zip' as const,
+    size: '—',
+    status,
+    timestamp: 'just now',
+    destination: 'Local download',
+  });
+
+  it('lists a cancelling row under All and Running, and counts it as Running', async () => {
+    renderSection({ queueItems: [row('stopping', 'cancelling'), row('finished', 'done')] });
+    const rail = within(screen.getByTestId('export-queue-rail'));
+
+    expect(rail.getByText('stopping.zip')).toBeInTheDocument();
+    expect(rail.getByRole('button', { name: 'All (2)' })).toBeInTheDocument();
+
+    await userEvent.click(rail.getByRole('button', { name: 'Running (1)' }));
+    expect(rail.getByText('stopping.zip')).toBeInTheDocument();
+    expect(rail.queryByText('finished.zip')).toBeNull();
+
+    /* Not finished: absent from both finished buckets. */
+    await userEvent.click(rail.getByRole('button', { name: 'Done (1)' }));
+    expect(rail.queryByText('stopping.zip')).toBeNull();
+    await userEvent.click(rail.getByRole('button', { name: 'Failed (0)' }));
+    expect(rail.queryByText('stopping.zip')).toBeNull();
   });
 });
 

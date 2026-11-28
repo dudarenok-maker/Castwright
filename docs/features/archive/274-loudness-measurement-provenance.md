@@ -994,7 +994,7 @@ same commit, covered by a paired test.
 On-box acceptance rows A21–A23 recorded in
 `docs/testing/onbox-acceptance-register.md` per §6 — none block this merge.
 (As of 2026-08-27, §6 row 2 is retired per the outcome below, and rows 1/3
-are register rows A14/A15 — the numbers have drifted across several later
+are register rows A14 (still owed) and A15 (removed from the register 2026-11-28 by owner ruling, #4883) — the numbers have drifted across several later
 renumbering waves.)
 
 **Outcome, 2026-08-21 (Castwright#2553, wave 4 of the on-box acceptance

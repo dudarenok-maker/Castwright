@@ -4,7 +4,7 @@ status: draft
 
 # Ночной дозор re-analysis — on-box acceptance run sheet
 
-> Register row: [C2](onbox-acceptance-register.md)
+> Register rows: C1 (free-tier Gemma cloud pass, §3.2), [C2](onbox-acceptance-register.md)
 
 Discharged register rows **C2** ([#2187](https://github.com/dudarenok-maker/Castwright/issues/2187),
 plan [247](../features/247-dialogue-structure-attribution.md)) and narrowed **C3**

@@ -1,7 +1,7 @@
 # On-box sitting pack — cloning + character-identity (A16, A18, A21, A22, A23, A31)
 
 > **Sitting pack** for wave 2 of `#2435`, step 6 of the `#2453` chain. Covers
-> register rows **A16, A18, A21, A22, A23, A31** —
+> register rows **A16, A18 (removed from the register 2026-11-28 by owner ruling, #4883), A21, A22, A23, A31** —
 > clone-derive, clone-readiness, `characterId` drift and resolution, and Russian
 > XTTS quality. The audition-centroid fix section this pack
 > also carried (old A34/A35, #1969/PR #2402) is **discharged as of on-box wave

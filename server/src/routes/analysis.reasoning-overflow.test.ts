@@ -1401,6 +1401,74 @@ describe('main Phase-1 failure bookkeeping, dispatch split and terminal labels (
     expect(events.find((e) => e.kind === 'chapter-failed')).toMatchObject({ chapterId: 1 });
     expect(events.filter((e) => e.kind === 'error' && /ENOSPC/.test(String(e.message)))).toEqual([]);
   }, 60_000);
+
+  /* #4718 — the phase log panel printed the raw message of a wrapped Gemini error, i.e. the SDK's
+     doubly-escaped JSON envelope. It now prints the classified, redacted userMessage. */
+  describe('the Phase-0 "cast FAILED" log line prints the classified message, not the raw envelope (#4718)', () => {
+    const PROBE = 'castwright-log-probe-value';
+    async function wrappedGemini400(): Promise<Error> {
+      const { ApiError } = await import('@google/genai');
+      const { redactGeminiError } = await import('../analyzer/transports/gemini-transport.js');
+      const { payloadSecretValues } = await import('../analyzer/runner/extra-params.js');
+      const description = `Invalid value at 'safety_settings[0].category', "${PROBE}"`;
+      const inner = `${JSON.stringify({ error: { code: 400, message: description, status: 'INVALID_ARGUMENT' } }, null, 2)}\n`;
+      const upstream = new ApiError({
+        status: 400,
+        message: JSON.stringify({ error: { message: inner, code: 400, status: 'Bad Request' } }),
+      });
+      return redactGeminiError(
+        upstream,
+        payloadSecretValues({ config: { safetySettings: [{ category: PROBE, threshold: 'BLOCK_NONE' }] } }),
+      ) as Error;
+    }
+    function expectClassifiedLog(events: CapturedEvent[], classifiedMessage: string): void {
+      const line = events.find((e) => e.kind === 'log' && /cast FAILED/.test(String(e.message)));
+      expect(line).toBeDefined();
+      const text = String(line!.message);
+      expect(text).toContain(classifiedMessage);
+      expect(text).not.toContain('\\"');
+      expect(text).not.toContain('"error"');
+      expect(text).not.toContain(PROBE);
+    }
+
+    it('main route', async () => {
+      const thrown = await wrappedGemini400();
+      const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+      const classified = classifyAnalysisFailure(thrown, 'phase0-model');
+      const r = await runMainOn('cast-failed-log-main', {}, async (_m, id) => stage2For(id), {
+        fresh: true,
+        phase0: { runStage1Chapter: () => Promise.reject(thrown) },
+      });
+      expectClassifiedLog(r.events, classified.userMessage);
+    }, 60_000);
+
+    it('subset route', async () => {
+      const thrown = await wrappedGemini400();
+      const { classifyAnalysisFailure } = await import('./failure-taxonomy.js');
+      const classified = classifyAnalysisFailure(thrown, 'phase0-model');
+      const seed = await seedBook('cast-failed-log-subset', [1], { fullCache: true });
+      const { clearAnalysisCache } = await import('../store/analysis-cache.js');
+      const { getManuscript, removeManuscript } = await import('../store/manuscripts.js');
+      const { runSubsetAnalyzerJob } = await import('./analysis.js');
+      const record = getManuscript(seed.manuscriptId)!;
+      const job = { ...seed.job, kind: 'subset' as const } as unknown as AnalysisJob;
+      const events = captureEvents(job, () => {});
+      try {
+        await runSubsetAnalyzerJob(
+          job,
+          record,
+          buildSelection(stubAnalyzer({ runStage1Chapter: () => Promise.reject(thrown) }), 'phase0-model'),
+          buildSelection(stubAnalyzer({ runStage2Chapter: async (_m, id) => stage2For(id) }), MODEL),
+          record.chapterHints,
+          false,
+        );
+      } finally {
+        removeManuscript(seed.manuscriptId);
+        await clearAnalysisCache(seed.manuscriptId);
+      }
+      expectClassifiedLog(events, classified.userMessage);
+    }, 60_000);
+  });
 });
 
 /* #3435 review pass 3 — pipelined mode. Chapter i's Phase 1 dispatches once the

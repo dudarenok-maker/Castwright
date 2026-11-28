@@ -1,0 +1,19 @@
+# curl: HTTP 200 total=1.525445s
+# heartbeat events: total=0 phase0=0 phase1=0 (phase 1 receivedBytes is a chapter-wide high-water mark)
+# log / throttle / chapter-failed / error events
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 3,723 words, 19,928 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~2m 0s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: Gemini gemini-3.6-flash daily quota exhausted — resets at 2026-11-28T00:00:00.000Z."}
+data: {"kind":"log","phaseId":0,"message":"Continuing without chapter 1 in the cast roster (1s spent). Re-run analysis to retry."}
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemini 3.6 Flash daily quota exhausted — resets at 2026-11-28T00:00:00.000Z.","code":"analyzer-daily-quota","remediation":"Switch to a different analyzer model (GEMINI_MODEL in server/.env or Advanced Settings — each model has its own daily bucket), use the local Ollama analyzer, or wait for the quota reset shown in the error.","phase":"cast"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis."}
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0 paused — 1 chapter still needs cast detection (Chapter One — The Knock). Retry to continue."}

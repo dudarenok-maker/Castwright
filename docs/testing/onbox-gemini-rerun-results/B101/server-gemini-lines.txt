@@ -1,0 +1,182 @@
+26b-default phase (servers `current` / `base`, no reasoning change)
+2026-11-28 15:02:08.832 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1545 firstAnswerMs=234871 thoughtPartsBeforeAnswer=461
+2026-11-28 15:13:40.546 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1403 firstAnswerMs=none thoughtPartsBeforeAnswer=1366
+2026-11-28 15:15:06.471 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=36310 firstAnswerMs=none thoughtPartsBeforeAnswer=1
+2026-11-28 15:18:41.697 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=33880 firstAnswerMs=174757 thoughtPartsBeforeAnswer=215
+2026-11-28 15:18:42.536 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:19:15.887 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=31299 firstAnswerMs=none thoughtPartsBeforeAnswer=3
+2026-11-28 15:19:44.816 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:13:40.545 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-26b-a4b-it
+2026-11-28 15:15:06.470 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:15:06.471 [gemini] transient 503 unavailable — retrying in 1379ms (attempt 2/3)
+2026-11-28 15:18:42.527 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:18:42.536 [gemini] transient 503 unavailable — retrying in 1431ms (attempt 2/3)
+2026-11-28 15:19:15.879 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:19:15.887 [gemini] transient 503 unavailable — retrying in 6543ms (attempt 3/3)
+2026-11-28 15:19:44.815 [gemini] generate failed {
+  status: 503,
+--- base
+
+2026-11-28 15:13:02.417 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-26b-a4b-it
+2026-11-28 15:15:55.456 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-26b-a4b-it
+2026-11-28 15:20:36.556 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-26b-a4b-it
+2026-11-28 15:21:32.798 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:21:32.801 [gemini] transient 503 unavailable — retrying in 1806ms (attempt 2/3)
+
+26b-off phase 1 (runs 1-3 current, 1-2 base)
+2026-11-28 15:24:16.521 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1375 firstAnswerMs=1376 thoughtPartsBeforeAnswer=1
+2026-11-28 15:24:17.599 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:26:10.315 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1647 firstAnswerMs=1648 thoughtPartsBeforeAnswer=1
+2026-11-28 15:26:10.942 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:26:19.430 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1234 firstAnswerMs=1235 thoughtPartsBeforeAnswer=1
+2026-11-28 15:26:36.896 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:27:11.369 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:27:36.332 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:29:12.957 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:29:15.309 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:30:41.879 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1666 firstAnswerMs=1666 thoughtPartsBeforeAnswer=1
+2026-11-28 15:30:42.731 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:32:35.774 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1505 firstAnswerMs=1505 thoughtPartsBeforeAnswer=1
+2026-11-28 15:32:42.620 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1269 firstAnswerMs=1269 thoughtPartsBeforeAnswer=1
+2026-11-28 15:24:17.596 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:24:17.600 [gemini] transient 503 unavailable — retrying in 1254ms (attempt 2/3)
+2026-11-28 15:26:10.941 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:26:10.942 [gemini] transient 503 unavailable — retrying in 1706ms (attempt 2/3)
+2026-11-28 15:26:36.887 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:26:36.896 [gemini] transient 503 unavailable — retrying in 1846ms (attempt 2/3)
+2026-11-28 15:27:11.361 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:27:11.369 [gemini] transient 503 unavailable — retrying in 5106ms (attempt 3/3)
+2026-11-28 15:27:36.322 [gemini] generate failed {
+  status: 429,
+2026-11-28 15:29:12.956 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:29:12.957 [gemini] transient 503 unavailable — retrying in 1509ms (attempt 2/3)
+2026-11-28 15:29:15.301 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:29:15.310 [gemini] transient 503 unavailable — retrying in 5963ms (attempt 3/3)
+2026-11-28 15:30:42.723 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:30:42.732 [gemini] transient 503 unavailable — retrying in 1698ms (attempt 2/3)
+--- base
+
+
+26b-off phase 2
+2026-11-28 15:34:05.510 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:34:07.803 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:35:05.785 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:38:46.268 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:39:17.423 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=2040 firstAnswerMs=2041 thoughtPartsBeforeAnswer=1
+2026-11-28 15:39:46.155 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:41:30.747 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=2059 firstAnswerMs=2060 thoughtPartsBeforeAnswer=1
+2026-11-28 15:41:41.530 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1299 firstAnswerMs=1300 thoughtPartsBeforeAnswer=1
+2026-11-28 15:42:17.008 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:42:47.238 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1766 firstAnswerMs=1766 thoughtPartsBeforeAnswer=1
+2026-11-28 15:44:39.341 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1636 firstAnswerMs=1637 thoughtPartsBeforeAnswer=1
+2026-11-28 15:44:40.620 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:44:51.919 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1191 firstAnswerMs=1192 thoughtPartsBeforeAnswer=1
+2026-11-28 15:50:33.386 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=2029 firstAnswerMs=2029 thoughtPartsBeforeAnswer=1
+2026-11-28 15:50:34.175 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:51:04.593 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:51:12.909 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 15:59:29.122 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1568 firstAnswerMs=1570 thoughtPartsBeforeAnswer=1
+2026-11-28 16:00:51.497 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1631 firstAnswerMs=1631 thoughtPartsBeforeAnswer=1
+2026-11-28 16:00:52.110 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:00:53.872 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:01:00.548 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:01:18.124 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:02:30.058 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1708 firstAnswerMs=1709 thoughtPartsBeforeAnswer=1
+2026-11-28 16:04:12.956 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1449 firstAnswerMs=1450 thoughtPartsBeforeAnswer=1
+2026-11-28 16:04:23.793 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1339 firstAnswerMs=1339 thoughtPartsBeforeAnswer=1
+2026-11-28 16:06:02.757 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1714 firstAnswerMs=1715 thoughtPartsBeforeAnswer=1
+2026-11-28 16:06:03.653 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:07:55.942 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1629 firstAnswerMs=1631 thoughtPartsBeforeAnswer=1
+2026-11-28 16:08:02.737 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1343 firstAnswerMs=1344 thoughtPartsBeforeAnswer=1
+2026-11-28 16:08:58.643 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1919 firstAnswerMs=1920 thoughtPartsBeforeAnswer=1
+2026-11-28 16:10:42.693 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1557 firstAnswerMs=1558 thoughtPartsBeforeAnswer=1
+2026-11-28 16:10:43.701 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:10:56.273 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1322 firstAnswerMs=1323 thoughtPartsBeforeAnswer=1
+2026-11-28 16:11:24.578 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:12:11.771 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1587 firstAnswerMs=1588 thoughtPartsBeforeAnswer=1
+2026-11-28 16:12:25.892 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:13:24.506 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 16:14:52.437 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1759 firstAnswerMs=1760 thoughtPartsBeforeAnswer=1
+2026-11-28 16:16:35.576 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1557 firstAnswerMs=1558 thoughtPartsBeforeAnswer=1
+2026-11-28 16:16:51.251 [gemini] stream-timing model=gemma-4-26b-a4b-it firstChunkMs=1266 firstAnswerMs=1267 thoughtPartsBeforeAnswer=1
+2026-11-28 15:34:05.501 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:34:05.510 [gemini] transient 503 unavailable — retrying in 1178ms (attempt 2/3)
+2026-11-28 15:34:07.802 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:34:07.803 [gemini] transient 503 unavailable — retrying in 4615ms (attempt 3/3)
+2026-11-28 15:35:05.784 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:38:46.267 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:38:46.268 [gemini] transient 503 unavailable — retrying in 1822ms (attempt 2/3)
+2026-11-28 15:39:46.155 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:39:46.156 [gemini] transient 503 unavailable — retrying in 1864ms (attempt 2/3)
+2026-11-28 15:42:17.000 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:42:17.008 [gemini] transient 503 unavailable — retrying in 1551ms (attempt 2/3)
+2026-11-28 15:44:40.620 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:44:40.621 [gemini] transient 503 unavailable — retrying in 1467ms (attempt 2/3)
+2026-11-28 15:50:34.173 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:50:34.175 [gemini] transient 503 unavailable — retrying in 1691ms (attempt 2/3)
+2026-11-28 15:51:04.592 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:51:04.594 [gemini] transient 503 unavailable — retrying in 6616ms (attempt 3/3)
+2026-11-28 15:51:12.899 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:00:52.109 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:00:52.110 [gemini] transient 503 unavailable — retrying in 1135ms (attempt 2/3)
+2026-11-28 16:00:53.864 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:00:53.872 [gemini] transient 503 unavailable — retrying in 5936ms (attempt 3/3)
+2026-11-28 16:01:00.548 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:01:18.123 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:01:18.124 [gemini] transient 503 unavailable — retrying in 1283ms (attempt 2/3)
+2026-11-28 16:06:03.650 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:06:03.654 [gemini] transient 503 unavailable — retrying in 1721ms (attempt 2/3)
+2026-11-28 16:10:43.700 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:10:43.701 [gemini] transient 503 unavailable — retrying in 1833ms (attempt 2/3)
+2026-11-28 16:11:24.575 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:11:24.579 [gemini] transient 503 unavailable — retrying in 1192ms (attempt 2/3)
+2026-11-28 16:12:25.890 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:12:25.892 [gemini] transient 503 unavailable — retrying in 1477ms (attempt 2/3)
+2026-11-28 16:13:24.490 [gemini] generate failed {
+  status: 503,
+2026-11-28 16:13:24.507 [gemini] transient 503 unavailable — retrying in 6402ms (attempt 3/3)
+--- base
+
+2026-11-28 15:35:15.651 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:35:15.653 [gemini] transient 503 unavailable — retrying in 1771ms (attempt 2/3)
+2026-11-28 15:35:17.905 [gemini] generate failed {
+  status: 429,
+2026-11-28 15:46:32.529 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:46:32.532 [gemini] transient 503 unavailable — retrying in 1459ms (attempt 2/3)
+2026-11-28 15:52:21.562 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:52:21.562 [gemini] transient 503 unavailable — retrying in 1299ms (attempt 2/3)
+2026-11-28 15:55:03.208 [gemini] generate failed {
+  status: 503,
+2026-11-28 15:55:03.210 [gemini] transient 503 unavailable — retrying in 1778ms (attempt 2/3)
