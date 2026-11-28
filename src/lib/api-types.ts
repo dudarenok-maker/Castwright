@@ -5601,6 +5601,12 @@ export interface components {
              *     record A/B review state.
              */
             reviewOutcome?: components["schemas"]["ReviewOutcome"];
+            /**
+             * @description #3507 — only on `chapter_complete`; the chapter has no narratable
+             *     text, nothing was rendered and no audio exists;
+             *     `durationSec`/`audioModelKey` are absent.
+             */
+            skippedNoText?: boolean;
             errorReason?: string | null;
             /**
              * @description Only on `chapter_failed` — fs-19 stable machine code for the failure
@@ -6779,6 +6785,11 @@ export interface components {
             /** @description When true, the user explicitly removed this un-rendered chapter from the generation queue ("Not queued"). Unlike `excluded`, a held chapter stays part of the book and keeps any audio — it is simply not on the work queue and the auto-work resume must not re-enqueue it. Cleared when the user re-queues the chapter. Persisted so the choice survives reload. */
             held?: boolean;
             /**
+             * @description #3507 — true when the chapter is included, has no narratable text,
+             *     was skipped and counts as complete; no audio exists for it.
+             */
+            skippedNoText?: boolean;
+            /**
              * @description TTS model key that produced this chapter's existing audio
              *     file. Stamped at render time and backfilled from the
              *     segments file for legacy chapters. Absent on never-rendered
@@ -7584,6 +7595,12 @@ export interface components {
                  *     non-excluded chapter without a current take per the cache.
                  */
                 unattributedChapterIds?: number[];
+                /**
+                 * @description #3507 — the non-excluded chapters with no narratable text,
+                 *     derived from the analysis cache: a finished analysis whose take
+                 *     is empty, with no failure record.
+                 */
+                noTextChapterIds?: number[];
             };
         };
         /**

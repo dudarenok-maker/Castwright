@@ -118,6 +118,37 @@ describe('hasCurrentTake (plan 287 spec 2.2)', () => {
   });
 });
 
+describe('isNoTextChapter (#3507)', () => {
+  const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
+  const cases: Array<[string, Partial<AnalysisCache>, boolean]> = [
+    ['a [] take with no failure record', { chapters: { 1: [] } }, true],
+    ['a [] take while another chapter failed', { chapters: { 1: [] }, failedChapterIds: [2] }, true],
+    /* A failure record means there were words and attribution found no lines. */
+    ['a [] take on a failed chapter', { chapters: { 1: [] }, failedChapterIds: [1] }, false],
+    ['a non-empty take', { chapters: { 1: take } }, false],
+    ['no key', { chapters: {} }, false],
+    /* P is ignored on purpose: a word-free chapter has nothing to attribute. */
+    ['a pending [] take', { chapters: { 1: [] }, pendingAttributionChapterIds: [1] }, true],
+  ];
+  it.each(cases)('%s', async (_name, seed, expected) => {
+    const { isNoTextChapter } = await import('./analysis-cache.js');
+    expect(isNoTextChapter({ chapters: {}, ...seed }, 1)).toBe(expected);
+  });
+});
+
+describe('noTextChapterIds (#3507)', () => {
+  const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
+
+  it('keeps only the no-text chapters, in the order given', async () => {
+    const { noTextChapterIds } = await import('./analysis-cache.js');
+    const cache: AnalysisCache = {
+      chapters: { 1: [], 2: take, 3: [], 4: [] },
+      failedChapterIds: [3],
+    };
+    expect(noTextChapterIds(cache, [4, 3, 2, 5, 1])).toEqual([4, 1]);
+  });
+});
+
 describe('analysisCompleteFor (plan 287 spec 2.2)', () => {
   const take = [{ id: 1, chapterId: 1, characterId: 'narrator', text: 'A take.' }] as never;
   const stage1 = { characters: [], chapters: [] } as never;

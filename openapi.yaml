@@ -8018,6 +8018,12 @@ components:
           description: |
             Plan 285/286 — only on `chapter_complete` when finalize was asked to
             record A/B review state.
+        skippedNoText:
+          type: boolean
+          description: |
+            #3507 — only on `chapter_complete`; the chapter has no narratable
+            text, nothing was rendered and no audio exists;
+            `durationSec`/`audioModelKey` are absent.
         errorReason: { type: string, nullable: true }
         errorCode:
           allOf:
@@ -9634,6 +9640,11 @@ components:
             type: boolean,
             description: 'When true, the user explicitly removed this un-rendered chapter from the generation queue ("Not queued"). Unlike `excluded`, a held chapter stays part of the book and keeps any audio — it is simply not on the work queue and the auto-work resume must not re-enqueue it. Cleared when the user re-queues the chapter. Persisted so the choice survives reload.',
           }
+        skippedNoText:
+          type: boolean
+          description: |
+            #3507 — true when the chapter is included, has no narratable text,
+            was skipped and counts as complete; no audio exists for it.
         audioModelKey:
           type: string
           enum: [kokoro-v1, qwen3-tts-0.6b, qwen3-tts-1.7b, coqui-xtts-v2, gemini-2.5-flash, gemini-3.1-flash]
@@ -10646,6 +10657,13 @@ components:
                 whose take is still pending; a chapter with a failure record
                 keeps its gap regardless. Before Confirm the list is every
                 non-excluded chapter without a current take per the cache.
+            noTextChapterIds:
+              type: array
+              items: { type: integer }
+              description: |
+                #3507 — the non-excluded chapters with no narratable text,
+                derived from the analysis cache: a finished analysis whose take
+                is empty, with no failure record.
 
     # --- Per-book QA report (fs-51) ---------------------------------
     BookQaReport:

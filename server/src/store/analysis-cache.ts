@@ -217,6 +217,24 @@ export function unattributedChapterIds(cache: AnalysisCache, chapterIds: readonl
   return chapterIds.filter((id) => !hasCurrentTake(cache, id));
 }
 
+/** #3507 — the chapter has no narratable text: a finished analysis (an own key,
+    decision B of plan 287) whose take is `[]`, with no failure record. With a
+    record, the chapter had words and attribution found no lines, which stays a
+    failure. P is ignored: a word-free chapter has nothing to attribute. */
+export function isNoTextChapter(cache: AnalysisCache, chapterId: number): boolean {
+  return (
+    Object.hasOwn(cache.chapters, chapterId) &&
+    cache.chapters[chapterId].length === 0 &&
+    !(cache.failedChapterIds ?? []).includes(chapterId)
+  );
+}
+
+/** #3507 — the chapters of `chapterIds` (the non-excluded chapters) that have
+    no narratable text. */
+export function noTextChapterIds(cache: AnalysisCache, chapterIds: readonly number[]): number[] {
+  return chapterIds.filter((id) => isNoTextChapter(cache, id));
+}
+
 /** plan 287 decision F — the book has reached Confirm: its cast was confirmed,
     or an authoritative persist has run since the cache was last cleared. */
 export function reachedConfirm(
