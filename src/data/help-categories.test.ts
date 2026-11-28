@@ -20,7 +20,12 @@ describe('help categories', () => {
     expect(IDS.size).toBe(HELP_CATEGORIES.length);
     expect(HELP_CATEGORIES.every((c) => c.label.length > 0)).toBe(true);
   });
-  it('has exactly 55 items (29 failures + 26 topics)', () => {
-    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(55);
+  it('has exactly 56 items (29 failures + 27 topics)', () => {
+    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(56);
+  });
+  it('includes the clone-your-own-voice topic under Voices & languages', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.category).toBe('voices');
+    expect(topic?.body).toContain('Clone a voice');
   });
 });

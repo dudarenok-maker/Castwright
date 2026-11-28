@@ -137,6 +137,27 @@ export const HELP_TOPICS: HelpTopic[] = [
       'the road for a no-key or offline setup.',
   },
   {
+    id: 'clone-your-own-voice',
+    category: 'voices',
+    title: 'Can I use my own voice?',
+    body:
+      'Yes. Open Voices and, under My voices, press Clone a voice. Record a short sample on the ' +
+      'Record tab or upload a clip on the Upload tab, then check the transcript underneath: fix a ' +
+      'misheard word and your edit is what the voice is built from. Next comes consent. Pick "This ' +
+      'is my own voice", or "A family member, with their permission" (or "My child (I’m their ' +
+      'guardian)"), enter the person\'s name and tick the attestation; cloning on someone else\'s ' +
+      'behalf also records your name as the one who attests, and Castwright refuses the clone ' +
+      'without it. Press Continue, name the voice and Save. Record in the language you want the ' +
+      'voice to read: you can cast a clone as any character, in any book, but it sounds most like ' +
+      'its owner in the language you recorded, and Castwright warns you (it never blocks you) if ' +
+      'you cast it into a book in another language. Both voice engines render clones, Qwen3-TTS ' +
+      'and Coqui XTTS. If Coqui was already installed before cloning arrived, press Repair on its ' +
+      'row in Models (Admin → Model Manager) once to pick up what cloning needs. The recording and ' +
+      'the voice built from it stay on your machine — nothing is uploaded or shared. Revoke a voice ' +
+      'from its card in My voices whenever you like, and Castwright erases the recording and ' +
+      'everything made from it.',
+  },
+  {
     id: 'vocalizations',
     category: 'quality',
     title: "Why is my character gasping, sighing, or laughing when the book doesn't say so?",
