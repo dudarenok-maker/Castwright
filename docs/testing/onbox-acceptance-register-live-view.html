@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">75</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">76</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">0</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->8<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->2<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->0<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->17<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->18<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->0<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1161,7 +1161,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">17 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">18 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser, a Gemini key, or only the real workspace. Independent of the GPU sessions.</p>
     </header>
     <details class="item">
@@ -1395,6 +1395,20 @@
         <li><strong>Negative control.</strong> From a LAN browser on <code>https://castwright.local</code>, redeem a browser pairing: the full desktop UI still works (<code>/redeem-browser</code> mints <code>full</code>).</li>
         </ol>
         <p><em>Needs:</em> an Android phone or the Android emulator (the owner ruled on 2026-11-28, <a href="https://github.com/dudarenok-maker/Castwright/issues/4953">#4953</a>, that the emulator is acceptable for this row) with an APK built from PR A installed, the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set, and for step 7 a <code>device-tokens.json</code> written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with E118. No separate run sheet. Clears when each observation is recorded.</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">E121</span><span class="iname">Pre-fix copies of a cloned voice are linked to their clone, and Revoke then covers them</span><span class="risk">a real install with a populated My voices; no GPU needed</span><span class="chev">›</span></summary>
+      <div class="body">
+        <p>The tests prove the link on synthetic libraries. They cannot show a real library&#8217;s saved voices: which carry the clone&#8217;s sidecar manifest, and that none of the user&#8217;s genuinely designed voices gets linked. The first start of this build acts on every saved voice, so a wrong link would be visible only there. Issue <a href="https://github.com/dudarenok-maker/Castwright/issues/4952">#4952</a>, PR #4959.</p>
+        <ol>
+        <li><strong>Before the first start of this build,</strong> copy <code>&lt;workspace&gt;/voice-library</code> aside and list your saved designed voices (name and uuid) so you can tell which should and should not change.</li>
+        <li><strong>Start the server and read the log.</strong> Each <code>[clone-copy-autolink] linked voice "&lt;uuid&gt;" to its source clone "&lt;uuid&gt;"</code> line must name a voice you know is a copy of a cloned voice. A line naming a voice you designed yourself is a failure; stop and report it.</li>
+        <li><strong>A linked copy now behaves as the clone.</strong> In My voices it shows as cloned with the clone&#8217;s consent. Revoking the original clone also revokes the copy; its <code>qwen-&lt;copy uuid&gt;.pt</code> and <code>.json</code> are gone from <code>voices/qwen/</code>, the entry stays, and a book whose character uses it stops with a &#8220;(revoked)&#8221; message instead of rendering.</li>
+        <li><strong>A copy of an already-revoked clone</strong> (if you have one) is linked as revoked on that start and its files are gone.</li>
+        <li><strong>A second start</strong> logs no <code>linked</code> lines and changes nothing.</li>
+        </ol>
+        <p><em>Needs:</em> a real install with a populated My voices; ideally a pre-#4954 &#8220;Save to my voices&#8221; copy of a clone. No GPU, sidecar or analyzer needed. Without such a copy the row can only confirm that no designed voice was linked.</p>
       </div>
     </details>
 
