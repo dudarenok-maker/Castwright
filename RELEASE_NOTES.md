@@ -61,6 +61,7 @@
 - **The Voices page no longer shows a drag handle on voice cards that did nothing, or lets you drag them.** Voice cards look the same otherwise, and you still assign voices from the Cast screen.
 - **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
 - **A correction about Coqui and cloning.** The 1.15.0 notes said that if you already had Coqui set up you should press Repair to get the clone fixes. A working Coqui install doesn't show a Repair button, and you don't need one: cloned voices work on Coqui as they are. The extra install step only adds smarter splitting of very long lines (and Japanese), and clones fall back to plain splitting without it.
+- **Help now answers "Can I use my own voice?"** Open Help, then Voices & languages, for the walkthrough: record or upload a sample, give consent, name the voice, and what Revoke does and doesn't remove. Two of the three voice engines can perform a clone; Kokoro can't.
 
 # Castwright 1.15.0
 
