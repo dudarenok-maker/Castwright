@@ -33,7 +33,7 @@ owner: null
   - A finished or confirmed book stays finished when a per-chapter Retry, Re-analyse or Include is interrupted; the chapter shows on its Generate-view row with Re-analyse, whatever its generation state, and a Re-analyse there saves normally.
   - Start fresh un-confirms the book, so it reads "Analysing" until the new run finishes and is confirmed again.
   - Rows say whether cast detection or speaker attribution failed.
-  - A chapter with no text to narrate says so when you generate.
+  - A chapter with no text to narrate is skipped at generation and counted as complete (#3507, owner decision 2026-11-28; this replaces what decision C shipped here).
 - **Technical:**
   - Two facts the code inferred are now explicit: which phase failed (`phase` on the record) and whether a chapter has a current take (`hasCurrentTake`: own key, not pending).
   - The main replay, the subset result gate and the library share one per-chapter predicate; the library and the book-state GET share one book-level predicate.
@@ -357,7 +357,7 @@ Frontend (`src/views/analysing.test.tsx`, `src/store/analysis-stream-middleware.
 | `analysisCompleteFor` table: missing stage1; a pending chapter; `takesPersisted:false`; `takesPersisted` absent (legacy) | same | does not exist |
 | Overlay: keeps a `[]` key and an excluded chapter; a carried chapter replaces wholesale, so a tombstoned sentence stays gone; an absent non-excluded non-empty chapter is removed; P, records and `takesPersisted` untouched | `analysis-cache-rebuild.test.ts` | replace semantics drop the `[]` key |
 | `a Generate POST keeps a [] key` | `generation.test.ts` (**slow**) | key dropped |
-| Decision C: `a [] take with no record fails with "This chapter has no text to narrate — exclude it to finish the book."`; `a [] take with a record fails with "Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it."`; `no key keeps the "analysis cache is incomplete" copy` | same | one copy for all three |
+| Decision C: `a [] take with no record fails with "This chapter has no text to narrate — exclude it to finish the book."`; `a [] take with a record fails with "Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it."`; `no key keeps the "analysis cache is incomplete" copy` | same | one copy for all three. **Superseded by #3507** (owner decision 2026-11-28): the first case (a `[]` take with no record) is now skipped at generation and counted complete; the other two copies stand |
 | M1: `with no stage1, every failed chapter with a key — including [] — enters P at load` (C4) | `analysis.test.ts` | no P |
 | M8c: `pipelined: a chapter dispatched before Phase 0b while its cast record stands goes into P, not out` | `analysis-pipelining.test.ts` (**slow**) | no P |
 | **Decision H (A3), loops under the v2 rule:** `stage1 on disk, X = {cast record, no take}: a main Resume attributes X, sends result and persists; X is current; a second main run replays X without an analyzer call for it, and the library reads cast_pending` | `analysis.test.ts` | under the v2 rule X goes into P every run, so the second run re-attributes it and the library reads analysing (the loop) |
