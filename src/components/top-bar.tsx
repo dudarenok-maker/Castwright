@@ -375,8 +375,9 @@ export function TopBar({
      Mechanism: the central nav + pill cluster sits inside an
      `overflow-x-auto` flex container — on desktop it fits the row; on
      phones it becomes a horizontally-swipeable strip with the same
-     ordering. Logo + projectTitle + theme + avatar stay anchored at the
-     edges via shrink-0. This keeps the DOM single-render (unit tests
+     ordering. Logo, theme and avatar stay anchored at the edges via
+     shrink-0; the projectTitle button carries no shrink-0 and flexes
+     (its text truncates) instead. This keeps the DOM single-render (unit tests
      that getByTestId continue to find exactly one analysis-pill /
      generation-pill / tab button — no dual-render breakage).
 
@@ -391,8 +392,9 @@ export function TopBar({
           only on the Linux mobile-chrome runner, where font metrics render
           wider than Windows/macOS); the middle strip already scrolls. Paired
           with hiding the redundant VersionPill below 2xl (below) so the clip is
-          pure insurance and never cuts a visible control (Admin, Help, Theme and
-          Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
+          pure insurance and, from 412 px up, never cuts a visible control (Admin,
+          Help, Theme and Account live in the phone drawer, not inline, below `sm`);
+          below ~390 px mid-render it can still cut one, see #4879. clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
       <div className="max-w-[1500px] mx-auto px-3 md:px-6 h-16 flex items-center gap-2 sm:gap-1 md:gap-2 lg:gap-3 xl:gap-4 2xl:gap-8 overflow-x-clip">
