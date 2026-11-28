@@ -2758,7 +2758,7 @@ describe('synthesiseChapter — orphaned characterId falls back to narrator', ()
   });
 });
 
-/* Plan 148 — defensive per-call synth timeout. The the Hollow Tide stall: a Qwen call
+/* Plan 148 — defensive per-call synth timeout. The Hollow Tide stall: a Qwen call
    ran away on degenerate back-matter and never returned, hanging the chapter
    (and the queue) for an hour. The watchdog must turn that into a chapter
    failure the queue rides past. */

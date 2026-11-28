@@ -46,7 +46,7 @@ test('the verb list has no accidental duplicates', () => {
 });
 
 test('Lessom/ch19 regression: the tags that were dropped are now covered', () => {
-  // The The Drowning Bell ch19 bug: these tags existed in the prose but the verbs
+  // The Drowning Bell ch19 bug: these tags existed in the prose but the verbs
   // weren't all in the list, contributing to Lessom being missed.
   for (const v of ['repeated', 'agreed', 'asked', 'said', 'reminded']) {
     assert.ok(MJS_VERBS.includes(v), `expected dialogue verb "${v}" in the list`);
