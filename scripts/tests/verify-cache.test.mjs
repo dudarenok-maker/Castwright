@@ -766,6 +766,10 @@ test('stepTouchedByDiff: a shared attribution-eval fixture diff matches the fron
   }
 });
 
+test('stepTouchedByDiff: server/src/tts/clone-engines.ts matches the frontend test step', () => {
+  assert.equal(stepTouchedByDiff(stepByName['test'], ['server/src/tts/clone-engines.ts']), true);
+});
+
 // index.html carries the self-hosted webfonts <link>, the body's Tailwind
 // classes, and the #root mount div — all three determine what Playwright
 // mounts and what the visual baselines screenshot. Without this extraFiles

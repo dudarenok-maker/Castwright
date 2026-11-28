@@ -456,6 +456,10 @@ export const STEPS = [
            core. extraFiles are literal paths (no globs), so each is named. */
         'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
         'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
+        /* The clone-readiness selectors and help-topics.clone-labels.test.tsx
+           import this server module directly, so an edit to it alone must
+           schedule the frontend suite. */
+        'server/src/tts/clone-engines.ts',
       ],
       includeLockfiles: ['root'],
     },
