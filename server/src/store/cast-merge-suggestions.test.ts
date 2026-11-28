@@ -1,7 +1,7 @@
 /* Unit tests for the cast-merge-suggestions sibling-file store. */
 
 import { describe, expect, it, beforeEach, afterEach } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { StoredSuggestion } from './reanalysis-types.js';
@@ -139,5 +139,113 @@ describe('cast-merge-suggestions store', () => {
 
     await removeSuggestionPairsLocked(bookDir, [['nonexistent', 'target']]);
     expect(await loadStoredSuggestions(bookDir)).toHaveLength(2);
+  });
+
+  /* #4101 — a plan-origin dismissal takes back the declines the new row inherited
+     from the candidate the user has just called a different person. */
+  describe('dismissSuggestionDurably drops inherited cross-book declines', () => {
+    const BOOK = 'this-book';
+    const x = { bookId: 'other-book-1', characterId: 'wren' };
+    // y shares x's character id and z shares x's book id: an entry matches on both.
+    const y = { bookId: 'other-book-2', characterId: 'wren' };
+    const z = { bookId: 'other-book-1', characterId: 'sparrow' };
+    const newEdge = { bookId: BOOK, characterId: 'cand' };
+    const candEdge = { bookId: BOOK, characterId: 'fresh' };
+
+    type Row = { id: string; notLinkedTo?: unknown[] };
+
+    async function dismiss(opts: {
+      newDeclines: unknown[];
+      candDeclines: unknown[];
+      suggestion: Partial<StoredSuggestion>;
+    }): Promise<{ newRow: Row; candRow: Row }> {
+      const { dismissSuggestionDurably } = await import('./cast-merge-suggestions.js');
+      const { castJsonPath, castMergeSuggestionsJsonPath } = await import('../workspace/paths.js');
+      writeFileSync(
+        castJsonPath(bookDir),
+        JSON.stringify({
+          characters: [
+            { id: 'fresh', notLinkedTo: opts.newDeclines },
+            { id: 'cand', notLinkedTo: opts.candDeclines },
+          ],
+        }),
+      );
+      writeFileSync(
+        castMergeSuggestionsJsonPath(bookDir),
+        JSON.stringify({
+          suggestions: [
+            stored('fresh', 'cand', 'same person?', opts.suggestion),
+            stored('k1', 'k2'),
+          ],
+        }),
+      );
+      // the other way round from how it is stored: the pair is unordered
+      await dismissSuggestionDurably(bookDir, BOOK, 'cand', 'fresh', () => {});
+      const rows = (JSON.parse(readFileSync(castJsonPath(bookDir), 'utf8')) as { characters: Row[] })
+        .characters;
+      return { newRow: rows[0], candRow: rows[1] };
+    }
+
+    const planSuggestion: Partial<StoredSuggestion> = {
+      origin: 'plan',
+      newRow: 'fresh',
+      candidate: 'cand',
+    };
+
+    it('plan origin: removes from newRow only the cross-book entries the candidate also holds', async () => {
+      const { newRow, candRow } = await dismiss({
+        newDeclines: [x, y, z],
+        candDeclines: [x],
+        suggestion: planSuggestion,
+      });
+      expect(newRow.notLinkedTo).not.toContainEqual(x);
+      expect(newRow.notLinkedTo).toContainEqual(y);
+      expect(newRow.notLinkedTo).toEqual([y, z, newEdge]);
+      expect(candRow.notLinkedTo).toEqual([x, candEdge]);
+    });
+
+    it('plan origin: still writes the dismissal record and removes only that pair', async () => {
+      await dismiss({ newDeclines: [x], candDeclines: [x], suggestion: planSuggestion });
+      const { loadCastIdHistoryWithStatus } = await import('./cast-id-history.js');
+      const { loadStoredSuggestions } = await import('./cast-merge-suggestions.js');
+      const { history } = await loadCastIdHistoryWithStatus(bookDir);
+      expect(history.notSamePerson).toEqual([expect.objectContaining({ a: 'cand', b: 'fresh' })]);
+      expect((await loadStoredSuggestions(bookDir)).map((s) => s.sourceId)).toEqual(['k1']);
+    });
+
+    it('plan origin: writes the removal even when both dismissal edges already exist', async () => {
+      const { newRow, candRow } = await dismiss({
+        newDeclines: [x, newEdge],
+        candDeclines: [x, candEdge],
+        suggestion: planSuggestion,
+      });
+      expect(newRow.notLinkedTo).toEqual([newEdge]);
+      expect(candRow.notLinkedTo).toEqual([x, candEdge]);
+    });
+
+    it('plan origin: keeps same-book and bare-string entries the candidate also holds', async () => {
+      // newEdge is the very edge a dismissal writes: shared, and still kept
+      const shared = [newEdge, { bookId: BOOK, characterId: 'third' }, 'legacy-id'];
+      const { newRow } = await dismiss({
+        newDeclines: [...shared, x],
+        candDeclines: [...shared, x],
+        suggestion: planSuggestion,
+      });
+      expect(newRow.notLinkedTo).toEqual(shared);
+    });
+
+    it.each<[string, Partial<StoredSuggestion>]>([
+      ['a dedup-origin suggestion', { origin: 'dedup', newRow: 'fresh', candidate: 'cand' }],
+      ['a plan suggestion with no candidate', { origin: 'plan', newRow: 'fresh' }],
+      ['a plan suggestion with no newRow', { origin: 'plan', candidate: 'cand' }],
+    ])('%s removes nothing', async (_label, suggestion) => {
+      const { newRow, candRow } = await dismiss({
+        newDeclines: [x, y],
+        candDeclines: [x],
+        suggestion,
+      });
+      expect(newRow.notLinkedTo).toEqual([x, y, newEdge]);
+      expect(candRow.notLinkedTo).toEqual([x, candEdge]);
+    });
   });
 });

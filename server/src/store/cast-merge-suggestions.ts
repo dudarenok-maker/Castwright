@@ -147,12 +147,29 @@ export async function removeSuggestionPairsLocked(
 }
 
 
+/** A cross-book decline the candidate row also holds. Bare strings and this
+    book's own entries never match. */
+function isSharedCrossBookDecline(
+  entry: NotLinkedEntry,
+  candidateDeclines: NotLinkedEntry[],
+  bookId: string,
+): boolean {
+  if (typeof entry !== 'object' || typeof entry.bookId !== 'string' || entry.bookId === bookId) {
+    return false;
+  }
+  return candidateDeclines.some(
+    (c) => typeof c === 'object' && c.bookId === entry.bookId && c.characterId === entry.characterId,
+  );
+}
+
 /** The dismiss action: a durable "not the same person" decision. Under the cast
     lock (then, inside it, the cast-id-history lock — cast -> cast-id-history):
       1. read cast.json and the history status;
       2. write the dismissal record, unless the history is degraded (it cannot
          be read, so nothing may be written over it) — skipped and logged;
-      3. write the `notLinkedTo` edge on each row that exists;
+      3. on each row that exists, write the `notLinkedTo` edge; for a plan-origin
+         pair also drop from `newRow` the cross-book declines `candidate` holds
+         (#4101: the new row inherited them as that candidate's namesake);
       4. remove the pair. */
 export async function dismissSuggestionDurably(
   bookDir: string,
@@ -174,16 +191,31 @@ export async function dismissSuggestionDurably(
       await recordNotSamePerson(bookDir, x, y);
     }
     if (cast?.characters?.length) {
+      // read before the pair is removed below
+      const key = pairKey(x, y);
+      const planned = (await loadStoredSuggestions(bookDir)).find(
+        (s) => s.a === key.a && s.b === key.b && s.origin === 'plan',
+      );
+      const candidateDeclines =
+        cast.characters.find((c) => c.id === planned?.candidate)?.notLinkedTo ?? [];
       let changed = false;
       const characters = cast.characters.map((c) => {
         const other = c.id === x ? y : c.id === y ? x : null;
         if (other === null) return c;
-        const edges = c.notLinkedTo ?? [];
-        if (edges.some((e) => typeof e === 'object' && e.bookId === bookId && e.characterId === other)) {
-          return c;
-        }
+        const held = c.notLinkedTo ?? [];
+        const edges =
+          c.id === planned?.newRow
+            ? held.filter((e) => !isSharedCrossBookDecline(e, candidateDeclines, bookId))
+            : held;
+        const hasEdge = edges.some(
+          (e) => typeof e === 'object' && e.bookId === bookId && e.characterId === other,
+        );
+        if (hasEdge && edges.length === held.length) return c;
         changed = true;
-        return { ...c, notLinkedTo: [...edges, { bookId, characterId: other }] };
+        return {
+          ...c,
+          notLinkedTo: hasEdge ? edges : [...edges, { bookId, characterId: other }],
+        };
       });
       if (changed) await writeJsonAtomic(castJsonPath(bookDir), { ...cast, characters });
     }
