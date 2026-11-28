@@ -161,7 +161,7 @@ Auto uses no more requests than 8192 — Result: STILL OWED — 19 (3.6, complet
 
 Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723). → superseded: criterion amended 2026-11-28 (#4723); see the re-run below
 
-Gemma split (reasoning off) — Result: FAIL — 19,928 chars at 64: both streams that answered showed thoughtPartsBeforeAnswer=1 (empty thought part, bug #4851); no bytes=0 truncation (two truncations, bytes=188 and 187, each followed by a smaller request; section 1/5 logged after the first); no analyzer-reasoning-overflow; chapter not completed (idle stream, then 503). Evidence: onbox-gemini-rerun-results/E111/.
+Gemma split (reasoning off) — Result: FAIL — 19,928 chars at 64: both streams that answered showed thoughtPartsBeforeAnswer=1 (empty thought part, bug #4851); no bytes=0 truncation (two truncations, bytes=188 and 187, each followed by a smaller request; section 1/5 logged after the first); no analyzer-reasoning-overflow — NOT PROVEN (no empty truncation occurred; see #4851); chapter not completed (idle stream, then 503). Evidence: onbox-gemini-rerun-results/E111/.
 
 Run by / date / SHA: claude lane (#4729, Gemma split only) / 2026-11-28 / main ddf1b3f0; claude lane (#4730, thinking-model runs) / 2026-11-28 / d1c89dca (main ddf1b3f0 plus docs)
 
