@@ -14,6 +14,7 @@ import {
   clonedSlotForEngine,
   hasClonedProvenance,
   resolveClonedRetargetEngine,
+  nonEnglishEngineFor,
   libraryVoiceForEngine,
   isArtifactVersionStale,
 } from './clone-engines.js';
@@ -637,6 +638,50 @@ describe('clone-engines vocabulary', () => {
         },
       };
       expect(resolveClonedRetargetEngine(character, ['qwen', 'coqui'], 'gemini')).toBe('coqui');
+    });
+  });
+
+  /* #4587 — the one helper behind the non-English engine forcing in
+     generation.ts, chapter-splice.ts and chapter-qa-repair.ts. */
+  describe('nonEnglishEngineFor names the engine a character is forced to on a non-English book', () => {
+    const clonedOnBoth = {
+      id: 'c1',
+      overrideTtsVoices: {
+        qwen: { name: 'Qwen Clone', libraryUuid: 'uuid-qwen', provenance: 'cloned' as const },
+        coqui: { name: 'Coqui Clone', libraryUuid: 'uuid-coqui', provenance: 'cloned' as const },
+      },
+    };
+
+    it('keeps an eligible manual engine choice', () => {
+      expect(
+        nonEnglishEngineFor({ id: 'c1', ttsEngine: 'coqui' }, ['qwen', 'coqui'], 'qwen'),
+      ).toBe('coqui');
+    });
+
+    it('retargets an ineligible (Kokoro) engine', () => {
+      expect(
+        nonEnglishEngineFor({ id: 'c1', ttsEngine: 'kokoro' }, ['qwen', 'coqui'], 'coqui'),
+      ).toBe('qwen');
+    });
+
+    it('sends a character cloned on both engines to Coqui under a Coqui default', () => {
+      expect(nonEnglishEngineFor(clonedOnBoth, ['qwen', 'coqui'], 'coqui')).toBe('coqui');
+    });
+
+    it('sends a character cloned on both engines to Qwen under a Qwen default', () => {
+      expect(nonEnglishEngineFor(clonedOnBoth, ['qwen', 'coqui'], 'qwen')).toBe('qwen');
+    });
+
+    it("falls back to 'qwen' when nothing carries a clone", () => {
+      expect(nonEnglishEngineFor({ id: 'c1' }, ['qwen', 'coqui'], 'coqui')).toBe('qwen');
+    });
+
+    it('applies the retarget rule when ttsEngine is unset', () => {
+      const clonedOnCoqui = {
+        id: 'c1',
+        overrideTtsVoices: { coqui: clonedOnBoth.overrideTtsVoices.coqui },
+      };
+      expect(nonEnglishEngineFor(clonedOnCoqui, ['qwen', 'coqui'], 'kokoro')).toBe('coqui');
     });
   });
 
