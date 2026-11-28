@@ -846,8 +846,9 @@ describe('#3506 — analysis records follow their chapter through a restructure'
 
   it('merge resets the merged chapter into P and carries the chapter after it', async () => {
     const { saveAnalysisCache } = await import('../store/analysis-cache.js');
-    /* Only old chapter 2, which merges away, starts in P: the merged chapter's
-       membership then comes from the reset alone, and chapter 3 must stay out. */
+    /* P starts as old chapter 2, which merges away, and old chapter 3: the
+       merged chapter's membership comes from the reset, and old 3's pending mark
+       must move with it to its new id 2. */
     await saveAnalysisCache(MANUSCRIPT_ID, {
       chapters: {},
       chapterCast: { 1: castOf('one'), 2: castOf('two'), 3: castOf('three') },
@@ -858,7 +859,7 @@ describe('#3506 — analysis records follow their chapter through a restructure'
         '2': failureOf('two'),
         '3': failureOf('three'),
       },
-      pendingAttributionChapterIds: [2],
+      pendingAttributionChapterIds: [2, 3],
     });
 
     const res = await request(app)
@@ -872,7 +873,7 @@ describe('#3506 — analysis records follow their chapter through a restructure'
     expect(cache.failedChapterErrors).toEqual({ '2': failureOf('three') });
     expect(cache.chapterCast).toEqual({ 2: castOf('three') });
     expect(cache.castDurations).toEqual({ 2: 13 });
-    expect(cache.pendingAttributionChapterIds).toEqual([1]);
+    expect(cache.pendingAttributionChapterIds).toEqual([1, 2]);
   });
 
   it('split resets both halves into P and carries the chapter after them', async () => {

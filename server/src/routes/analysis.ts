@@ -2402,6 +2402,30 @@ export function setPendingAttribution(
     : current.filter((id) => id !== chapterId);
 }
 
+/* #3506 — with a cached stage1, the chapters whose cast must be detected again
+   before anything depends on coverage or their P mark can be cleared: the
+   non-excluded chapters in P with no `chapterCast` entry (a merge or split
+   reset theirs, and the cached stage1 means no run would otherwise refill it).
+   A chapter in P that is also named in `castFailedIds` counts too, so a run
+   that passes them re-queues a refill that failed. Exported for unit testing. */
+export function pendingChapterIdsNeedingCast(
+  cache: { chapterCast?: Record<number, unknown>; pendingAttributionChapterIds?: number[] },
+  chapterHints: Array<{ id: number; excluded?: boolean }>,
+  castFailedIds: readonly number[] = [],
+): Set<number> {
+  const pending = new Set(cache.pendingAttributionChapterIds ?? []);
+  return new Set(
+    chapterHints
+      .filter(
+        (h) =>
+          !h.excluded &&
+          pending.has(h.id) &&
+          (!Object.hasOwn(cache.chapterCast ?? {}, h.id) || castFailedIds.includes(h.id)),
+      )
+      .map((h) => h.id),
+  );
+}
+
 /* #3435 (plan 287 M0/M1, S0) — the rules both routes apply to the cache they
    have just loaded, mutating it in place. Returns whether it changed (the
    caller saves).
@@ -6330,10 +6354,9 @@ async function runMainAnalyzerJobBody(
     /* #3435 — the titles of those chapters, for the `cast_incomplete` copy. */
     let phase0FailedTitles: string[] = [];
     let stage1ActualMs = 0;
-    /* Plan 88 follow-up — Promise.all arm for Phase 0. Set in the
-       cache-miss branch (real work); stays `null` in the cache-hit
-       branch (nothing to do). The outer Promise.all below filters
-       null arms. */
+    /* Plan 88 follow-up — Promise.all arm for Phase 0. Set on a cache
+       miss; stays `null` when stage1 is cached (any #3506 cast refill is
+       awaited in place). The outer Promise.all below filters null arms. */
     let phase0PoolPromise: Promise<void> | null = null;
     /* Observed-pace trackers for Phase 0a — declared at the route scope so
        Phase 1's ETA projection can read them too. SUM-of-per-chapter ms,
@@ -6391,11 +6414,13 @@ async function runMainAnalyzerJobBody(
       });
       send({ kind: 'eta', remainingMs: initialRemainingMs });
     }
-    if (cache.stage1) {
+    /* Read before Phase 0b below can assign `cache.stage1`. */
+    const cachedStage1 = cache.stage1;
+    if (cachedStage1) {
       /* Phase 0 already completed on a prior run — short-circuit straight
          to the finalised roster. Still re-sort + re-verify in case the
          cache predates the current verifier pass. */
-      const charCount = cache.stage1.characters.length;
+      const charCount = cachedStage1.characters.length;
       log(
         0,
         `Resuming — Phase 0 already complete (${charCount} character${charCount === 1 ? '' : 's'} cached).`,
@@ -6407,7 +6432,7 @@ async function runMainAnalyzerJobBody(
         label: PHASES[0].label,
         model: activeModelId,
       });
-      stage1 = cache.stage1;
+      stage1 = cachedStage1;
       sortEvidence(stage1.characters);
       const verified = verifyEvidenceAgainstSource(stage1.characters, record.sourceText, (msg) =>
         log(0, msg),
@@ -6452,21 +6477,18 @@ async function runMainAnalyzerJobBody(
             await persistDroppedQuotesBatch(bookDir, manuscriptId, 'analysis-stream', verified);
           },
         );
-      /* Plan 291 (#4031): the cached stage 1 is the RAW roster. Settle its identity
-         (reusing a cached plan, or planning now) BEFORE Phase 1 is released, so no
-         take is made in raw id space. The cached `stage1` stays raw. */
-      stage1 = { ...cache.stage1, characters: await planCastIdentity(cache.stage1.characters) };
-      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, planConstraints, planProtectIds) });
-      /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
-         the plan-applied stage1 is the canonical roster for any Phase 1
-         worker that asks for a snapshot. Flip the flag so
-         `getPhase1Stage1Snapshot` returns `stage1` directly without
-         consulting the (empty) rolling-roster fallback. Release any
-         Phase 1 waiters immediately — there's no Phase 0 work to
-         pipeline against. */
-      phase1Stage1Ready = true;
-      watermark.markPhase0AllDone();
-    } else {
+    }
+    /* #3506 — with stage1 cached, the only chapters Phase 0a runs for are the
+       pending ones with no cast (or whose refill failed); null on a cache miss,
+       where it runs for every chapter that needs it. */
+    const castRefillIds = cachedStage1
+      ? pendingChapterIdsNeedingCast(
+          cache,
+          recordRef.chapterHints,
+          castFailedChapterIds(cache, recordRef.chapterHints),
+        )
+      : null;
+    if (!castRefillIds || castRefillIds.size > 0) {
       /* Phase 0a — per-chapter cast detection. The chapterCast cache
          lets us resume mid-Phase-0a after a crash / rate-limit / model
          swap by replaying the per-chapter outputs we already have. */
@@ -6480,11 +6502,13 @@ async function runMainAnalyzerJobBody(
       ).length;
       const cachedCastCount = Object.keys(chapterCast).length;
       const stage0Start = Date.now();
-      log(
-        0,
-        `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`,
-      );
-      if (resumeCastCount > 0) {
+      if (!castRefillIds) {
+        log(
+          0,
+          `Detecting cast chapter-by-chapter across ${totalCastChapters} chapter${totalCastChapters === 1 ? '' : 's'} via ${analyzerLabel}…`,
+        );
+      }
+      if (!castRefillIds && resumeCastCount > 0) {
         log(
           0,
           `Resuming — ${resumeCastCount} of ${activeCastHints.length} chapter${activeCastHints.length === 1 ? '' : 's'} already cached.`,
@@ -6520,6 +6544,9 @@ async function runMainAnalyzerJobBody(
          structuredClone if it wants isolation. */
       rosterSnapshotFn = (): CharacterOutput[] => Array.from(rebuildRoster().values());
       const emitCastUpdate = (): void => {
+        /* #3506 — a refill leaves the cached stage1 as the book's roster, so the
+           rolling per-chapter one is never shown. */
+        if (castRefillIds) return;
         const roster = rebuildRoster();
         /* Name-only fold so descriptor speakers ("The Jogger", "Drooly
            Boy", "Unknown Intruder") collapse into the Unknown male /
@@ -6546,7 +6573,7 @@ async function runMainAnalyzerJobBody(
          original chapter numbering. */
       const activeCastChapters = recordRef.chapterHints.filter((c) => !c.excluded).length;
       const excludedCastChapters = totalCastChapters - activeCastChapters;
-      if (excludedCastChapters > 0) {
+      if (!castRefillIds && excludedCastChapters > 0) {
         log(
           0,
           `Skipping ${excludedCastChapters} excluded chapter${excludedCastChapters === 1 ? '' : 's'} (front/back-matter you opted out of narrating).`,
@@ -6585,7 +6612,10 @@ async function runMainAnalyzerJobBody(
       for (let i = 0; i < totalCastChapters; i++) {
         const ch = recordRef.chapterHints[i];
         if (ch.excluded) continue;
-        if (!chapterCast[ch.id] || failedSet.has(ch.id)) castTaskIndices.push(i);
+        const needsCast = castRefillIds
+          ? castRefillIds.has(ch.id)
+          : !chapterCast[ch.id] || failedSet.has(ch.id);
+        if (needsCast) castTaskIndices.push(i);
       }
       const castConcurrency = analyzerPoolWidth();
       if (castTaskIndices.length > 0) {
@@ -6976,13 +7006,11 @@ async function runMainAnalyzerJobBody(
         sendCastLiveTick();
       }
 
-      /* Plan 88 follow-up — wrap the Phase 0 worker pool + Phase 0b
-         consolidation in a single async function so we can launch
-         Phase 1 concurrently below. In pipelined mode this is the
-         outer Promise.all arm; in sequential / cache modes the function
-         awaits the same way as before but Phase 1's `awaitPhase1Dispatch`
-         parks until `markPhase0AllDone()` fires inside this body. */
-      const runPhase0Pool = async (): Promise<void> => {
+      /* The queued cast chapters, shared by the cache-miss Phase 0 and the
+         cached-stage1 refill (#3506). Resolves true when every one has its cast;
+         false when the run is stopping or a chapter's detection failed (recorded
+         in `phase0FailedCount`). */
+      const runCastPool = async (): Promise<boolean> => {
         /* Concurrency pool — same shape as the Phase 1 chapter pool.
            Per-chapter failures are caught INSIDE runCastChapter (they
            become non-fatal log events + a failedCastChapters entry), so
@@ -7027,7 +7055,7 @@ async function runMainAnalyzerJobBody(
            halt (the Phase-1 arm has already rejected) writes no partial stage1
            or cast.json. */
         if (abortController.signal.aborted) throw new AnalysisAbortedError('Analysis aborted during cast detection.');
-        if (job.halting || job.ended) return;
+        if (job.halting || job.ended) return false;
         log(0, analyzerConcurrencyPeakLine('Cast detection', castTaskIndices.length));
 
         /* #3084 P20 — stop new spend: skip Phase 0b. In pipelined mode Phase 1
@@ -7078,8 +7106,19 @@ async function runMainAnalyzerJobBody(
              `phase0FailedCount > 0` and short-circuit out of dispatch.
              Without this they'd hang forever waiting on the watermark. */
           watermark.markPhase0AllDone();
-          return;
+          return false;
         }
+        return true;
+      };
+
+      /* Plan 88 follow-up — wrap the Phase 0 worker pool + Phase 0b
+         consolidation in a single async function so we can launch
+         Phase 1 concurrently below. In pipelined mode this is the
+         outer Promise.all arm; in sequential / cache modes the function
+         awaits the same way as before but Phase 1's `awaitPhase1Dispatch`
+         parks until `markPhase0AllDone()` fires inside this body. */
+      const runPhase0Pool = async (): Promise<void> => {
+        if (!(await runCastPool())) return;
 
         /* ── Phase 0b — finalise the roster.
            Replay merge once more in chapter-id order (canonical), then
@@ -7173,17 +7212,49 @@ async function runMainAnalyzerJobBody(
            the trigger that lets Phase 1 begin at all. */
         watermark.markPhase0AllDone();
       };
-      /* Defer the await — Phase 1 is launched concurrently below and
-         the outer Promise.all joins both pools. In sequential mode
-         (no per-phase env vars) Phase 1 workers all park on
-         `awaitPhase1Dispatch` until `markPhase0AllDone()` fires inside
-         this function, so observable behaviour matches today's strict
-         phase gate. In pipelined mode, Phase 1 dispatches as Phase 0
-         chapters complete (subject to the LAG semaphore). */
-      /* #3435 decision A — the arm itself is a tracked unit: it covers Phase
-         0b's stage1 and cast.json writes. */
-      takeWork(job);
-      phase0PoolPromise = runPhase0Pool().finally(() => releaseWork(job));
+      if (castRefillIds) {
+        /* #3506 — awaited, so each refilled `chapterCast` is saved before
+           Phase 1 can re-attribute the chapter and take it out of P. The cached
+           `stage1` is not rebuilt. A failed refill leaves the chapter in P with
+           a cast record, and Phase 1 does not start. */
+        if (await runCastPool()) {
+          send({
+            kind: 'phase',
+            phaseId: 0,
+            progress: 1,
+            label: PHASES[0].label,
+            model: activeModelId,
+          });
+        }
+      } else {
+        /* Defer the await — Phase 1 is launched concurrently below and
+           the outer Promise.all joins both pools. In sequential mode
+           (no per-phase env vars) Phase 1 workers all park on
+           `awaitPhase1Dispatch` until `markPhase0AllDone()` fires inside
+           this function, so observable behaviour matches today's strict
+           phase gate. In pipelined mode, Phase 1 dispatches as Phase 0
+           chapters complete (subject to the LAG semaphore). */
+        /* #3435 decision A — the arm itself is a tracked unit: it covers Phase
+           0b's stage1 and cast.json writes. */
+        takeWork(job);
+        phase0PoolPromise = runPhase0Pool().finally(() => releaseWork(job));
+      }
+    }
+    if (cachedStage1) {
+      /* Plan 291 (#4031): the cached stage 1 is the RAW roster. Settle its identity
+         (reusing a cached plan, or planning now) BEFORE Phase 1 is released, so no
+         take is made in raw id space. The cached `stage1` stays raw. */
+      stage1 = { ...cachedStage1, characters: await planCastIdentity(cachedStage1.characters) };
+      send({ kind: 'cast-update', characters: previewFoldForLiveView(stage1.characters, bookLanguage, planConstraints, planProtectIds) });
+      /* Plan 88 follow-up — cache hit: Phase 0 is already complete, so
+         the plan-applied stage1 is the canonical roster for any Phase 1
+         worker that asks for a snapshot. Flip the flag so
+         `getPhase1Stage1Snapshot` returns `stage1` directly without
+         consulting the rolling-roster fallback. Release any Phase 1
+         waiters immediately — there's no Phase 0 work to pipeline
+         against. */
+      phase1Stage1Ready = true;
+      watermark.markPhase0AllDone();
     }
 
     /* ── Phase 1: parsing and attribution (handoff stage 2, per chapter).
@@ -8116,8 +8187,8 @@ async function runMainAnalyzerJobBody(
        pipelined mode. In sequential / cache modes the Phase 1 pool's
        per-worker `awaitPhase1Dispatch` parks until Phase 0b fires
        `markPhase0AllDone()`, so the observable behaviour matches today's
-       hard phase gate. `phase0PoolPromise` is null in the cache-hit
-       branch (no Phase 0 work). */
+       hard phase gate. `phase0PoolPromise` is null when stage1 was
+       cached (no Phase 0 work left to join). */
     const armsToJoin: Promise<void>[] = [runPhase1Pool()];
     if (phase0PoolPromise) armsToJoin.push(phase0PoolPromise);
     await Promise.all(armsToJoin);
@@ -9703,6 +9774,21 @@ async function runSubsetAnalyzerJobBody(
       0,
       `Re-analyzing ${toRun.length} chapter${toRun.length === 1 ? '' : 's'} via ${analyzerLabel}.`,
     );
+    /* #3506 — with stage1 on disk, a pending chapter with no cast (a merge or
+       split reset it) joins this Phase-0a pass even when the run does not target
+       it: the coverage gate below needs its cast. Phase 1 stays on `toRun`, so
+       its attribution stays pending. A refill that fails leaves the chapter in P
+       with a cast record, as a target's failure does. */
+    const toRunIds = new Set(toRun.map((c) => c.id));
+    const refillIds = stage1Existed ? pendingChapterIdsNeedingCast(cache, hints) : new Set<number>();
+    const refill = record.chapterHints.filter((h) => refillIds.has(h.id) && !toRunIds.has(h.id));
+    if (refill.length > 0) {
+      log(
+        0,
+        `Also detecting cast for ${refill.length} chapter${refill.length === 1 ? '' : 's'} awaiting re-analysis with none saved.`,
+      );
+    }
+    const castRun = [...refill, ...toRun];
     send({
       kind: 'phase',
       phaseId: 0,
@@ -9754,8 +9840,8 @@ async function runSubsetAnalyzerJobBody(
       send({ kind: 'cast-update', characters: folded });
     };
 
-    for (let idx = 0; idx < toRun.length; idx++) {
-      const ch = toRun[idx];
+    for (let idx = 0; idx < castRun.length; idx++) {
+      const ch = castRun[idx];
       log(0, `Chapter ${ch.id} — ${ch.title}: detecting cast…`);
       /* Per-chapter try/catch mirrors the full route at analysis.ts:887 —
          one failed chapter in a batch retry shouldn't abort the rest of
@@ -9935,7 +10021,7 @@ async function runSubsetAnalyzerJobBody(
       send({
         kind: 'phase',
         phaseId: 0,
-        progress: 0.02 + 0.93 * ((idx + 1) / toRun.length),
+        progress: 0.02 + 0.93 * ((idx + 1) / castRun.length),
         label: PHASES[0].label,
         model: subsetModelId,
       });
