@@ -25,13 +25,13 @@ Describe 'Select-Pester5Module' {
 }
 
 Describe 'run.ps1 on a host with no Pester at all' {
-    It 'prints the install hint and exits 1 (no binding error)' {
+    It 'prints the install hint and exits 1 (no binding error)' -Skip:([bool]$env:CASTWRIGHT_SELECT_PESTER5_CHILD) {
         # A shadowing Get-Module makes the child see no Pester, whatever this
         # box has installed (pwsh appends its own module paths to PSModulePath,
         # so an empty PSModulePath is not hermetic).
         $shell = (Get-Process -Id $PID).Path
         $runner = (Resolve-Path (Join-Path $PSScriptRoot 'run.ps1')).Path
-        $cmd = "function Get-Module { `$null }; & '$runner'; exit `$LASTEXITCODE"
+        $cmd = "`$env:CASTWRIGHT_SELECT_PESTER5_CHILD='1'; function Get-Module { `$null }; & '$runner'; exit `$LASTEXITCODE"
         $out = & $shell -NoProfile -ExecutionPolicy Bypass -Command $cmd 2>&1 | Out-String
         $LASTEXITCODE | Should -Be 1
         $out | Should -Match 'Pester 5\.x'
@@ -45,11 +45,11 @@ Describe 'Find-LoadedPesterTooNew' {
         Find-LoadedPesterTooNew -Modules @((New-FakeModule '5.7.1')) | Should -BeNullOrEmpty
         Find-LoadedPesterTooNew -Modules $null | Should -BeNullOrEmpty
     }
-    It 'makes run.ps1 stop with a clear message when Pester 6 is loaded' {
+    It 'makes run.ps1 stop with a clear message when Pester 6 is loaded' -Skip:([bool]$env:CASTWRIGHT_SELECT_PESTER5_CHILD) {
         $shell = (Get-Process -Id $PID).Path
         $runner = (Resolve-Path (Join-Path $PSScriptRoot 'run.ps1')).Path
         $cmd = @"
-function Get-Module { param([switch]`$ListAvailable, `$Name)
+`$env:CASTWRIGHT_SELECT_PESTER5_CHILD='1'; function Get-Module { param([switch]`$ListAvailable, `$Name)
   if (`$ListAvailable) { [pscustomobject]@{ Name='Pester'; Version=[Version]'5.7.1'; Path='x' } }
   else { [pscustomobject]@{ Name='Pester'; Version=[Version]'6.1.0'; Path='x' } } }
 & '$runner'; exit `$LASTEXITCODE
