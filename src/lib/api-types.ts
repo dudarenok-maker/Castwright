@@ -6108,6 +6108,8 @@ export interface components {
                 bookId?: string;
                 characterId?: string;
             };
+            /** @description voiceUuid of the cloned voice this entry is a byte-identical copy of (set by the one-time auto-link migration, #4952); revoking that clone revokes this entry. */
+            clonedFrom?: string;
             createdAt: string;
             updatedAt: string;
             master?: components["schemas"]["VoiceMaster"];

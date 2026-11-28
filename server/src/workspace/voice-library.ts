@@ -100,6 +100,12 @@ export interface VoiceLibraryEntry {
   };
   engines: VoiceLibraryEngines;
   promotedFrom?: { bookId?: string; characterId?: string };
+  /** #4952 — set by the one-time auto-link migration (`clone-copy-autolink.ts`)
+      on a byte-identical copy of a cloned voice made before "Save to my
+      voices" refused cloned sources. Names the clone's `voiceUuid`; the
+      clone's purge (`purgeCloneArtifacts`) cascades its revoke to every entry
+      carrying it. Never set on a clone itself, so the cascade is one level. */
+  clonedFrom?: string;
   master?: VoiceMaster;
   createdAt: string;
   updatedAt: string;

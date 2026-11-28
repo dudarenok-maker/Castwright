@@ -8689,6 +8689,11 @@ components:
         promotedFrom:
           type: object
           properties: { bookId: { type: string }, characterId: { type: string } }
+        clonedFrom:
+          type: string
+          description: >-
+            voiceUuid of the cloned voice this entry is a byte-identical copy of (set by the
+            one-time auto-link migration, #4952); revoking that clone revokes this entry.
         createdAt: { type: string }
         updatedAt: { type: string }
         master:

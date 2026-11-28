@@ -51,6 +51,7 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
+import { autolinkCloneCopies } from './workspace/clone-copy-autolink.js';
 import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
@@ -267,6 +268,21 @@ async function main(): Promise<void> {
       }
     })
     .catch((err) => console.warn('[changelog] migration skipped:', err));
+
+  /* #4952 — one-time auto-link of consent-free copies of a cloned voice (made
+     by "Save to my voices" before #4954) to their source clone, so the clone's
+     consent and revoke cover them. Nothing is deleted. Idempotent (a linked
+     copy carries `clonedFrom`), fire-and-forget like the migration above. */
+  void autolinkCloneCopies()
+    .then((r) => {
+      if (r.unmatched > 0) {
+        console.log(
+          `[clone-copy-autolink] ${r.unmatched} consent-free saved voice(s) matched no clone's ` +
+            'voice bytes and were left as designed voices.',
+        );
+      }
+    })
+    .catch((err) => console.warn('[clone-copy-autolink] migration skipped:', err));
 
   /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
      listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated

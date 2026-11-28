@@ -29,7 +29,7 @@ import {
   xttsVoicesDir,
   WORKSPACE_ROOT,
 } from './paths.js';
-import { entryDir, removeEntryDir, updateEntry } from './voice-library.js';
+import { entryDir, listEntries, removeEntryDir, updateEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { CLONE_ENGINE_LIST, cloneStorageKey } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
@@ -475,6 +475,23 @@ export async function purgeCloneArtifacts(
         'the voice until the sidecar process restarts:',
       xttsEvictResult.detail,
     );
+  }
+  /* #4952 — cascade to byte-identical copies of this clone that the one-time
+     auto-link migration (`clone-copy-autolink.ts`) re-labelled `clonedFrom`
+     this uuid: stamp each copy revoked (so the consent gates read it as
+     revoked, exactly like the clone) and erase its artifacts. The copy's
+     manifest is kept — only the clone's own delete removes a manifest. A copy
+     never has copies of its own, so this recursion is one level. Runs BEFORE
+     the C3 manifest-removal decision below so a copy that could not be erased
+     keeps the clone's manifest, and its consent record, on disk. Copies are a
+     different uuid from the one a caller may already hold the entry lock for. */
+  for (const copy of (await listEntries()).filter((e) => e.clonedFrom === voiceUuid)) {
+    await updateEntry(copy.voiceUuid, (fresh) =>
+      fresh?.consent && !fresh.consent.revokedAt
+        ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
+        : null,
+    );
+    failed.push(...(await purgeCloneArtifacts(copy.voiceUuid, {})).failed);
   }
   /* GATE 1 fix (C3) — the manifest dir comes off LAST, and ONLY when every
      other step came back clean. Repo-owner ruling, settled; do not
