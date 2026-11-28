@@ -214,7 +214,7 @@ const processes = [
   },
 
   // B19 — C1, second harness: `npm run test:scripts` spawns this launcher
-  // (run-powershell.mjs:52). `Invoke-Pester` itself is in-process and never
+  // (run-powershell.mjs's spawnSync). `Invoke-Pester` itself is in-process and never
   // reaches any command line — the launcher PATH is the only handle there is.
   {
     ...proc(19001, 19000, 'pwsh.exe', 5, NOW - 40 * MIN),

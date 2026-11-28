@@ -646,7 +646,7 @@ export const STEPS = [
         'scripts/tests/fixtures/**',
       ],
       // run-powershell.mjs (#2567 review): `npm run test:scripts` actually
-      // launches through this file (package.json:46), not run.ps1 directly —
+      // launches through this file (the `test:scripts` script in package.json), not run.ps1 directly —
       // without it here, an edit to the launcher itself (e.g. the pwsh/
       // powershell fallback logic) prints test:scripts [cached] and the
       // Pester battery never re-verifies the very script that runs it.
