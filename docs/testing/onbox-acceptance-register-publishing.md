@@ -530,7 +530,9 @@ comparison, see the edge list above). The merge step that closes this, run
    copy. Two lanes should never be mid-publish on this URL at once — if you
    find one, that is the thing to fix, not the loop.
 4. Only once step 2 passes, publish the file step 2 passed on, with the
-   canonical URL above as `url` **and `favicon` set to 📋**. That is the
+   canonical URL above as `url`, **and leave the icon out so the page keeps
+   its 📋**: a republish keeps the existing icon when none is passed, and the
+   publish tool's `favicon` parameter is deprecated. That is the
    tracked `.html`, **unless step 2 needed a union**: then publish the union
    file that `--build-union` wrote (or the one you passed with
    `--publishing`), never the tracked file. Publishing the tracked file there
@@ -543,7 +545,9 @@ comparison, see the edge list above). The merge step that closes this, run
    memory of the tab icon as this line being newer than your memory, and change
    the line only alongside a deliberate publish that changes the icon.
 
-   The favicon is pinned here because it is otherwise **unrecoverable**. The
+   The icon is recorded here because it is otherwise **unrecoverable**, which
+   is also why a publish leaves it out rather than re-sending it: passing any
+   other value would replace it for good. The
    publisher keeps it as artifact metadata, not in the page: it is absent from
    this repo, absent from the published HTML, and returned by neither
    `action: "read"` nor `action: "list"`. So an operator who does not know it
