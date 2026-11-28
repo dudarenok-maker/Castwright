@@ -442,7 +442,8 @@ export const STEPS = [
   {
     name: 'test',
     inputs: {
-      globs: ['src/**'],
+      /* e2e/**: src/mocks/no-real-home-path.test.ts scans it (#4875). */
+      globs: ['src/**', 'e2e/**'],
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',

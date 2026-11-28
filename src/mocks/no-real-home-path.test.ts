@@ -19,7 +19,14 @@ function walk(dir: string): string[] {
 }
 
 describe('mock layer has no real home paths', () => {
-  const files = [join(root, 'lib', 'api.ts'), ...walk(join(root, 'mocks'))];
+  // Everything mock mode renders: api.ts, the mock layer, the design fixtures
+  // it imports, and the e2e specs that seed it through URL seams.
+  const files = [
+    join(root, 'lib', 'api.ts'),
+    ...walk(join(root, 'mocks')),
+    ...walk(join(root, 'data')),
+    ...walk(join(root, '..', 'e2e')),
+  ];
 
   it('scans a non-empty file set', () => {
     expect(files.length).toBeGreaterThan(1);
