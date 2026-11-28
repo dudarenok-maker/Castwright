@@ -101,10 +101,10 @@ export interface ZipWritePipeline {
   rejectBuild: (reason?: unknown) => void;
   /** Resolves with the total byte count once the write stream is fully
       closed. Rejects with whatever `rejectBuild` was called with, after the
-      current source stream has closed. Marked handled immediately (see
-      comment inline) so a rejection that lands before the caller awaits
-      this isn't flagged as an unhandled rejection — the caller's own
-      `await` still observes it. */
+      write stream and the current source stream have closed. Marked handled
+      immediately (see comment inline) so a rejection that lands before the
+      caller awaits this isn't flagged as an unhandled rejection — the
+      caller's own `await` still observes it. */
   donePromise: Promise<number>;
   /** Name the source stream about to be registered with yazl. Replaces the
       previous one, so call `waitForSource` first. */
@@ -159,14 +159,23 @@ export function createZipWritePipeline(
     zip.outputStream.off('data', onData);
     zip.outputStream.unpipe(ws);
     ws.destroy();
-    /* Then the READ side: reject only once the source stream has closed. */
+    /* Then the READ side: reject only once the source stream AND the write
+       stream have closed. A WriteStream destroyed before its async `open`
+       completes still creates the file afterwards, so rejecting before its
+       'close' lets a caller's cleanup `unlink` run first, hit ENOENT, and
+       leave an empty file behind (#2303). */
     const source = currentSource;
-    if (!source || source.closed) {
+    const pending: Array<Promise<void>> = [];
+    if (!ws.closed) pending.push(new Promise((resolve) => ws.once('close', () => resolve())));
+    if (source && !source.closed) {
+      pending.push(new Promise((resolve) => source.once('close', () => resolve())));
+      source.destroy();
+    }
+    if (pending.length === 0) {
       rejectDone(error);
       return;
     }
-    source.once('close', () => rejectDone(error));
-    source.destroy();
+    void Promise.all(pending).then(() => rejectDone(error));
   };
 
   const throwIfFailed = (): void => {

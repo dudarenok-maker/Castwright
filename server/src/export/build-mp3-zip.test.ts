@@ -10,6 +10,7 @@
 import { spawnSync } from 'node:child_process';
 import { randomBytes } from 'node:crypto';
 import { getEventListeners } from 'node:events';
+import { unlink } from 'node:fs/promises';
 import { Readable } from 'node:stream';
 import {
   existsSync,
@@ -856,6 +857,31 @@ describe('createZipWritePipeline', () => {
 
       await expect(pipeline.donePromise).rejects.toBe(injected);
       expect(lastWriteStream!.destroyed).toBe(true);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
+  /* #2303 review: a `WriteStream` destroyed before its async `open` completes
+     still creates the (empty) file afterwards. `rejectBuild` used to reject as
+     soon as the source stream had closed, so the route's `unlink(buildPath)`
+     could run BEFORE that deferred create, hit ENOENT, and leave a 0-byte
+     `.partial-<id>` nothing ever removes. Aborting in the creating tick and
+     unlinking the instant `donePromise` settles is exactly what
+     `runExportJob` does around the builder. */
+  it('leaves nothing behind for the route to miss when aborted before the write stream opens', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-early-abort-'));
+    try {
+      for (let i = 0; i < 20; i++) {
+        const outPath = join(dir, `.partial-${i}`);
+        const ac = new AbortController();
+        const pipeline = createZipWritePipeline(outPath, new ZipFile(), ac.signal);
+        ac.abort();
+        await expect(pipeline.donePromise).rejects.toBeDefined();
+        await unlink(outPath).catch(() => {});
+        await new Promise((resolve) => setTimeout(resolve, 20));
+        expect(existsSync(outPath)).toBe(false);
+      }
     } finally {
       rmSync(dir, { recursive: true, force: true });
     }
