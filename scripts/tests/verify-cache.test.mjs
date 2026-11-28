@@ -2314,21 +2314,54 @@ test('pesterFingerprint runs the shared selector under pwsh first', () => {
   assert.match(calls[0].script, /\$m\.Path/);
 });
 
-test('pesterFingerprint falls back to powershell when pwsh is absent, and reports unavailable on failure', () => {
+test('pesterFingerprint passes -ExecutionPolicy Bypass (5.1 Restricted blocks the dot-source)', () => {
+  let args;
+  pesterFingerprint((shell, a) => {
+    args = a;
+    return { status: 0, stdout: '5.7.1|p\n' };
+  });
+  const i = args.indexOf('-ExecutionPolicy');
+  assert.ok(i >= 0 && args[i + 1] === 'Bypass', args.join(' '));
+  assert.ok(args.indexOf('-NoProfile') >= 0);
+});
+
+test('pesterFingerprint falls back to powershell only when pwsh is ENOENT', () => {
   const seen = [];
   const noPwsh = (shell) => {
     seen.push(shell);
-    return shell === 'pwsh' ? { error: new Error('ENOENT') } : { status: 0, stdout: '5.5.0|p\n' };
+    return shell === 'pwsh'
+      ? { error: Object.assign(new Error('x'), { code: 'ENOENT' }) }
+      : { status: 0, stdout: '5.5.0|p\n' };
   };
   assert.equal(pesterFingerprint(noPwsh), '5.5.0|p');
   assert.deepEqual(seen, ['pwsh', 'powershell']);
-  assert.equal(pesterFingerprint(() => ({ status: 1, stdout: '' })), 'unavailable');
-  assert.equal(pesterFingerprint(() => ({ error: new Error('ENOENT') })), 'unavailable');
+  assert.equal(
+    pesterFingerprint(() => ({ error: Object.assign(new Error('x'), { code: 'ENOENT' }) })),
+    'unavailable',
+  );
+});
+
+test('pesterFingerprint: a timeout or failed load is never "unavailable" and never tries another shell', () => {
+  const seen = [];
+  const timeout = (shell) => {
+    seen.push(shell);
+    return { error: Object.assign(new Error('x'), { code: 'ETIMEDOUT' }) };
+  };
+  assert.equal(pesterFingerprint(timeout), 'error:ETIMEDOUT');
+  assert.deepEqual(seen, ['pwsh']);
+  assert.equal(pesterFingerprint(() => ({ status: 1, stdout: '' })), 'error:exit1');
+  assert.equal(pesterFingerprint(() => ({ status: 0, stdout: '' })), 'error:empty');
 });
 
 test('pesterFingerprint (real shell) never reports a Pester 6+', () => {
   const fp = pesterFingerprint();
-  assert.ok(fp === 'unavailable' || /^5\.\d+\.\d+[^|]*\|/.test(fp), fp);
+  // CI has pwsh and Pester 5: there, anything but a 5.x selection is a defect.
+  // Locally a box with no Pester 5 legitimately reads 'unavailable'.
+  if (process.env.CI) {
+    assert.match(fp, /^5\.\d+\.\d+[^|]*\|/);
+  } else {
+    assert.ok(fp === 'unavailable' || /^5\.\d+\.\d+[^|]*\|/.test(fp), fp);
+  }
 });
 
 // Finding 5 (ops-2997): contention probe optimization — skip probing when no
