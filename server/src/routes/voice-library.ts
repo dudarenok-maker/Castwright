@@ -34,6 +34,7 @@ import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import {
   CLONE_ENGINE_LIST,
+  characterHasClonedSlot,
   cloneStorageKey,
   isArtifactVersionStale,
   isCloneEngine,
@@ -1077,6 +1078,22 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
        WITHOUT touching `character.voiceUuid`) wins outright; only fall back
        to the character-id-derived qwenStorageKey when no libraryUuid is set. */
     const assignedLibraryUuid = character.overrideTtsVoices?.qwen?.libraryUuid;
+
+    /* Consent gate — "Save to my voices" copies the source `.pt` under a NEW uuid
+       and writes it back as `provenance: 'designed'` with no `consent`. From a
+       CLONED source that launders the recording into a voice that
+       `purgeCloneArtifacts` (keyed on the clone's own uuid) can never reach, so
+       Revoke would leave a playable copy behind. Fails CLOSED like
+       `clonedRedesignRefusal`, via the fail-safe slot predicate (any
+       clone-capable engine; `/assign` stamps the slot from the entry). */
+    if (characterHasClonedSlot(character)) {
+      return res.status(403).json({
+        error:
+          'This voice was cloned from a recording, so it cannot be saved to My voices as a ' +
+          'designed voice — the copy would outlive a revoke. Use the cloned voice from My voices instead.',
+      });
+    }
+
     const sourceKey = assignedLibraryUuid
       ? `qwen-${assignedLibraryUuid}`
       : qwenStorageKey({ voiceUuid: character.voiceUuid, voiceId: character.voiceId }, characterId);

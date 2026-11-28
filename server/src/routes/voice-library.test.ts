@@ -9,7 +9,7 @@
    the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -4547,6 +4547,31 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     const newPtPath = qwenVoice.qwenVoicePtPath(`qwen-${entry.voiceUuid}`);
     expect(readFileSync(newPtPath, 'utf8')).toBe('LIBRARY-ASSIGNED-BYTES');
     expect(entry.engines.qwen?.status).toBe('ready');
+  });
+
+  it('refuses (403) to promote a character whose qwen slot is a CLONE, writing nothing (consent bypass)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-cloneX'), 'CLONE-BYTES');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-clone', [
+      {
+        id: 'char-cloned',
+        name: 'Cloned',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneX', libraryUuid: 'cloneX', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const libBefore = (await vl.listEntries()).length;
+    const ptsBefore = readdirSync(paths.qwenVoicesDir()).sort();
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-clone', characterId: 'char-cloned', name: 'Copy' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/cloned/i);
+    expect((await vl.listEntries()).length).toBe(libBefore);
+    expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
   });
 
   it('missing source .pt → entry created with stale status, no throw (still 201)', async () => {

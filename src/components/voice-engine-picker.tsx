@@ -75,6 +75,9 @@ interface Props {
   /** Set once a voice has been designed this session — surfaces a
       "designed" confirmation + the voiceId. */
   designedVoiceId: string | null;
+  /** True when that voice is a clone — it can't be saved as a designed
+      voice, so the "saving will pin it" confirmation is withheld. */
+  designedVoiceIsClone?: boolean;
   /** Inline error from the persona generate / design calls. */
   error: string | null;
   /** fs-56 — when true, the Qwen 1.7B-Base is resident and the "Higher
@@ -101,6 +104,7 @@ export function VoiceEnginePicker({
   designPhase,
   designPlaying,
   designedVoiceId,
+  designedVoiceIsClone = false,
   error,
   qwen17bAvailable = false,
   charModelKey,
@@ -245,7 +249,7 @@ export function VoiceEnginePicker({
             </button>
           )}
 
-          {designedVoiceId && !designBusy && (
+          {designedVoiceId && !designedVoiceIsClone && !designBusy && (
             <p
               className="inline-flex items-center gap-1.5 text-[11px] text-emerald-700"
               data-testid="qwen-designed-confirm"

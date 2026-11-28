@@ -2247,6 +2247,40 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
   });
 
+  it('hides "Save to my voices" + the "Voice designed" line when the cast slot is a CLONE (consent bypass)', () => {
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneA', libraryUuid: 'cloneA', provenance: 'cloned' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('hides "Save to my voices" right after a CLONED My-voices entry is picked', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    const cloned: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'clone1',
+      name: 'My clone',
+      provenance: 'cloned',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned] },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-clone1'));
+    await waitFor(() => expect(assignLibraryVoice).toHaveBeenCalledWith('clone1', expect.anything()));
+    await waitFor(() => expect(screen.queryByTestId('profile-drawer-my-voice-clone1')).toBeNull());
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
   it('does not show "Save to my voices" before any Qwen voice is designed', () => {
     renderDrawer({ ...baseChar, ttsEngine: 'qwen' }, { bookId: 'book-1' });
     expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
