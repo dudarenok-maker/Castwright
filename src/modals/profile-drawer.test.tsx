@@ -237,6 +237,14 @@ const baseChar: Character = {
   scenes: 5,
 };
 
+describe('ProfileDrawer sticky header', () => {
+  it('blurs content scrolling under the header (dark-mode bg-white/95 is ~8% opaque)', () => {
+    renderDrawer({ ...baseChar });
+    const header = screen.getByLabelText('Close').closest('.sticky');
+    expect(header?.className).toContain('backdrop-blur-md');
+  });
+});
+
 describe('ProfileDrawer evidence rendering', () => {
   it('renders the first 3 evidence quotes by default, in array order', () => {
     renderDrawer({ ...baseChar, evidence: evidenceLongFirst });

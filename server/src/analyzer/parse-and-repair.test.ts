@@ -300,7 +300,7 @@ describe('parseAndValidate — repair integration', () => {
   });
 
   it('returns ok with repaired:true when the raw had trailing prose after the closing brace (Ch44 shape)', () => {
-    /* Real failure raw from the the Coalfall Commission run: qwen3.5:4b emitted
+    /* Real failure raw from the Coalfall Commission run: qwen3.5:4b emitted
        its JSON correctly but appended a free-form sentence after the
        closing brace. trimTrailingProse must locate the outermost balanced
        `}` and slice up to it. */
