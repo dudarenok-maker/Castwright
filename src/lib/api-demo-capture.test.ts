@@ -151,4 +151,48 @@ describe('DEMO_CAPTURE-gated api.ts mocks (#1286 Quality Gate marketing screensh
     expect(report.configDrift.counts).toEqual({ mild: 0, moderate: 0, severe: 0 });
     expect(report.acoustic.linesRerecorded).toBe(0);
   });
+
+  /* #4864 — the v1.15 cloning marketing scenes read "My voices" and the
+     clone-sample transcript from the Hollow Tide fixtures, not the generic
+     test library. */
+  it('listVoiceLibrary: serves the Hollow Tide library (cloned voice pinned first) under DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { api } = await import('./api');
+
+    const { voices } = await api.listVoiceLibrary();
+    expect(voices[0].voiceUuid).toBe('lib-clone-marin-vale');
+    expect(voices[0].provenance).toBe('cloned');
+    expect(voices.map((v) => v.name)).not.toContain('Mum (cloned)');
+  });
+
+  it('listVoiceLibrary: keeps the generic fixtures outside DEMO_CAPTURE', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '0');
+    const { api } = await import('./api');
+
+    const { voices } = await api.listVoiceLibrary();
+    expect(voices.map((v) => v.voiceUuid)).toContain('lib-cloned-demo');
+    expect(voices.map((v) => v.voiceUuid)).not.toContain('lib-clone-marin-vale');
+  });
+
+  it('cloneVoiceSample: returns the Hollow Tide transcript under DEMO_CAPTURE, and the canned one otherwise', async () => {
+    vi.resetModules();
+    vi.stubEnv('VITE_USE_MOCKS', 'true');
+    vi.stubEnv('VITE_DEMO_CAPTURE', '1');
+    const { HOLLOW_TIDE_CLONE_TRANSCRIPT } = await import('../mocks/marketing/hollow-tide');
+    const capture = await import('./api');
+    expect((await capture.api.cloneVoiceSample(new FormData())).transcript).toBe(
+      HOLLOW_TIDE_CLONE_TRANSCRIPT,
+    );
+
+    vi.resetModules();
+    vi.stubEnv('VITE_DEMO_CAPTURE', '0');
+    const plain = await import('./api');
+    expect((await plain.api.cloneVoiceSample(new FormData())).transcript).toBe(
+      'the quick brown fox jumped',
+    );
+  });
 });

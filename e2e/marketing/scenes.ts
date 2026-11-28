@@ -91,6 +91,16 @@ export const SCENES: Scene[] = [
     waitFor: '[data-testid="book-cover-hollow-tide-1"]',
   },
   {
+    /* Wiki Library-Management "cards view" shot: the "Voice engines loaded"
+       ribbon + stats + filters push the card grid below a 720px fold, so the
+       plain library-shelf frame shows no cards. Scroll the grid into frame. */
+    id: 'library-covers',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="book-cover-hollow-tide-1"]',
+    scrollTo: '[data-testid="book-cover-hollow-tide-1"]',
+  },
+  {
     id: 'analysing',
     hash: '#/books/hollow-tide-3/analysing',
     viewports: ['desktop', 'phone', 'tablet'],
@@ -151,6 +161,85 @@ export const SCENES: Scene[] = [
     id: 'voice-library',
     hash: '#/voices',
     viewports: ['desktop'],
+  },
+  /* ── v1.15 voice cloning (fs-38, #4864) ──
+     All four read the capture-only Hollow Tide "My voices" library
+     (HOLLOW_TIDE_VOICE_LIBRARY in src/mocks/marketing/hollow-tide.ts): the
+     series author Marin Vale (fictional) cloning her own voice. */
+  {
+    /* The clone wizard's consent step, filled in: the person, the
+       relationship, and the attestation box ticked — before any audio. */
+    id: 'clone-voice-consent',
+    hash: '#/voices',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'My voices', exact: true }).click({ timeout: 5000 });
+      await page.getByTestId('my-voices-clone-cta').click({ timeout: 5000 });
+      const wizard = page.getByTestId('clone-voice-wizard');
+      await wizard.getByLabel('person name').fill('Marin Vale');
+      await wizard.getByLabel('relationship').selectOption('self');
+      await wizard.getByLabel('I attest').check();
+    },
+    waitForAfterAction: '[data-testid="clone-voice-wizard"] input[aria-label="I attest"]:checked',
+    strict: true,
+  },
+  {
+    /* The sample step: a clip uploaded, the transcript field filled from the
+       (mock) Whisper pass, consent complete, so Continue is live. The
+       uploaded bytes are never decoded — mockCloneVoiceSample ignores the
+       form — so a tiny placeholder buffer is enough. */
+    id: 'clone-voice-sample',
+    hash: '#/voices',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'My voices', exact: true }).click({ timeout: 5000 });
+      await page.getByTestId('my-voices-clone-cta').click({ timeout: 5000 });
+      const wizard = page.getByTestId('clone-voice-wizard');
+      await wizard.getByLabel('Upload audio').setInputFiles({
+        name: 'marin-vale-sample.wav',
+        mimeType: 'audio/wav',
+        buffer: Buffer.from('RIFF'),
+      });
+      await wizard.getByLabel('transcript').waitFor({ timeout: 5000 });
+      await wizard.getByLabel('person name').fill('Marin Vale');
+      await wizard.getByLabel('I attest').check();
+      await wizard.getByLabel('transcript').scrollIntoViewIfNeeded();
+    },
+    waitForAfterAction: '[data-testid="clone-voice-wizard"] textarea[aria-label="transcript"]',
+    strict: true,
+  },
+  {
+    /* My voices with the cloned voice (Cloned badge + consent line, Qwen and
+       Coqui ready) beside the series' designed voices. */
+    id: 'voice-library-cloned',
+    hash: '#/voices',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'My voices', exact: true }).click({ timeout: 5000 });
+    },
+    waitForAfterAction: '[data-testid="voice-library-provenance-lib-clone-marin-vale"]',
+    scrollTo: '[data-testid="voice-library-card-lib-clone-marin-vale"]',
+    strict: true,
+  },
+  {
+    /* The Drowning Bell's Narrator cast on the cloned voice: the profile
+       drawer's "Voice from My voices" block names it. The drawer reads the
+       library from the store but never fetches it (only the My voices tab
+       does), so a cold deep-link renders the fallback "This voice" — the
+       action visits My voices first, as a user who cloned there would have,
+       then returns to the cast by hash so the store survives. */
+    id: 'cast-cloned-voice',
+    hash: '#/voices',
+    viewports: ['desktop'],
+    action: async (page) => {
+      await page.getByRole('button', { name: 'My voices', exact: true }).click({ timeout: 5000 });
+      await page.getByTestId('voice-library-card-lib-clone-marin-vale').waitFor({ timeout: 5000 });
+      await page.goto('/#/books/hollow-tide-1/cast?profile=narrator');
+      await page.getByTestId('cast-row-narrator').waitFor({ timeout: 20_000 });
+    },
+    waitForAfterAction: '[data-testid="profile-drawer-assigned-my-voice"]:has-text("Marin Vale")',
+    scrollTo: '[data-testid="profile-drawer-assigned-my-voice"]',
+    strict: true,
   },
   {
     id: 'coalfall-cast',

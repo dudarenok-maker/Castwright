@@ -10,6 +10,7 @@ import type {
 } from '../../lib/types';
 import type { CoverFraming } from '../../lib/cover-framing';
 import type { ListenProgress } from '../../lib/api';
+import type { VoiceLibraryEntry } from '../voice-library';
 import coalfallCastJson from './coalfall-cast.json';
 import coalfallManuscriptJson from './coalfall-manuscript.json';
 
@@ -31,6 +32,32 @@ const narrator = (): Character => ({
   voiceState: 'generated',
   tone: { warmth: 0.6, pace: 0.5, authority: 0.7, emotion: 0.4 },
   description: 'Measured, salt-weathered storyteller.',
+});
+
+/* v1.15 cloning scenes (#4864) — The Drowning Bell's Narrator is cast on the
+   author's own cloned voice (HOLLOW_TIDE_VOICE_LIBRARY, below). The slot
+   shape is exactly what the profile drawer's "Use a voice from My voices"
+   assign writes (profile-drawer.tsx assignMyVoice): a cloned entry gets BOTH
+   a `qwen-<uuid>` and an `xtts-<uuid>` slot (server /assign,
+   shouldWriteCoquiSlot), each with the libraryUuid/provenance markers. Book 1 only — the reused narrator in
+   Books 2-4 keeps the plain factory, so no other scene's cast changes. */
+export const HOLLOW_TIDE_CLONED_VOICE_UUID = 'lib-clone-marin-vale';
+
+const clonedNarrator = (): Character => ({
+  ...narrator(),
+  ttsEngine: 'qwen',
+  overrideTtsVoices: {
+    qwen: {
+      name: `qwen-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
+      libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+      provenance: 'cloned',
+    },
+    coqui: {
+      name: `xtts-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
+      libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+      provenance: 'cloned',
+    },
+  },
 });
 
 const inspCray = (): Character => ({
@@ -220,7 +247,7 @@ const drowningBell = bookState({
   coverGradient: ['#1F3A40', '#0B1416'],
   castConfirmed: true,
   chapters: BOOK1_CHAPTERS,
-  cast: [narrator(), inspCray(), drWren(), ...book1OnlyChars],
+  cast: [clonedNarrator(), inspCray(), drWren(), ...book1OnlyChars],
   completedSlugs: BOOK1_CHAPTERS.map((c) => c.slug),
 });
 
@@ -1091,4 +1118,109 @@ export const HOLLOW_TIDE_DRIFT_EVENTS: DriftEvent[] = [
     detected: '1 hr ago',
     suggestedAction: 'review',
   },
+];
+
+/* ── "My voices" library for the v1.15 cloning scenes (#4864) ──
+   Served by mockListVoiceLibrary under VITE_DEMO_CAPTURE=1 in place of the
+   generic ../voice-library.ts fixtures, so the My voices tab reads as one
+   coherent Hollow Tide library: the author's own cloned voice next to the
+   series' designed voices. Every person here is fictional — Marin Vale is
+   the series' invented author, and the consent record is hers, for her own
+   voice (`relationship: 'self'`), which is the "even in your own voice"
+   story the cloning shots tell. */
+/** The transcript the mock "Whisper" pass returns for a clone sample under
+    capture, and the cloned voice's stored master transcript. An original
+    line in the series' voice (no real text quoted). */
+export const HOLLOW_TIDE_CLONE_TRANSCRIPT =
+  'The bell rang twice beneath the harbour that night, and nobody on the quay would admit to hearing it.';
+
+const LIB_CREATED = '2026-11-14T09:00:00.000Z';
+const QWEN_READY = { status: 'ready' as const, baseModel: 'qwen3-tts-0.6b-2026-05' };
+
+const designedLibraryVoice = (
+  voiceUuid: string,
+  name: string,
+  persona: string,
+  characterId: string,
+  tags: string[],
+  updatedAt: string,
+): VoiceLibraryEntry => ({
+  voiceUuid,
+  name,
+  provenance: 'designed',
+  tags,
+  pinned: false,
+  languageCode: 'en',
+  persona,
+  engines: { qwen: { ...QWEN_READY } },
+  promotedFrom: { bookId: 'hollow-tide-1', characterId },
+  createdAt: LIB_CREATED,
+  updatedAt,
+});
+
+export const HOLLOW_TIDE_VOICE_LIBRARY: VoiceLibraryEntry[] = [
+  {
+    voiceUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+    name: 'Marin Vale',
+    provenance: 'cloned',
+    tags: ['narrator'],
+    pinned: true,
+    languageCode: 'en',
+    consent: {
+      personName: 'Marin Vale',
+      relationship: 'self',
+      permittedUse: 'personal',
+      attestedAt: LIB_CREATED,
+      attestedBy: 'Marin Vale',
+    },
+    master: {
+      clipFile: 'master.wav',
+      sampleRate: 24_000,
+      durationSeconds: 14,
+      transcript: HOLLOW_TIDE_CLONE_TRANSCRIPT,
+      transcriptSource: 'whisper',
+      captureMethod: 'record',
+    },
+    sampleTranscript: HOLLOW_TIDE_CLONE_TRANSCRIPT,
+    /* Ready on BOTH clone-capable engines, so the card shows the Qwen and
+       Coqui chips side by side and no readiness warning. */
+    engines: {
+      qwen: { ...QWEN_READY },
+      xtts: { status: 'ready', coquiVersion: '0.27.2' },
+    },
+    createdAt: LIB_CREATED,
+    updatedAt: '2026-11-15T10:00:00.000Z',
+  },
+  designedLibraryVoice(
+    'lib-hollow-cray',
+    'Insp. Cray',
+    'A dogged harbour-town inspector, baritone, measured and dry, 50s.',
+    'insp-cray',
+    ['detective'],
+    '2026-11-14T12:00:00.000Z',
+  ),
+  designedLibraryVoice(
+    'lib-hollow-wren',
+    'Dr. Wren',
+    'A precise, dryly humane coroner, alto, unhurried, 40s.',
+    'dr-wren',
+    [],
+    '2026-11-14T11:00:00.000Z',
+  ),
+  designedLibraryVoice(
+    'lib-hollow-elara',
+    'Elara Moss',
+    'A clipped harbormaster keeping a secret, mezzo, brisk, 40s.',
+    'elara-moss',
+    [],
+    '2026-11-14T10:30:00.000Z',
+  ),
+  designedLibraryVoice(
+    'lib-hollow-fenwick',
+    'Old Fenwick',
+    'A weathered fisherman who saw too much, gravelly bass, slow, 70s.',
+    'old-fenwick',
+    ['gruff'],
+    '2026-11-14T10:00:00.000Z',
+  ),
 ];

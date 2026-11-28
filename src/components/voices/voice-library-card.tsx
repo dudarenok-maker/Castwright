@@ -357,7 +357,9 @@ export function VoiceLibraryCard({ entry, onAssign, onEdit }: Props) {
               or played.
             </p>
             <p>
-              The original recording and everything derived from it are permanently deleted.
+              The original recording and the voice built from it are permanently deleted.
+              Chapters you&rsquo;ve already generated keep the voice until you re-cast that
+              character and regenerate them.
             </p>
             <p>
               Any character currently cast to &ldquo;{entry.name}&rdquo; will fail to render
