@@ -11,6 +11,15 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import type { VoiceLibraryEntry } from './voice-library.js';
 
+const bookRoot = vi.hoisted(() => ({ dir: '' }));
+// A real book folder needs a full state.json fixture; the migration only needs
+// `withBookOp` to hand it a bookDir, so resolve that to a tempdir path.
+vi.mock('./book-op-lock.js', async (importOriginal) => ({
+  ...(await importOriginal<typeof import('./book-op-lock.js')>()),
+  withBookOp: async (bookId: string, fn: (b: { bookDir: string }) => Promise<unknown>) =>
+    fn({ bookDir: join(bookRoot.dir, 'bk', bookId) }),
+}));
+
 let dir: string;
 let mig: typeof import('./clone-copy-autolink.js');
 let purge: typeof import('./purge-clone-artifacts.js');
@@ -59,6 +68,7 @@ async function seedCloneAndCopy(opts: { copyBytes?: string } = {}) {
 beforeEach(async () => {
   dir = mkdtempSync(join(tmpdir(), 'cw-clone-autolink-'));
   process.env.WORKSPACE_DIR = dir;
+  bookRoot.dir = dir;
   vi.resetModules();
   vi.stubGlobal('fetch', vi.fn().mockResolvedValue({ ok: true }));
   vl = await import('./voice-library.js');
@@ -151,5 +161,51 @@ describe('autolinkCloneCopies', () => {
     const r = await mig.autolinkCloneCopies();
     expect(r).toEqual({ linked: [], unmatched: 1 });
     expect((await vl.readEntry(COPY))?.provenance).toBe('designed');
+  });
+
+  describe('by recorded origin (clone revoked before the migration ran)', () => {
+    async function seedRevokedClone(opts: { slot?: unknown; clonePt?: boolean } = {}) {
+      await vl.writeEntry(
+        entry({ voiceUuid: CLONE, provenance: 'cloned', consent: { ...consent, revokedAt: NOW } }),
+      );
+      await vl.writeEntry(entry({ voiceUuid: COPY, promotedFrom, createdAt: '2026-02-01T00:00:00.000Z' }));
+      seedPt(COPY, 'bytes-no-longer-comparable');
+      if (opts.clonePt) seedPt(CLONE, 'different');
+      const slot = 'slot' in opts ? opts.slot : { provenance: 'cloned', libraryUuid: CLONE };
+      const bookDir = join(dir, 'bk', promotedFrom.bookId);
+      mkdirSync(join(bookDir, '.audiobook'), { recursive: true });
+      writeFileSync(
+        paths.castJsonPath(bookDir),
+        JSON.stringify({ characters: [{ id: promotedFrom.characterId, overrideTtsVoices: { qwen: slot } }] }),
+      );
+    }
+
+    it('links a copy whose character slot names exactly one revoked clone, revoked and purged', async () => {
+      await seedRevokedClone();
+      const r = await mig.autolinkCloneCopies();
+      expect(r).toEqual({ linked: [COPY], unmatched: 0 });
+      const copy = await vl.readEntry(COPY);
+      expect(copy?.clonedFrom).toBe(CLONE);
+      expect(copy?.consent?.revokedAt).toBe(NOW);
+      expect(existsSync(join(paths.qwenVoicesDir(), `qwen-${COPY}.pt`))).toBe(false);
+    });
+
+    it('leaves it designed and counts it when the slot is not a cloned one', async () => {
+      await seedRevokedClone({ slot: { provenance: 'designed', libraryUuid: CLONE } });
+      expect(await mig.autolinkCloneCopies()).toEqual({ linked: [], unmatched: 1 });
+      expect((await vl.readEntry(COPY))?.provenance).toBe('designed');
+      expect(existsSync(join(paths.qwenVoicesDir(), `qwen-${COPY}.pt`))).toBe(true);
+    });
+
+    it('leaves it designed when the named clone is not revoked', async () => {
+      await seedRevokedClone();
+      await vl.updateEntry(CLONE, (e) => (e?.consent ? { ...e, consent: { ...consent } } : null));
+      expect(await mig.autolinkCloneCopies()).toEqual({ linked: [], unmatched: 1 });
+    });
+
+    it('leaves it designed when the clone bytes still exist but differ', async () => {
+      await seedRevokedClone({ clonePt: true });
+      expect(await mig.autolinkCloneCopies()).toEqual({ linked: [], unmatched: 1 });
+    });
   });
 });

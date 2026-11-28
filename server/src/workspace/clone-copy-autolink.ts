@@ -14,8 +14,9 @@
 
    A copy is identified by evidence, never a guess: `designed` + `promotedFrom`
    + no `consent` + `.pt` bytes identical to a cloned entry's. A revoke erases
-   the clone's own `.pt`, so a copy of a clone revoked BEFORE this ran has
-   nothing to compare against; those are counted (`unmatched`) and left alone.
+   the clone's own `.pt`, so a copy of a clone revoked BEFORE this ran is
+   linked by recorded origin instead (`originRevokedClone`); a copy that
+   neither path identifies is counted (`unmatched`) and left alone.
 
    Idempotent without a marker file: a linked entry carries `clonedFrom` and is
    no longer a candidate. Writes go through `updateEntry` (per-uuid entry lock);
@@ -23,8 +24,10 @@
 
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { qwenVoicePtPath } from './paths.js';
-import { listEntries, readEntry, updateEntry } from './voice-library.js';
+import { castJsonPath, qwenVoicePtPath } from './paths.js';
+import { BOOK_GONE, withBookOp } from './book-op-lock.js';
+import { readJson } from './state-io.js';
+import { listEntries, readEntry, updateEntry, type VoiceLibraryEntry } from './voice-library.js';
 import { purgeCloneArtifacts } from './purge-clone-artifacts.js';
 
 async function sha256File(path: string): Promise<string | null> {
@@ -40,6 +43,41 @@ async function sha256File(path: string): Promise<string | null> {
 
 const ptHash = (voiceUuid: string): Promise<string | null> =>
   sha256File(qwenVoicePtPath(`qwen-${voiceUuid}`));
+
+/* Link by RECORDED ORIGIN (owner decision, #4952) for a copy whose clone was
+   revoked before this ran: revoke erased the clone's `.pt`, so bytes cannot be
+   compared. `/promote` copied from the qwen slot's `libraryUuid` of the
+   character named by the copy's own `promotedFrom` and never modified that
+   cast.json, so that slot still names the source clone unless the character was
+   reassigned since. Returns the clone's uuid only when every record agrees:
+   the character's qwen slot is `cloned`, names a library entry that is a
+   `cloned`, revoked clone with no `.pt` left on disk, created before the copy.
+   Anything else (book/character gone, slot reassigned or not cloned, clone not
+   revoked, or its bytes still present — then the hash compare already decided)
+   returns undefined and the copy stays designed. */
+async function originRevokedClone(
+  cand: VoiceLibraryEntry,
+  entries: VoiceLibraryEntry[],
+): Promise<string | undefined> {
+  const { bookId, characterId } = cand.promotedFrom ?? {};
+  if (!bookId || !characterId) return undefined;
+  let cast: { characters?: { id?: string; overrideTtsVoices?: Record<string, unknown> }[] } | null;
+  try {
+    const r = await withBookOp(bookId, ({ bookDir }) => readJson<typeof cast>(castJsonPath(bookDir)));
+    cast = r === BOOK_GONE ? null : r;
+  } catch {
+    return undefined;
+  }
+  const slot = cast?.characters?.find((c) => c.id === characterId)?.overrideTtsVoices?.qwen as
+    | { provenance?: unknown; libraryUuid?: unknown }
+    | undefined;
+  if (slot?.provenance !== 'cloned' || typeof slot.libraryUuid !== 'string') return undefined;
+  const clone = entries.find((e) => e.voiceUuid === slot.libraryUuid);
+  if (clone?.provenance !== 'cloned' || !clone.consent?.revokedAt || clone.clonedFrom) return undefined;
+  if (cand.createdAt < clone.createdAt) return undefined;
+  if ((await ptHash(clone.voiceUuid)) !== null) return undefined;
+  return clone.voiceUuid;
+}
 
 export async function autolinkCloneCopies(): Promise<{ linked: string[]; unmatched: number }> {
   const entries = await listEntries();
@@ -62,7 +100,7 @@ export async function autolinkCloneCopies(): Promise<{ linked: string[]; unmatch
   let unmatched = 0;
   for (const cand of candidates) {
     const h = await ptHash(cand.voiceUuid);
-    const cloneUuid = h ? cloneByHash.get(h) : undefined;
+    const cloneUuid = (h ? cloneByHash.get(h) : undefined) ?? (await originRevokedClone(cand, entries));
     if (!cloneUuid) {
       unmatched++;
       continue;
