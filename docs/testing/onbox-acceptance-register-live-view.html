@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="166" data-publish-id="2a647e3a96f6"></div>
+  <div hidden data-published-as="167" data-publish-id="ee2de6d4a8a9"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -198,7 +198,7 @@
     <!-- BEGIN GENERATED:strip -->
     <div class="stat"><div class="n owed">75</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
-    <div class="stat"><div class="n blk">7</div><div class="l">Blocked</div></div>
+    <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">0</div><div class="l">Unconfirmed</div></div>
     <div class="stat"><div class="n">11</div><div class="l">Still owed in A1 (of 60)</div></div>
     <div class="stat"><div class="n">06-01</div><div class="l">Oldest debt</div></div>
@@ -485,15 +485,14 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">A27</span><span class="iname">Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install</span><span class="risk hot">VRAM legs never driven; RAM trip seen only at an explicit ceiling</span><span class="chev">›</span></summary>
+      <summary><span class="num">A27</span><span class="iname">Sidecar auto-scaled RAM/VRAM recycle thresholds now actually apply on a fresh install</span><span class="risk hot">VRAM legs never driven; RAM trip accepted at an explicit ceiling</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Since #2179 a fresh install leaves <code>SIDECAR_RESTART_MB</code>, <code>SIDECAR_VRAM_RECYCLE_SOFT_MB</code> and <code>SIDECAR_VRAM_RESTART_MB</code> absent, so the sidecar computes its own limits: a hard restart at 70% of physical RAM, a soft recycle at 90% of the resident card's VRAM, and a hard restart at 98%. Before the fix those behaviours were silently disabled. No test suite checks that a real sidecar process ever crosses a live threshold and exits or recycles. The RAM soft-recycle tier is disabled by default, so only three tiers are live.</p>
         <ul>
           <li>Drive reserved VRAM on the sidecar's card up toward the 90% soft threshold (7,727 MB on the 8,585 MB card). Observe <code>/health</code> set <code>recycle_pending</code> and a clean chapter-boundary recycle, not a mid-chapter hard exit.</li>
           <li>Then, if the soft recycle did not relieve the pressure, continue toward the 98% hard threshold (8,414 MB). Observe the hard self-exit instead of an uncontrolled out-of-memory failure.</li>
-          <li>Drive the sidecar's own committed memory across the real auto-scaled RAM ceiling (47,583 MB on this box) and observe the sidecar self-exit with code 43 for the supervisor to respawn, not a silent stall or an uncontrolled crash. The trip and the code-43 exit have been proven only against a lower explicit ceiling, in a standalone Python process with no supervisor; a crossing at the auto-scaled number itself remains undriven and the row stays open on that seam. Reaching it on this box would exceed its commit headroom (29.44 GB physical free, commit 49.95/72.81 GB on 2026-09-21).</li>
         </ul>
-        <p><b>Proven so far:</b> On 2026-09-09 a fresh-install <code>.env</code> produced the expected auto thresholds at startup (RAM 47,583 MB, VRAM 7,727 and 8,414 MB, matching the box's real totals), and real chapter-render history since 2026-09-06 (23 sidecar starts, closest approach 22 MB under the soft ceiling) showed no soft or hard recycle, so no thrash. On 2026-09-21 the live <code>/health</code> of the production sidecar reported <code>mem_restart_mb=47582.758</code> (exactly 0.70 of physical RAM) and <code>vram_restart_mb=8413.51</code>, with <code>recycle_pending=False</code> at idle load; and the module's real <code>_memory_watchdog()</code>, driven inside a Python process against a 1,347 MB explicit ceiling, logged the trip and the process exited with code 43 (evidence: <a href="https://github.com/dudarenok-maker/Castwright/issues/3307">Castwright#3307</a>, closed).</p>
+        <p><b>Proven so far:</b> On 2026-09-09 a fresh-install <code>.env</code> produced the expected auto thresholds at startup (RAM 47,583 MB, VRAM 7,727 and 8,414 MB, matching the box's real totals), and real chapter-render history since 2026-09-06 (23 sidecar starts, closest approach 22 MB under the soft ceiling) showed no soft or hard recycle, so no thrash. On 2026-09-21 the live <code>/health</code> of the production sidecar reported <code>mem_restart_mb=47582.758</code> (exactly 0.70 of physical RAM) and <code>vram_restart_mb=8413.51</code>, with <code>recycle_pending=False</code> at idle load; and the module's real <code>_memory_watchdog()</code>, driven inside a Python process against a 1,347 MB explicit ceiling, logged the trip and the process exited with code 43 (evidence: <a href="https://github.com/dudarenok-maker/Castwright/issues/3307">Castwright#3307</a>, closed). That RAM trip, shown at an explicit lower ceiling, was accepted by the owner on 2026-11-28 (<a href="https://github.com/dudarenok-maker/Castwright/issues/4953">#4953</a>) in place of a crossing at the auto-scaled ceiling (47,583 MB), because that ceiling exceeds this box's commit headroom (29.44 GB physical free, commit 49.95/72.81 GB on 2026-09-21).</p>
         <p class="src">A fresh install, or a <code>server/.env</code> with the three vars removed. The RAM trip keys on the sidecar process's own committed-private bytes, not system commit, so an external memory hog cannot trigger it; allocate inside the sidecar process. GPU 0 must be idle of other lanes' work during a VRAM run; on 2026-09-09 a Qwen load meant for GPU 0 was auto-placed onto GPU 1 by capacity-aware placement, so pressure on a given card may need a pin and a sidecar restart · <a href="https://github.com/dudarenok-maker/Castwright/issues/2179">#2179</a> · <a href="https://github.com/dudarenok-maker/Castwright/pull/2210">PR #2210</a> · criteria: run sheet <code>docs/testing/onbox-sitting-multilanguage.md</code> A27 steps 1 to 4 (its step 2 still suggests an external hog, which does not work); <code>_mem_restart_threshold_mb</code> / <code>_vram_recycle_soft_threshold_mb</code> / <code>_vram_restart_threshold_mb</code> in <code>server/tts-sidecar/main.py</code> · short-to-medium</p>
       </div>
     </details>
@@ -1014,15 +1013,14 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">B101</span><span class="iname">Stage-runner extraction behaves identically on a real Ollama daemon and a real Gemini key</span><span class="risk low">3 checks, 1 decision</span><span class="chev">›</span></summary>
+      <summary><span class="num">B101</span><span class="iname">Stage-runner extraction behaves identically on a real Ollama daemon and a real Gemini key</span><span class="risk low">2 checks</span><span class="chev">›</span></summary>
       <div class="body">
         <p>The stage-runner extraction must give the same result on a real Gemini model as before the PR. Only parts of the Gemini half are still owed.</p>
         <ul>
-          <li><b>Same attributed-sentence count.</b> Chapter 1 of <i>The Coalfall Commission</i> on a <code>gemma-*</code> Gemini model gives the same number of attributed sentences on <code>main</code> as on the merge&#39;s first parent <code>802bab81</code>. Not met as written on 2026-11-28 (<code>gemma-4-26b-a4b-it</code>, reasoning off): base 77 or 78 in five runs; current 78 in four runs and 59 or 60 in five. The count is the model&#8217;s own, but the attribution request also differs by two commits that landed after #3349 (<code>65ce87ce</code> roster aliases, <code>067bd821</code> Auto output cap), so these runs neither implicate nor clear #3349. An owner decision is owed, with no issue tracking it: accept the spread as model non-determinism, or run <code>369b644e</code> against <code>802bab81</code> to isolate #3349.</li>
           <li><b>No <code>[gemini] generate failed</code> line on the current side.</b> A completed current-side run has none in <code>logs/server.log</code>. On 2026-11-28 every one of the 9 completed current runs had 1 to 3 (all status 503, Google capacity), while two base runs had none.</li>
           <li><b>Throttle chip on screen.</b> The analysing view shows the throttle chip only when the limiter actually waits. On 2026-11-28 the stream&#8217;s <code>throttle</code> events fired only on real waits (1.1 s to 56 s), but four browser attempts never caught the chip on screen.</li>
         </ul>
-        <div class="flag"><p><b>Proven so far.</b> 2026-11-26: the local half passed on <code>qwen3.5:4b</code> (5 characters and 55 attributed sentences on both sides, base 55 or 56; per-pass tokens per second recorded; stage outbox file written; no <code>attempt1.raw.txt</code>), evidence <code>docs/testing/onbox-batch-2-results/B101/</code>. 2026-11-28 (<a href="https://github.com/dudarenok-maker/Castwright/issues/4728">#4728</a>): the Gemini character count matched, 6 characters with the same names in all 14 completed <code>gemma-4-26b-a4b-it</code> runs (9 current, 5 base), evidence <code>docs/testing/onbox-gemini-rerun-results/B101/</code> (start with its <code>README.md</code>).</p></div>
+        <div class="flag"><p><b>Proven so far.</b> 2026-11-26: the local half passed on <code>qwen3.5:4b</code> (5 characters and 55 attributed sentences on both sides, base 55 or 56; per-pass tokens per second recorded; stage outbox file written; no <code>attempt1.raw.txt</code>), evidence <code>docs/testing/onbox-batch-2-results/B101/</code>. 2026-11-28 (<a href="https://github.com/dudarenok-maker/Castwright/issues/4728">#4728</a>): the Gemini character count matched, 6 characters with the same names in all 14 completed <code>gemma-4-26b-a4b-it</code> runs (9 current, 5 base). The attributed-sentence count on Chapter 1 (reasoning off) was base 77 or 78 in five runs and current 78 in four runs and 59 or 60 in five; the owner accepted that spread as model noise on 2026-11-28 (<a href="https://github.com/dudarenok-maker/Castwright/issues/4953">#4953</a>). Evidence <code>docs/testing/onbox-gemini-rerun-results/B101/</code> (start with its <code>README.md</code>).</p></div>
         <p>At Gemma&#8217;s default level the run stops with <code>analyzer-reasoning-overflow</code> (by design, <a href="https://github.com/dudarenok-maker/Castwright/issues/4723">#4723</a>), so run both sides with reasoning off: current through the saved setting; base <code>802bab81</code> has no reasoning setting, so on 2026-11-28 the same wire field (<code>thinkingConfig.thinkingLevel = MINIMAL</code>) was added to its requests by a fetch preload outside the repo (<code>inject-off.mjs.txt</code> in the evidence), which means the base side is not the unmodified app&#8217;s request. <code>gemma-4-31b-it</code> answered 503 when probed, so <code>gemma-4-26b-a4b-it</code> was used; expect 503s either way. Import only &#8220;Chapter One &#8212; The Knock&#8221; (lines 7-62 of the fixture, 3,445 characters) as a scratch book per side: in the whole fixture the parser&#8217;s &#8220;Chapter 1&#8221; is a 38-character title stub. Run the base side from a throwaway detached worktree at <code>802bab81</code> with its own port and workspace (copy the key as one line into its <code>server/.env</code>; remove its junctions before removing the worktree). Start the current server so that <code>logs/server.log</code> is written; on 2026-11-28 server output went to scratch files instead.</p>
         <p class="src">Local Ollama and a Gemini key &#183; <code>docs/testing/onbox-batch-2-results/B101/README.md</code> and <code>docs/testing/onbox-gemini-rerun-results/B101/README.md</code> &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; PR <a href="https://github.com/dudarenok-maker/Castwright/pull/3349">#3349</a> &#183; re-run <a href="https://github.com/dudarenok-maker/Castwright/issues/4728">#4728</a>, PR <a href="https://github.com/dudarenok-maker/Castwright/pull/4888">#4888</a> (merged)</p>
       </div>
@@ -1358,14 +1356,14 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E118</span><span class="iname">Companion handshake 401 opens the pairing screen on a phone with a fully downloaded library</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <summary><span class="num">E118</span><span class="iname">Companion handshake 401 opens the pairing screen on a phone with a fully downloaded library</span><span class="risk">Android phone or emulator; no GPU needed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>The handshake probe now routes a 401 from <code>GET /api/info</code> to the pairing screen. The automated tests pin that routing against a fake client. Only a human ear can check what the app does to audio that is playing while a re-pair completes. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR A)</p>
         <ul>
         <li><strong>Re-pair from the player, then keep listening.</strong> Open a book in the player and press play. Leave it playing: do not pause, because a pause saves the position and hides what this step checks. Trigger one re-pair from there (revoke the device, toggle Wi-Fi off and on) and pair again while the audio keeps going. Note by ear the last words you hear before the audio stops, which is the moment the pairing completes. The app must land on the library, not on the player. Open the book and press play: it must play with no error and pick up within a second or two of those words, not repeat several seconds you already heard.</li>
         </ul>
-        <div class="flag"><p><b>Proven so far.</b> 2026-11-26 (batch 2, <a href="https://github.com/dudarenok-maker/Castwright/issues/4699">#4699</a>), on the Android emulator rather than a phone: the pairing screen opens after a revoked device reconnects, re-pairing keeps the library, downloads and positions, with Wi-Fi and mobile data both off it does not open (weaker than the row&#39;s wording, as the run itself noted), and two more Wi-Fi toggles after the re-pair do not open it again (the server&#39;s <code>lastSeenAt</code> did not move, so the server side cannot confirm a probe reached it). Evidence <code>docs/testing/onbox-batch-2-results/E118/</code>.</p></div>
-        <p><em>Needs:</em> a real Android phone with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. In the app&#8217;s settings, &#8220;Auto-sync on reconnect&#8221; must be on and the Wi-Fi must be unmetered (or &#8220;Only on un-metered Wi-Fi&#8221; off), otherwise auto-sync returns before probing and no pairing screen opens. Batchable with E120. Clears when the observation is recorded.</p>
+        <div class="flag"><p><b>Proven so far.</b> 2026-11-26 (batch 2, <a href="https://github.com/dudarenok-maker/Castwright/issues/4699">#4699</a>), on the Android emulator: the pairing screen opens after a revoked device reconnects, re-pairing keeps the library, downloads and positions, with Wi-Fi and mobile data both off it does not open (weaker than the row&#39;s wording, as the run itself noted), and two more Wi-Fi toggles after the re-pair do not open it again (the server&#39;s <code>lastSeenAt</code> did not move, so the server side cannot confirm a probe reached it). Evidence <code>docs/testing/onbox-batch-2-results/E118/</code>.</p></div>
+        <p><em>Needs:</em> an Android phone or the Android emulator (the owner ruled on 2026-11-28, <a href="https://github.com/dudarenok-maker/Castwright/issues/4953">#4953</a>, that the emulator is acceptable for this row) with an APK built from PR A installed (<code>npm run apk:companion</code>), and the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set; no GPU. In the app&#8217;s settings, &#8220;Auto-sync on reconnect&#8221; must be on and the Wi-Fi must be unmetered (or &#8220;Only on un-metered Wi-Fi&#8221; off), otherwise auto-sync returns before probing and no pairing screen opens. Batchable with E120. Clears when the observation is recorded.</p>
       </div>
     </details>
     <details class="item">
@@ -1382,7 +1380,7 @@
       </div>
     </details>
     <details class="item">
-      <summary><span class="num">E120</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">a real Android phone; no GPU needed</span><span class="chev">›</span></summary>
+      <summary><span class="num">E120</span><span class="iname">Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair</span><span class="risk">Android phone or emulator; no GPU needed</span><span class="chev">›</span></summary>
       <div class="body">
         <p>Every companion token is now <code>scope: 'companion'</code> and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive <code>requireLanToken</code> against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail silently on the phone (spec §Q2), so a wrong allowlist row is close to invisible there. (<a href="https://github.com/dudarenok-maker/Castwright/issues/898">#898</a>, PR B)</p>
         <ol>
@@ -1396,7 +1394,7 @@
         <li><strong>Re-pair once.</strong> Steps 2-5 work again after one re-pair, not a loop.</li>
         <li><strong>Negative control.</strong> From a LAN browser on <code>https://castwright.local</code>, redeem a browser pairing: the full desktop UI still works (<code>/redeem-browser</code> mints <code>full</code>).</li>
         </ol>
-        <p><em>Needs:</em> a real Android phone with an APK built from PR A installed, the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set, and for step 7 a <code>device-tokens.json</code> written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with E118. No separate run sheet. Clears when each observation is recorded.</p>
+        <p><em>Needs:</em> an Android phone or the Android emulator (the owner ruled on 2026-11-28, <a href="https://github.com/dudarenok-maker/Castwright/issues/4953">#4953</a>, that the emulator is acceptable for this row) with an APK built from PR A installed, the desktop server on LAN HTTPS (<code>npm run dev:lan</code> or <code>npm run start:lan</code>) with <code>LAN_AUTH_TOKEN</code> set, and for step 7 a <code>device-tokens.json</code> written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with E118. No separate run sheet. Clears when each observation is recorded.</p>
       </div>
     </details>
 
@@ -1441,7 +1439,7 @@
 
   <section class="group is-blocked" id="blocked">
     <header>
-      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">7 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">BLK</span> Blocked — hardware not available <span class="gcount">6 rows</span></h3>
     </header>
     <details class="item">
       <summary><span class="num">BLK101</span><span class="iname">AMD GPU support Phase 2</span><span class="risk">Dormant, not broken</span><span class="chev">›</span></summary>
@@ -1504,18 +1502,6 @@
         </ul>
         <p><b>Why this box cannot reach it.</b> This box is dual-NVIDIA; this will not move until AMD/ROCm hardware exists — same constraint as the AMD GPU support Phase 2 and ORT pip-consistency marker rows.</p>
         <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2813">#2813</a> · branch <code>fix/sidecar-rocm-device-normalisation</code> · PR review passes 1–2</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">BLK107</span><span class="iname">Kokoro&#39;s silent-CPU-fallback alarm stays quiet on a machine with no CUDA device</span><span class="risk">Blocked · no CUDA-less machine</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>Since #2643 the sidecar resolves an unpinned Kokoro&#39;s <code>"auto"</code> intent into the device the load actually attempts, so <code>fell_back</code> (the alarm behind <code>/health</code>&#39;s <code>stale_reason: 'cpu_fallback'</code>) fires on a genuine CUDA-to-CPU fallback. When no usable CUDA build or device exists, the resolved intent is <code>cpu</code>, so a CPU landing there is not a fallback. That negative control is the one part of the old A33 row that never passed.</p>
-        <ul>
-          <li>On a machine with no CUDA build or device at all, with <code>KOKORO_DEVICE</code> unset and no admission override, trigger a real Kokoro synth (a plain <code>POST /synthesize</code>, or let <code>PRELOAD_KOKORO</code> warm Kokoro up). <code>fell_back</code> stays <code>False</code>: Kokoro&#39;s resident entry in <code>/health</code> carries no <code>stale_reason: 'cpu_fallback'</code>.</li>
-        </ul>
-        <div class="flag"><p><b>Proven so far.</b> The rest of the alarm passed on the owner&#39;s box (2026-08-27 and 2026-09-23); on 2026-09-23 this negative control was attempted there with no pins and <code>CUDA_VISIBLE_DEVICES=''</code>, but Kokoro still ran on CUDA (<code>cuda_verified=true</code>), so a CUDA-less state is unreachable on that box. Evidence <code>docs/testing/onbox-batch-results/a33.md</code>.</p></div>
-        <p><b>Why this box cannot reach it.</b> The owner&#39;s box has two CUDA-capable cards, and masking them per process does not hide them from this sidecar&#39;s ORT build. Needs a CPU-only machine with a Kokoro-capable sidecar installed.</p>
-        <p class="src"><a href="https://github.com/dudarenok-maker/Castwright/issues/2643">#2643</a> · <a href="https://github.com/dudarenok-maker/Castwright/issues/2647">#2647</a></p>
       </div>
     </details>
   </section>
