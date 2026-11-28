@@ -31,8 +31,8 @@ Beyond this wiki, the app has its own **Help** page (`#/help`, reached from the 
 
 ## 4. Upload → Analyze → Cast → Generate → Listen
 
-That's the whole pipeline — here it is mid-analysis on the demo book itself, the cast roster filling in live as the analyzer reads. Each stage gets its own wiki page — see the
+That's the whole pipeline — here it is mid-analysis, the cast roster filling in live as the analyzer reads. Each stage gets its own wiki page — see the
 sidebar's "Core journey" section for [Uploading a Book](Uploading-a-Book)
 onward.
 
-![The Coalfall Commission mid-analysis, cast roster building live](images/getting-started/03-quickstart-flow.png)
+![The Tidewatcher's Oath mid-analysis, cast roster building live](images/getting-started/03-quickstart-flow.png)

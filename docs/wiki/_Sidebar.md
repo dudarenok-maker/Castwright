@@ -15,6 +15,7 @@
 ### Cast & Voices
 - [Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices)
 - [Designing a Voice](Designing-a-Voice)
+- [Cloning a Voice](Cloning-a-Voice)
 
 ### Full breadth
 - [Voice Engines](Voice-Engines)
