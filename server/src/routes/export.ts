@@ -800,9 +800,10 @@ function publishSyncPath(job: BookExportJob): void {
 
 /* Flip the in-flight marker on the job record around an un-cancellable
    sync-folder copy, patching the map entry the same way (DELETE may already
-   have set it to `cancelling`). A cancelled job stays `cancelling` until the
-   copy ends; the modal reads this marker after a cancel to know whether to
-   keep waiting for the copy's outcome (#4228). Synchronous. */
+   have set it to `cancelling`). A job cancelled mid-copy stays `cancelling`
+   until the copy ends, so `syncPath` can still be set while this reads true;
+   it is exposed on the job for clients, none of which reads it today
+   (#4228). Synchronous. */
 function publishSyncCopyInFlight(job: BookExportJob, inFlight: boolean): void {
   job.syncCopyInFlight = inFlight;
   const cur = jobs.get(job.id);
@@ -810,9 +811,9 @@ function publishSyncCopyInFlight(job: BookExportJob, inFlight: boolean): void {
   jobs.set(job.id, { ...cur, syncCopyInFlight: inFlight });
 }
 
-/* A builder that resolves does not mean the export is still wanted: a zip
-   builder registers every chapter up front and can finish after DELETE has
-   already asked the job to stop. Checked before each step that makes
+/* A builder that resolves does not mean the export is still wanted: a build
+   can finish after DELETE has already asked the job to stop (the zip builders
+   register one source stream at a time and check the signal between them). Checked before each step that makes
    the artifact visible (sync-folder copy, rename into place, `done`) so a
    cancelled job ends cancelled. Drops `artifact` first, which must be a
    job-private path (the `.partial-<id>` build or the mp3-folder staging
@@ -960,8 +961,8 @@ async function runExportJob(
           const authoredSyncDir = join(syncFolder, sanitiseForZip(state.author));
           const bookSubfolder = sanitiseForZip(state.title);
           /* The copy takes no signal, so a cancel cannot stop it: mark it in
-             flight so a client that cancels meanwhile keeps following the job
-             until `syncPath` (or its absence) is final (#4228). */
+             flight; a job cancelled meanwhile stays `cancelling` until the copy
+             ends and `syncPath` is final (#4228). */
           publishSyncCopyInFlight(job, true);
           try {
             const synced = await writeFolderToSyncFolder(staging, authoredSyncDir, bookSubfolder);
