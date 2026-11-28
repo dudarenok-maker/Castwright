@@ -417,7 +417,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
     /* Pin the message, not just "something warned" — synthesiseChapter has
        four other console.warn sites, and this exact string is what register
-       row A19 tells the operator to grep the server log for. */
+       row A19 (removed from the register 2026-11-28 by owner ruling, #4883) told the operator to grep the server log for. */
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('evict failed'),
       expect.anything(),
@@ -435,7 +435,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
     /* Pin the message, not just "something warned" — synthesiseChapter has
        four other console.warn sites, and this exact string is what register
-       row A19 tells the operator to grep the server log for. */
+       row A19 (removed from the register 2026-11-28 by owner ruling, #4883) told the operator to grep the server log for. */
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('evict failed'),
       expect.anything(),
@@ -491,7 +491,7 @@ describe('synthesiseChapter — mixed-phase evict failure isolation (#1893)', ()
     expect(result.segments.filter((s) => s.kind !== 'title')).toHaveLength(3);
     /* Pin the message, not just "something warned" — synthesiseChapter has
        four other console.warn sites, and this exact string is what register
-       row A19 tells the operator to grep the server log for. */
+       row A19 (removed from the register 2026-11-28 by owner ruling, #4883) told the operator to grep the server log for. */
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining('evict failed'),
       expect.anything(),

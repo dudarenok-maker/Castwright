@@ -449,7 +449,7 @@ full `cuda:0` and a roomy `cuda:1`, `idle_evict("cuda:1")` is what gets called
 and `_same_card("cuda:0", "cuda:1")` declines. Unpinned, this acceptance can pass
 or fail for entirely the wrong reason.
 
-Group with row A19 (the #1893 evict acceptance) — same card, same book setup.
+Group with row A19 (removed from the register 2026-11-28 by owner ruling, #4883) (the #1893 evict acceptance) — same card, same book setup.
 
 ## 7. Out of scope
 

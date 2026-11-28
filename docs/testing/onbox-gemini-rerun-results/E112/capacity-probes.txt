@@ -1,0 +1,7 @@
+# One tiny direct generateContent request per probe: gemma-4-31b-it, thinkingLevel MINIMAL, maxOutputTokens 64.
+# Wait ladder 10/20/40/60 min; stops at the first HTTP 200. DONE= is the probe script's own end marker.
+2026-11-28 10:51:44 +11:00 model=gemma-4-31b-it after-wait=0min HTTP 503 { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+2026-11-28 11:01:45 +11:00 model=gemma-4-31b-it after-wait=10min HTTP 503 { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+2026-11-28 11:21:45 +11:00 model=gemma-4-31b-it after-wait=20min HTTP 503 { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+2026-11-28 12:02:12 +11:00 model=gemma-4-31b-it after-wait=40min HTTP 200 { "candidates": [ { "content": { "parts": [ { "text": "", "thought": true }, { "text": "OK" } ], "role": "model" }, "finishReason": "STOP", "index": 0 } ], "usageMetadata": { "promptTokenCount": 8, "candidatesTokenCount": 1, "totalTokenCount": 9, "promptTokensDetails": [ { "modality": "TEXT", "tokenCount": 8 } ], "serviceTier": "standard" }, "modelVersion": "gemma-4-31b-it", "responseId": "-icKa8_wFI64694P8NqSwAM" }
+DONE=OK

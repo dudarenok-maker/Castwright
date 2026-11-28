@@ -9,6 +9,8 @@ model to manage — it's a cloud voice catalog you pick from directly on a
 character, in the Profile Drawer's "Model voice" picker.
 
 See [Installing Castwright](Installing-Castwright) for setup steps for each.
+Qwen and Coqui are also the two engines that can carry a cloned voice; see
+[Cloning a Voice](Cloning-a-Voice).
 
 ## Kokoro (always-available fallback)
 

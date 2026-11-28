@@ -5,7 +5,7 @@ from spikes.srv36.embed import embed_pcm
 from spikes.srv36.metrics import cosine, centroid
 from spikes.srv36.segments_io import slice_pcm
 ADIR=r"C:/AudiobookWorkspace/books/Derek Landy/Skulduggery Pleasant/Scepter of the Ancients/audio"
-OUT=r"C:/Users/dudar/srv36-listen2"; os.makedirs(OUT,exist_ok=True)
+OUT=os.path.join(os.path.expanduser("~"),"srv36-listen2"); os.makedirs(OUT,exist_ok=True)
 SR=16000; FLOOR=2.0; random.seed(11)
 TARGETS={"narrator":"narrator","skulduggery":"skulduggery-pleasant","stephanie":"stephanie-edgley"}
 # already-sent (file_stem, start) to exclude

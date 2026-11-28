@@ -198,7 +198,7 @@ jobs:
       # prose contradicts its own source — which is exactly what happened on
       # this PR, undetected, because nothing gated codegen drift. Gated on
       # `openapi` explicitly (its dedicated CI_ONLY key) and on `step_test`
-      # too — its glob is src/**, so a hand-edit of the generated file is
+      # too — its globs are src/** and e2e/**, so a hand-edit of the generated file is
       # caught the same way (was: openapi || frontend || shared).
       # leg: openapi:types
       - name: OpenAPI types up to date

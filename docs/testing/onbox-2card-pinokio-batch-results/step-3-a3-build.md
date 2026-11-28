@@ -1,6 +1,6 @@
 # Step 3 — A3 build: Task 16/16.5 auto-revert + toast (#2974)
 
-Parent #2950, campaign #2435. Builds register row A3's task 16/16.5 —
+Parent #2950, campaign #2435. Builds register row A3 (removed from the register 2026-11-28 by owner ruling, #4883)'s task 16/16.5 —
 "auto-revert on a repeated bad GPU pin + its operator toast" — per the scope
 already designed in #1230 item 2. Test-first, with a real mutation run.
 

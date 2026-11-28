@@ -2899,13 +2899,38 @@ test('CLI: without --strict, Check C\'s exploratory half does not print and the 
 });
 
 test('CLI: with --strict, Check C\'s exploratory half runs and prints under its own opt-in label, still non-fatal', () => {
-  const result = runCli(['--strict']);
-  assert.equal(result.status, 0);
-  assert.match(
-    result.stdout,
-    /Check C — subject not found in any current register heading \(--strict, exploratory, not failing/,
-  );
-  assert.match(result.stdout, /Check C\u0027s exploratory .* found \d+ warning\(s\) above/);
+  // A scratch tree carries its own flagged citation, so the test does not depend on the real tree
+  // happening to hold a stale one (the exploratory half prints its label only when it has an entry).
+  // A heading that cites an existing row with no subject of its own, for a subject no register
+  // heading carries, lands in `unknownSubject` (not the fatal `wrongId`).
+  const REGISTER_PATH = join(HERE, '..', '..', 'docs', 'testing', 'onbox-acceptance-register.md');
+  const { rows } = parseRegisterRows(readFileSync(REGISTER_PATH, 'utf8'));
+  const subjectlessId = [...rows].find(([, row]) => row.issues.size === 0)?.[0];
+  assert.ok(subjectlessId, 'fixture assumption: at least one real register row carries no issue/PR number');
+  const subject = 999999;
+  const originalTarget = readFileSync(join(REAL_REPO, 'docs', 'testing', 'onbox-sitting-plan.md'), 'utf8');
+
+  const sandbox = makeSandbox();
+  try {
+    // Control: the unmutated scratch tree has nothing for the exploratory half to flag.
+    const control = runCli(['--strict'], sandbox.cli);
+    assert.equal(control.status, 0, control.stderr);
+    assert.doesNotMatch(control.stdout, /Check C — subject not found/);
+
+    writeFileSync(sandbox.sittingPlan, `${originalTarget}\n### ${subjectlessId} · Synthetic exploratory pin (#${subject})\n`);
+    const result = runCli(['--strict'], sandbox.cli);
+    assert.equal(result.status, 0, `${result.stdout}\n${result.stderr}`);
+    assert.match(
+      result.stdout,
+      /Check C — subject not found in any current register heading \(--strict, exploratory, not failing/,
+    );
+    assert.match(result.stdout, new RegExp(`cited ${subjectlessId} for #${subject}`));
+    const found = result.stdout.match(/found (\d+) warning\(s\) above/);
+    assert.ok(found, result.stdout);
+    assert.ok(Number(found[1]) >= 1, `expected at least one warning, got ${found[1]}`);
+  } finally {
+    sandbox.dispose();
+  }
 });
 
 test('CLI: Check C\'s wrongId half is FATAL and runs whether or not --strict is passed', () => {

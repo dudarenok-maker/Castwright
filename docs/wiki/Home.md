@@ -1,7 +1,7 @@
 # Castwright
 
 **Any book, performed by a full cast — kept true, kept yours, book after book.**
-*And soon: even in your own voice.*
+*And even in your own voice.*
 
 ## The problem this solves
 
@@ -26,7 +26,7 @@ This is the whole bet: the expensive part — finding the cast, designing the vo
 1. **[Getting Started](Getting-Started)** — install, let the app check its own readiness, and hear the bundled demo book before you import anything of your own.
 2. **[Uploading a Book](Uploading-a-Book)** and **[Manuscript Management](Manuscript-Management)** — bring in a manuscript and shape it: chapter boundaries, speaker attribution, an LLM script-review pass.
 3. **[Analysis & the Analyzer](Analysis-and-the-Analyzer)** and **[Reviewing Low-Confidence Speaker Tags](Reviewing-Low-Confidence-Speaker-Tags)** — Castwright reads the book and finds the cast; you confirm the calls it wasn't sure about.
-4. **[Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices)** and **[Designing a Voice](Designing-a-Voice)** — meet the cast, assign or design a voice for every character.
+4. **[Reviewing Cast & Assigning Voices](Reviewing-Cast-and-Assigning-Voices)**, **[Designing a Voice](Designing-a-Voice)** and **[Cloning a Voice](Cloning-a-Voice)** — meet the cast, assign or design a voice for every character, or cast your own voice (or a family member's, with their permission).
 5. **[Generating Audio](Generating-Audio)** and **[The Quality Gate](The-Quality-Gate)** — render the performance; every line clears an automatic acoustic and transcript check before it counts as done.
 6. **[Listening & Revising](Listening-and-Revising)** and **[Exporting](Exporting)** — listen in the app, regenerate anything that doesn't land, then send the finished audiobook to your player, your library, or your phone.
 

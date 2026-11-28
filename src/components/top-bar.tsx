@@ -7,6 +7,7 @@ import {
   IconWarning,
   IconMenu,
   IconCheck,
+  IconLayers,
   CastwaveMark,
 } from '../lib/icons';
 import { Avatar } from './primitives';
@@ -374,8 +375,9 @@ export function TopBar({
      Mechanism: the central nav + pill cluster sits inside an
      `overflow-x-auto` flex container — on desktop it fits the row; on
      phones it becomes a horizontally-swipeable strip with the same
-     ordering. Logo + projectTitle + theme + avatar stay anchored at the
-     edges via shrink-0. This keeps the DOM single-render (unit tests
+     ordering. Logo, theme and avatar stay anchored at the edges via
+     shrink-0; the projectTitle button carries no shrink-0 and flexes
+     (its text truncates) instead. This keeps the DOM single-render (unit tests
      that getByTestId continue to find exactly one analysis-pill /
      generation-pill / tab button — no dual-render breakage).
 
@@ -389,12 +391,13 @@ export function TopBar({
           tip a hair past the 412px phone viewport (a 9px overflow that surfaced
           only on the Linux mobile-chrome runner, where font metrics render
           wider than Windows/macOS); the middle strip already scrolls. Paired
-          with hiding the redundant VersionPill on phone (below) so the clip is
-          pure insurance and never cuts a visible control (Admin, Help, Theme and
-          Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
+          with hiding the redundant VersionPill below 2xl (below) so the clip is
+          pure insurance and, from 412 px up, never cuts a visible control (Admin,
+          Help, Theme and Account live in the phone drawer, not inline, below `sm`);
+          below ~390 px mid-render it can still cut one, see #4879. clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
-      <div className="max-w-[1500px] mx-auto px-3 sm:px-6 h-16 flex items-center gap-3 sm:gap-8 overflow-x-clip">
+      <div className="max-w-[1500px] mx-auto px-3 md:px-6 h-16 flex items-center gap-2 sm:gap-1 md:gap-2 lg:gap-3 xl:gap-4 2xl:gap-8 overflow-x-clip">
         <NavDrawer
           stage={stage}
           view={view}
@@ -412,32 +415,42 @@ export function TopBar({
           className="font-bold text-base tracking-tight inline-flex items-center gap-2 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
         >
           <CastwaveMark className="w-6 h-6 shrink-0" aria-hidden="true" />
-          {/* Wordmark text hidden on phone (#916) — the mark alone is the home
-              affordance there; this reclaims ~85px so the right cluster fits. */}
-          <span className="hidden sm:inline">Castwright</span>
+          {/* Wordmark text hidden below 2xl (#916, #4691; owner decision 2026-11-28)
+              — the mark alone is the home affordance there; this reclaims ~85px so
+              the right cluster fits (Help / Theme / Account stay inline from sm up)
+              and all six tabs fit from 1280 during a render. */}
+          <span className="hidden 2xl:inline">Castwright</span>
         </button>
+        {/* The title is the one flexing item, but it keeps a floor (owner decision
+            2026-11-28): >= 44px (the touch target) and room for the `/`, the
+            arrow (md+) and a few characters + ellipsis, so it never collapses to
+            nothing nor lets its `/` / arrow spill over the next control. */}
         {projectTitle && (
           <button
             onClick={onTitleClick ?? onHome}
-            className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors min-w-0 min-h-[44px] shrink-0"
+            title={projectTitle}
+            data-testid="topbar-title"
+            className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors min-w-[44px] md:min-w-[64px] min-h-[44px]"
           >
             <span className="text-ink/40 shrink-0">/</span>
-            <span className="font-medium text-ink truncate max-w-[140px] sm:max-w-none">
+            <span className="font-medium text-ink truncate min-w-[3ch] max-w-[140px] lg:max-w-[240px] xl:max-w-none">
               {projectTitle}
             </span>
-            <IconArrowLeft className="w-3.5 h-3.5 text-ink/40 shrink-0 hidden sm:inline" />
+            <IconArrowLeft className="w-3.5 h-3.5 text-ink/40 shrink-0 hidden md:inline" />
           </button>
         )}
         {/* Middle scrollable strip — flex-1 + overflow-x-auto so it claims
-            the leftover space and scrolls horizontally when narrow. */}
-        <div className="flex-1 min-w-0 flex items-center gap-3 overflow-x-auto scrollbar-thin">
+            the leftover space and scrolls horizontally when narrow. From xl it
+            takes its full tab width (xl:min-w-max) and the book title gives way
+            instead, so no inline tab is ever scrolled out of sight (#4691). */}
+        <div className="flex-1 min-w-0 xl:min-w-max flex items-center gap-3 overflow-x-auto scrollbar-thin">
           {stage === 'ready' && (
             <nav className="hidden xl:flex items-center gap-1 bg-ink/4 rounded-full p-1 shrink-0">
               {TABS.map((t) => (
                 <button
                   key={t.id}
                   onClick={() => setView(t.id)}
-                  className={`px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${view === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
+                  className={`px-3 2xl:px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${view === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
                 >
                   {t.label}
                 </button>
@@ -450,7 +463,7 @@ export function TopBar({
                 <button
                   key={t.id}
                   onClick={() => onGlobal(t.id)}
-                  className={`px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${stage === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
+                  className={`px-3 2xl:px-4 py-1.5 min-h-[44px] fine-pointer:min-h-0 rounded-full text-sm font-medium transition-colors ${stage === t.id ? 'bg-white text-ink shadow-card' : 'text-ink/60 hover:text-ink'}`}
                 >
                   {t.label}
                 </button>
@@ -470,7 +483,7 @@ export function TopBar({
             <StatusPill summary={statusSummary} detail={statusDetail} />
           </div>
         )}
-        <div className="flex items-center gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-1 md:gap-2 lg:gap-3 shrink-0">
           {/* On phone the Admin pill moves into the hamburger drawer (#916) on
               EVERY stage (#4567: the drawer now exists on no-nav stages too, and
               its trigger would otherwise push an inline pill off-screen). sm+
@@ -487,13 +500,15 @@ export function TopBar({
               data-testid="topbar-queue-chip"
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold min-h-[44px] fine-pointer:min-h-0"
             >
-              Queue · {queueCount}
+              <IconLayers className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              {queueCount}
             </button>
           )}
-          {/* Hidden on phone — the version is also in the footer + Account, and
-              dropping it here gives the book-route top bar comfortable margin at
-              the 412px viewport (see overflow-x-clip note above). */}
-          <span className="hidden sm:inline-flex">
+          {/* Hidden below 2xl (#4691; owner decision 2026-11-28) — the version is also
+              in the footer + Account, and dropping it here gives the book-route top
+              bar room for Help / Theme / Account and every tab (see overflow-x-clip
+              note above). */}
+          <span className="hidden 2xl:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
           {/* Below sm, Help / Theme / Account live in the drawer rows on every

@@ -1,0 +1,79 @@
+2026-11-28 09:08:48.917 [server] listening on http://localhost:8100
+2026-11-28 09:08:48.917 [server] workspace root: C:\Claude\Projects\wt-onbox-gemini-rerun\castwright-workspace
+2026-11-28 09:08:48.949 [sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)
+2026-11-28 09:20:36.072 [analysis] request received manuscript="mns_VUqreAlVdr" model="gemma-4-31b-it" fresh=true
+2026-11-28 09:20:36.166 [analysis] start manuscript="mns_VUqreAlVdr" engine=gemini model="gemma-4-31b-it"
+2026-11-28 09:20:36.271 [analysis] mns=mns_VUqreAlVdr phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 09:20:36.371 [analysis] mns=mns_VUqreAlVdr phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 09:20:36.372 [analysis] mns=mns_VUqreAlVdr phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 09:20:36.465 [analysis] mns=mns_VUqreAlVdr phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+2026-11-28 09:20:36.466 [analysis] mns=mns_VUqreAlVdr phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 09:20:36.468 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemma 4 31B…
+2026-11-28 09:20:36.472 [analysis] mns=mns_VUqreAlVdr phase=1 Attributing 1 chapter with Gemma 4 31B…
+2026-11-28 09:20:36.473 [analysis] mns=mns_VUqreAlVdr phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 09:20:36.474 [analysis] mns=mns_VUqreAlVdr phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 09:20:38.125 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:21:21.914 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-28 09:22:07.134 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting.
+2026-11-28 09:22:11.650 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=32920 firstAnswerMs=32922 thoughtPartsBeforeAnswer=1
+2026-11-28 09:22:11.655 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 cast — large chapter, section 1/5 (3,442 chars) to fit the model context…
+2026-11-28 09:22:38.668 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:22:56.597 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-28 09:23:25.402 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:23:41.771 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 30s, still waiting.
+2026-11-28 09:24:13.302 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=34620 firstAnswerMs=34621 thoughtPartsBeforeAnswer=1
+2026-11-28 09:24:14.379 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:24:38.766 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:24:59.243 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 46s, still waiting.
+2026-11-28 09:25:44.462 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting.
+2026-11-28 09:25:58.540 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:25:58.541 [analysis] mns=mns_VUqreAlVdr phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: Gemini gemma-4-31b-it stream went idle for 45000ms with no chunk.
+2026-11-28 09:25:58.542 [analysis] mns=mns_VUqreAlVdr phase=0 Continuing without chapter 1 in the cast roster (5m 22s spent). Re-run analysis to retry.
+2026-11-28 09:25:58.551 [analysis] mns=mns_VUqreAlVdr phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 09:25:58.552 [analysis] mns=mns_VUqreAlVdr phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-28 09:25:58.552 [analysis] mns=mns_VUqreAlVdr phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 09:25:58.554 [analysis] main run drained manuscript=mns_VUqreAlVdr
+2026-11-28 09:27:46.674 [analysis] request received manuscript="mns_VUqreAlVdr" model="gemma-4-31b-it" fresh=true
+2026-11-28 09:27:46.681 [analysis] start manuscript="mns_VUqreAlVdr" engine=gemini model="gemma-4-31b-it"
+2026-11-28 09:27:46.711 [analysis] mns=mns_VUqreAlVdr phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 09:27:46.720 [analysis] mns=mns_VUqreAlVdr phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 09:27:46.720 [analysis] mns=mns_VUqreAlVdr phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 09:27:46.726 [analysis] mns=mns_VUqreAlVdr phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+2026-11-28 09:27:46.727 [analysis] mns=mns_VUqreAlVdr phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 09:27:46.727 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemma 4 31B…
+2026-11-28 09:27:46.728 [analysis] mns=mns_VUqreAlVdr phase=1 Attributing 1 chapter with Gemma 4 31B…
+2026-11-28 09:27:46.728 [analysis] mns=mns_VUqreAlVdr phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 09:27:46.729 [analysis] mns=mns_VUqreAlVdr phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 09:28:01.891 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:28:32.194 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-28 09:28:48.041 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:29:17.535 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting.
+2026-11-28 09:29:48.256 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 09:29:48.257 [analysis] mns=mns_VUqreAlVdr phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailable"}}
+2026-11-28 09:29:48.258 [analysis] mns=mns_VUqreAlVdr phase=0 Continuing without chapter 1 in the cast roster (2m 2s spent). Re-run analysis to retry.
+2026-11-28 09:29:48.263 [analysis] mns=mns_VUqreAlVdr phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 09:29:48.264 [analysis] mns=mns_VUqreAlVdr phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-28 09:29:48.264 [analysis] mns=mns_VUqreAlVdr phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 09:29:48.265 [analysis] main run drained manuscript=mns_VUqreAlVdr
+2026-11-28 10:00:48.131 [analysis] request received manuscript="mns_VUqreAlVdr" model="gemma-4-31b-it" fresh=true
+2026-11-28 10:00:48.153 [analysis] start manuscript="mns_VUqreAlVdr" engine=gemini model="gemma-4-31b-it"
+2026-11-28 10:00:48.177 [analysis] mns=mns_VUqreAlVdr phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 10:00:48.185 [analysis] mns=mns_VUqreAlVdr phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 10:00:48.185 [analysis] mns=mns_VUqreAlVdr phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 10:00:48.190 [analysis] mns=mns_VUqreAlVdr phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…
+2026-11-28 10:00:48.191 [analysis] mns=mns_VUqreAlVdr phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 10:00:48.191 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemma 4 31B…
+2026-11-28 10:00:48.192 [analysis] mns=mns_VUqreAlVdr phase=1 Attributing 1 chapter with Gemma 4 31B…
+2026-11-28 10:00:48.192 [analysis] mns=mns_VUqreAlVdr phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 10:00:48.192 [analysis] mns=mns_VUqreAlVdr phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 10:01:10.778 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 10:01:33.560 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.
+2026-11-28 10:01:50.500 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 10:02:19.004 [analysis] mns=mns_VUqreAlVdr phase=0 Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting.
+2026-11-28 10:03:03.583 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 10:03:03.583 [analysis] mns=mns_VUqreAlVdr phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: {"error":{"message":"{\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":503,"status":"Service Unavailable"}}
+2026-11-28 10:03:03.584 [analysis] mns=mns_VUqreAlVdr phase=0 Continuing without chapter 1 in the cast roster (2m 15s spent). Re-run analysis to retry.
+2026-11-28 10:03:03.589 [analysis] mns=mns_VUqreAlVdr phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:03:03.590 [analysis] mns=mns_VUqreAlVdr phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-28 10:03:03.590 [analysis] mns=mns_VUqreAlVdr phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:03:03.591 [analysis] main run drained manuscript=mns_VUqreAlVdr

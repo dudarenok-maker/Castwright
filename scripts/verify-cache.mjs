@@ -448,7 +448,11 @@ export const STEPS = [
   {
     name: 'test',
     inputs: {
-      globs: ['src/**'],
+      /* e2e/**: src/mocks/no-real-home-path.test.ts scans it (#4875). On an
+         e2e-, data- or mocks-only diff the Windows leg's unscoped `npm test`
+         is what runs that guard (Ubuntu's `vitest --changed` cannot select
+         it); workflow-wiring.test.mjs pins that leg to stay unscoped. */
+      globs: ['src/**', 'e2e/**'],
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',
@@ -462,6 +466,10 @@ export const STEPS = [
            core. extraFiles are literal paths (no globs), so each is named. */
         'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
         'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
+        /* The clone-readiness selectors and help-topics.clone-labels.test.tsx
+           import this server module directly, so an edit to it alone must
+           schedule the frontend suite. */
+        'server/src/tts/clone-engines.ts',
       ],
       includeLockfiles: ['root'],
     },

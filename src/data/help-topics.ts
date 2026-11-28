@@ -137,6 +137,30 @@ export const HELP_TOPICS: HelpTopic[] = [
       'the road for a no-key or offline setup.',
   },
   {
+    id: 'clone-your-own-voice',
+    category: 'voices',
+    title: 'Can I use my own voice?',
+    body:
+      'Yes. Open Voices and, under My voices, press Clone a voice. Record a short sample on the ' +
+      'Record tab or upload a clip on the Upload tab, then check the transcript underneath: fix a ' +
+      'misheard word and your edit is what the voice is built from. Next comes consent. Pick "This ' +
+      'is my own voice", or "A family member, with their permission" (or "My child (I’m their ' +
+      'guardian)"), enter the person\'s name and tick the attestation; cloning on someone else\'s ' +
+      'behalf also records your name as the one who attests, and Castwright refuses the clone ' +
+      'without it. Press Continue, name the voice and Save. Record in the language you want the ' +
+      'voice to read: you can cast a clone as any character voiced by an engine that can perform ' +
+      'one, but it sounds most like its owner in the language you recorded, and Castwright warns ' +
+      'you (it never blocks you) if you cast it into a book in another language. Only Qwen3-TTS ' +
+      'and Coqui XTTS can perform a clone; Kokoro and Gemini voices can’t. The recording and ' +
+      'the voice built from it stay on your machine — nothing is uploaded or shared. Revoke a voice ' +
+      'from its card in My voices whenever you like, and Castwright erases the recording and ' +
+      'the voice built from it. It does not touch chapters you have already made: they stay in ' +
+      'that voice until you re-cast those characters and generate the chapters again, and a ' +
+      'regenerated chapter keeps its previous take, in the old voice, for A/B review until you ' +
+      'accept the new one. Audiobooks you have already exported or synced, share clips and ' +
+      'downloads on your phone keep the voice too.',
+  },
+  {
     id: 'vocalizations',
     category: 'quality',
     title: "Why is my character gasping, sighing, or laughing when the book doesn't say so?",

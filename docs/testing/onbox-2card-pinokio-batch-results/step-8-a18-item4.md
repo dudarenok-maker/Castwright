@@ -1,6 +1,6 @@
 # Step 8 — A18 item 4: Pinokio torchcodec outcome (Castwright#2957)
 
-Parent #2950, campaign #2435. Discharges register row **A18, item 4 only**
+Parent #2950, campaign #2435. Discharges register row **A18 (removed from the register 2026-11-28 by owner ruling, #4883), item 4 only**
 (`docs/testing/onbox-acceptance-register.md:1847-1896`, item 4 at line 1894) —
 whether `import torchcodec` succeeds or fails inside the nested `.venv` that
 `pinokio-scripts/install.js` provisions, on a real Pinokio install. Items 1–3

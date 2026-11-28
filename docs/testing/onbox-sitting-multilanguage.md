@@ -158,7 +158,7 @@ two renders racing to write the same `render-integrity` state.
     that produces a false content mismatch.
     - Result:
 
-### D2 · fs-61 zh/ja placeholder voices ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600))
+### D2 · fs-61 zh/ja placeholder voices ([#1600](https://github.com/dudarenok-maker/Castwright/issues/1600)) — discharged and removed from the register 2026-11-28, #4883
 
 > **Criteria source:** `onbox-acceptance-register.md` D2 (`:2869-2873`).
 > Re-resolved 2026-08-20: `gh issue view 1600` → still **OPEN** ("fs-61 —

@@ -1,0 +1,40 @@
+# stdout: [analysis] and [gemini] lines
+2026-11-28 10:35:56.194 [server] listening on http://localhost:8100
+2026-11-28 10:35:56.195 [server] workspace root: C:\Claude\Projects\wt-onbox-gemini-rerun\castwright-workspace
+2026-11-28 10:35:56.234 [sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)
+2026-11-28 10:35:59.782 [analysis] request received manuscript="mns__ANhXlaXYm" model="gemini-3.7-flash" fresh=true
+2026-11-28 10:35:59.789 [analysis] start manuscript="mns__ANhXlaXYm" engine=gemini model="gemini-3.7-flash"
+2026-11-28 10:35:59.801 [analysis] mns=mns__ANhXlaXYm phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 10:35:59.827 [analysis] mns=mns__ANhXlaXYm phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 10:35:59.828 [analysis] mns=mns__ANhXlaXYm phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 10:35:59.829 [analysis] mns=mns__ANhXlaXYm phase=0 Detecting cast chapter-by-chapter across 1 chapter via gemini-3.7-flash…
+2026-11-28 10:35:59.829 [analysis] mns=mns__ANhXlaXYm phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 10:35:59.830 [analysis] mns=mns__ANhXlaXYm phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via gemini-3.7-flash…
+2026-11-28 10:35:59.833 [analysis] mns=mns__ANhXlaXYm phase=1 Attributing 1 chapter with gemini-3.7-flash…
+2026-11-28 10:35:59.833 [analysis] mns=mns__ANhXlaXYm phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 10:35:59.834 [analysis] mns=mns__ANhXlaXYm phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 10:37:12.121 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=31254 firstAnswerMs=50605 thoughtPartsBeforeAnswer=11
+2026-11-28 10:37:12.154 [analysis] mns=mns__ANhXlaXYm phase=0 Chapter 1/1 cast done — 13 characters in 1m 12s
+2026-11-28 10:37:12.160 [analysis] mns=mns__ANhXlaXYm phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:37:12.191 [analysis] mns=mns__ANhXlaXYm phase=0 Dropped 1 fabricated quote on wren (e.g. "It's Wren, to everyone but him.").
+2026-11-28 10:37:12.193 [analysis] mns=mns__ANhXlaXYm phase=0 Quote-match tiers: verbatim=20, terminal-punct=0, segments=5.
+2026-11-28 10:37:12.221 [analysis] mns=mns__ANhXlaXYm phase=0 Detected 13 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Sela, Hart
+2026-11-28 10:37:12.221 [analysis] mns=mns__ANhXlaXYm phase=0 1 chapter identified in 1m 12s
+2026-11-28 10:37:12.222 [analysis] mns=mns__ANhXlaXYm phase=1 Chapter 1/1 — held back 1m 12s to preserve 10-chapter roster lag.
+2026-11-28 10:37:12.224 [analysis] mns=mns__ANhXlaXYm phase=1 Chapter 1/1 — Chapter One — The Knock (19,928 chars, ~6m 2s) via gemini-3.7-flash…
+2026-11-28 10:38:00.811 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=4486 firstAnswerMs=31536 thoughtPartsBeforeAnswer=16
+2026-11-28 10:39:00.217 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=6752 firstAnswerMs=48320 thoughtPartsBeforeAnswer=19
+2026-11-28 10:40:29.835 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=31294 firstAnswerMs=87628 thoughtPartsBeforeAnswer=27
+2026-11-28 10:40:54.666 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=6032 firstAnswerMs=none thoughtPartsBeforeAnswer=10
+2026-11-28 10:42:04.758 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=8587 firstAnswerMs=66350 thoughtPartsBeforeAnswer=29
+2026-11-28 10:44:04.784 [gemini] stream-timing model=gemini-3.7-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 10:44:04.803 [analysis] main run drained manuscript=mns__ANhXlaXYm
+
+# stderr: same, multi-line error dumps collapsed (prompt heads dropped)
+2026-11-28 10:37:12.192 [analysis] dropped 1 unverified quote(s) on wren
+2026-11-28 10:38:00.810 [gemini] output truncated reason=MAX_TOKENS bytes=9185 tokens=3235 model=gemini-3.7-flash
+2026-11-28 10:40:29.835 [gemini] output truncated reason=MAX_TOKENS bytes=908 tokens=323 model=gemini-3.7-flash
+2026-11-28 10:40:54.662 [gemini] generate failed status=503 userTurnLength=5008 message=got status: UNAVAILABLE. {"error":{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.","status":"UNAVAILABLE"}}',
+2026-11-28 10:40:54.666 [gemini] transient 503 unavailable — retrying in 1858ms (attempt 2/3)
+2026-11-28 10:42:04.757 [gemini] output truncated reason=MAX_TOKENS bytes=908 tokens=323 model=gemini-3.7-flash
+2026-11-28 10:44:04.801 [analysis] failed status=none userTurnLength=n/a message=gemini gemini-3.7-flash request exceeded its thinking window after 120016 ms.',

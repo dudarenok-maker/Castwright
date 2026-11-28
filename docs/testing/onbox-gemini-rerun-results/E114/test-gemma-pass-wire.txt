@@ -1,0 +1,12 @@
+# From an observe-only fetch preload (wiretap.mjs.txt): what the app sent to Gemini and what came back. No headers recorded.
+# "HTTP 200" with an error= field means the stream opened and then failed mid-stream.
+# The passing Test (started 14:41:25). Custom parameter config.maxOutputTokens=1200 (set for G1) was in force.
+# Rows with chars=187 are Test probes; analysis requests interleaved in the same window are left out.
+
+req 142 14:41:25 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200} -> HTTP 200 63066ms finish=STOP thoughtsTokenCount=118 candidatesTokenCount=14 thoughtParts=8 thoughtChars=474 answerChars=28
+req 144 14:42:28 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 503 623ms finish=- thoughtsTokenCount=absent candidatesTokenCount=absent thoughtParts=0 thoughtChars=0 answerChars=0 error="{ "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually tem…"
+req 145 14:42:31 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 15279ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=14 thoughtParts=1 thoughtChars=0 answerChars=28
+req 146 14:42:46 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 29606ms finish=STOP thoughtsTokenCount=111 candidatesTokenCount=14 thoughtParts=7 thoughtChars=449 answerChars=28
+req 147 14:43:15 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"responseMimeType":"application/json"} -> HTTP 200 21748ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=104 thoughtParts=0 thoughtChars=0 answerChars=263
+req 149 14:43:37 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"responseMimeType":"application/json"} -> HTTP 200 34204ms finish=- thoughtsTokenCount=168 candidatesTokenCount=absent thoughtParts=9 thoughtChars=618 answerChars=0 error="{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please …"
+req 150 14:44:13 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":1200,"responseMimeType":"application/json"} -> HTTP 200 44170ms finish=STOP thoughtsTokenCount=168 candidatesTokenCount=5 thoughtParts=9 thoughtChars=618 answerChars=12

@@ -16,6 +16,7 @@
    layer — the runner (finish.ts) maps those to errors. Only thrown errors
    (5xx, 429, idle, abort, unreachable) enter the retry loop. */
 import { AnalysisAbortedError } from '../errors.js';
+import { readApiErrorDetails } from '../api-error-envelope.js';
 import {
   DailyQuotaExhaustedError,
   type GeminiRateLimiter,
@@ -94,27 +95,21 @@ function jitterMs(baseMs: number): number {
    Returns ms or null when the field isn't present. */
 export function parseRetryDelayMs(err: unknown): number | null {
   const raw = (err as Error)?.message ?? String(err);
-  const start = raw.indexOf('{');
-  if (start < 0) return null;
-  try {
-    const obj = JSON.parse(raw.slice(start)) as {
-      error?: { details?: Array<{ '@type'?: string; retryDelay?: string }> };
-    };
-    const details = obj?.error?.details ?? [];
-    for (const d of details) {
-      const type = d['@type'] ?? '';
-      const delay = d.retryDelay;
-      if (typeof delay === 'string' && type.includes('RetryInfo')) {
-        /* Common shapes: "15s", "1.5s", "500ms", "0.5s". */
-        const m = delay.match(/^([\d.]+)(ms|s)?$/);
-        if (m) {
-          const n = Number(m[1]);
-          if (Number.isFinite(n)) return m[2] === 'ms' ? n : Math.round(n * 1000);
-        }
+  /* Same unwrap as the failure taxonomy: the SDK's wrapper puts Google's envelope (and its
+     RetryInfo) inside `error.message`, so the outer object has no `details` of its own. */
+  const details = readApiErrorDetails(raw) as Array<{ '@type'?: string; retryDelay?: string } | null>;
+  for (const d of details) {
+    if (!d || typeof d !== 'object') continue; // a malformed entry must not turn a 429 into a TypeError
+    const type = typeof d['@type'] === 'string' ? d['@type'] : '';
+    const delay = d.retryDelay;
+    if (typeof delay === 'string' && type.includes('RetryInfo')) {
+      /* Common shapes: "15s", "1.5s", "500ms", "0.5s". */
+      const m = delay.match(/^([\d.]+)(ms|s)?$/);
+      if (m) {
+        const n = Number(m[1]);
+        if (Number.isFinite(n)) return m[2] === 'ms' ? n : Math.round(n * 1000);
       }
     }
-  } catch {
-    return null;
   }
   return null;
 }

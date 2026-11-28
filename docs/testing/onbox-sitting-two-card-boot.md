@@ -90,7 +90,7 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 7. **(A2.3 — observe-only, N-A) eGPU fault-drop:** IF the eGPU ever drops off the CUDA bus on its own mid-run ("GPU is lost"), the in-flight op fails fast, its reservation releases, a toast fires, and it re-queues onto the 8 GB card. **Cannot be safely triggered on OcuLink** (add/remove is reboot-only; yanking the cable is a hard crash). Mark **Blocked / N-A** unless it happens on its own; the recovery path is unit-covered and not required for sign-off.
     - Result: **N-A** — did not happen on its own during this run; out of scope per the row's own instructions, not attempted.
 
-### A3 · srv-57 Multi-GPU Wave 2 — ten checklist items (#1230)
+### A3 · srv-57 Multi-GPU Wave 2 — ten checklist items (#1230) — removed from the register 2026-11-28 by owner ruling, #4883
 
 > **Criteria source:** issue [`#1230`](https://github.com/dudarenok-maker/Castwright/issues/1230) — the ten-item on-box checklist (re-resolved: still **OPEN**; ten unchecked `- [ ]` boxes confirmed by re-count). Do not restate the checklist here; run it item-by-item on the issue and tick each box as it passes. Task 16/16.5 (auto-revert on a repeated bad pin) is designed but **unbuilt**, gated on item 1 — note its unbuilt state, do not attempt to build it here.
 
@@ -109,7 +109,7 @@ because its enumeration-reorder bullet needs a reboot into a swapped-enumeration
 17. **Task 16/16.5 status:** confirm it remains unbuilt and gated on item 1 (it consumes the `tripEvent()` that item 1 exercises). Do not build it here.
     - Result:
 
-### A12 · Device-pin resolution survives a respawn (#1870, closes #1857)
+### A12 · Device-pin resolution survives a respawn (#1870, closes #1857) — discharged and removed from the register 2026-11-28, #4883
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:829-842` — the four on-box bullets. Re-resolved: PR #1870 merged 2026-07-27T01:53:26Z; #1857 closed 2026-07-27T01:53:27Z; `server/src/tts/sidecar-env.test.ts` exists (unit-level only). The behaviour no CI test can reach is a respawn after the device index actually changes.
 

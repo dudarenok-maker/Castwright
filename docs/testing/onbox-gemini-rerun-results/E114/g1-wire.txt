@@ -1,0 +1,15 @@
+# From an observe-only fetch preload (wiretap.mjs.txt): what the app sent to Gemini and what came back. No headers recorded.
+# "HTTP 200" with an error= field means the stream opened and then failed mid-stream.
+
+## on, cap 4096: section 1 answered inside the cap (no overflow), section 2 failed mid-stream
+req 114 14:32:21 gemma-4-31b-it chars=8498 sent={"temperature":0.2,"maxOutputTokens":4096,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 97843ms finish=STOP thoughtsTokenCount=1515 candidatesTokenCount=1305 thoughtParts=64 thoughtChars=5045 answerChars=4363
+req 121 14:34:56 gemma-4-31b-it chars=17105 sent={"temperature":0.2,"maxOutputTokens":4096,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 43802ms finish=- thoughtsTokenCount=38 candidatesTokenCount=absent thoughtParts=2 thoughtChars=155 answerChars=0 error="{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please …"
+
+## on, cap 1200 -> run stopped (run-gemma-on-9)
+req 130 14:37:53 gemma-4-31b-it chars=8498 sent={"temperature":0.2,"maxOutputTokens":1200,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 65486ms finish=MAX_TOKENS thoughtsTokenCount=1197 candidatesTokenCount=absent thoughtParts=51 thoughtChars=4032 answerChars=0
+
+## default level, cap 1200, run 1 (run-gemma-model-default-4)
+req 143 14:42:16 gemma-4-31b-it chars=8509 sent={"temperature":0.2,"maxOutputTokens":1200,"responseMimeType":"application/json"} -> HTTP 200 50570ms finish=MAX_TOKENS thoughtsTokenCount=1197 candidatesTokenCount=absent thoughtParts=51 thoughtChars=3915 answerChars=0
+
+## default level, cap 1200, run 2 (run-gemma-model-default-5)
+req 148 14:43:23 gemma-4-31b-it chars=8509 sent={"temperature":0.2,"maxOutputTokens":1200,"responseMimeType":"application/json"} -> HTTP 200 54474ms finish=MAX_TOKENS thoughtsTokenCount=1197 candidatesTokenCount=absent thoughtParts=51 thoughtChars=3939 answerChars=0

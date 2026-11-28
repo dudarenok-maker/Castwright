@@ -1,0 +1,99 @@
+// Preload (NODE_OPTIONS=--import) that records what the app sends to and receives from the Gemini API.
+// It only observes: the response is cloned (tee), the request is passed through untouched.
+// Never records headers (the key travels in x-goog-api-key) and strips any ?key= from URLs.
+import { appendFileSync } from 'node:fs';
+
+const OUT = process.env.E114_WIRETAP_LOG;
+const realFetch = globalThis.fetch;
+
+if (OUT && realFetch) {
+  let seq = 0;
+  const write = (obj) => {
+    try {
+      appendFileSync(OUT, JSON.stringify(obj) + '\n');
+    } catch {
+      /* observation only */
+    }
+  };
+  globalThis.fetch = async function wiretappedFetch(input, init) {
+    const url = String(typeof input === 'string' || input instanceof URL ? input : input?.url);
+    if (!url.includes('generativelanguage.googleapis.com') || !/:(stream)?[gG]enerateContent/.test(url)) {
+      return realFetch.call(this, input, init);
+    }
+    const id = `${process.pid}-${++seq}`;
+    const t0 = Date.now();
+    let body = {};
+    try {
+      body = JSON.parse(typeof init?.body === 'string' ? init.body : '{}');
+    } catch {
+      /* leave empty */
+    }
+    const gc = { ...(body.generationConfig ?? {}) };
+    delete gc.responseJsonSchema;
+    delete gc.responseSchema;
+    const userText = (body.contents ?? []).flatMap((c) => c.parts ?? []).map((p) => p.text ?? '').join('');
+    write({
+      ev: 'request', id, at: new Date(t0).toISOString(),
+      model: url.replace(/\?.*$/, '').replace(/^.*\/models\//, ''),
+      generationConfig: gc, userTextChars: userText.length,
+    });
+    try { appendFileSync(OUT + '.bodies', JSON.stringify({ id, url: url.replace(/\?.*$/, ''), body }) + '\n'); } catch {}
+    let res;
+    try {
+      res = await realFetch.call(this, input, init);
+    } catch (e) {
+      write({ ev: 'fetch-error', id, ms: Date.now() - t0, name: e.name, message: String(e.message).slice(0, 300) });
+      throw e;
+    }
+    const copy = res.clone();
+    (async () => {
+      let raw = '';
+      let readError;
+      try {
+        const reader = copy.body.getReader();
+        const dec = new TextDecoder();
+        for (;;) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          raw += dec.decode(value, { stream: true });
+        }
+      } catch (e) {
+        readError = `${e.name}: ${e.message}`;
+      }
+      const sum = { ev: 'response', id, ms: Date.now() - t0, status: res.status, chunks: 0, thoughtParts: 0, thoughtChars: 0, answerChars: 0 };
+      if (readError) sum.readError = readError;
+      if (res.status !== 200) {
+        sum.errorBody = raw.replace(/\s+/g, ' ').slice(0, 700);
+      } else {
+        const payloads = raw.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => l.slice(5).trim());
+        if (!payloads.length && raw.trim()) payloads.push(raw);
+        for (const p of payloads) {
+          let j;
+          try {
+            j = JSON.parse(p);
+          } catch {
+            continue;
+          }
+          sum.chunks++;
+          const cand = j.candidates?.[0];
+          for (const part of cand?.content?.parts ?? []) {
+            if (part.thought) {
+              sum.thoughtParts++;
+              sum.thoughtChars += (part.text ?? '').length;
+            } else sum.answerChars += (part.text ?? '').length;
+          }
+          if (cand?.finishReason) sum.finishReason = cand.finishReason;
+          if (j.usageMetadata) {
+            const { promptTokensDetails, ...u } = j.usageMetadata;
+            sum.usageMetadata = u;
+          }
+          if (j.modelVersion) sum.modelVersion = j.modelVersion;
+          if (j.error) sum.errorBody = JSON.stringify(j.error).slice(0, 700);
+        }
+      }
+      try { appendFileSync(OUT + '.replies', JSON.stringify({ id, status: res.status, answer: raw.split(/\r?\n/).filter((l) => l.startsWith('data:')).map((l) => { try { return (JSON.parse(l.slice(5)).candidates?.[0]?.content?.parts ?? []).filter((p) => !p.thought).map((p) => p.text ?? '').join(''); } catch { return ''; } }).join('') }) + '\n'); } catch {}
+      write(sum);
+    })();
+    return res;
+  };
+}
