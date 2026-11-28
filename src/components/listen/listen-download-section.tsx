@@ -338,12 +338,18 @@ function ExportQueue({
   onDownload?: (item: ExportQueueItem) => void;
 }) {
   const [filter, setFilter] = useState<QueueFilter>('all');
-  const visible = items.filter((it) => filter === 'all' || it.status === filter);
+  const matches = (it: ExportQueueItem, id: QueueFilter) =>
+    id === 'all' ||
+    it.status === id ||
+    /* A cancelling export is still running until it reads cancelled. */
+    (id === 'in_progress' && it.status === 'cancelling');
+  const visible = items.filter((it) => matches(it, filter));
+  const count = (id: QueueFilter) => items.filter((it) => matches(it, id)).length;
   const counts = {
-    all: items.length,
-    done: items.filter((it) => it.status === 'done').length,
-    in_progress: items.filter((it) => it.status === 'in_progress').length,
-    failed: items.filter((it) => it.status === 'failed').length,
+    all: count('all'),
+    done: count('done'),
+    in_progress: count('in_progress'),
+    failed: count('failed'),
   };
   const filters: Array<{ id: QueueFilter; label: string }> = [
     { id: 'all', label: `All (${counts.all})` },

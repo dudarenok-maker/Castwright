@@ -2196,7 +2196,13 @@ export function Layout() {
     const nonTerminalJobs: Array<{ bookId: string; job: BookExportJob }> = [];
     for (const [bookId, jobs] of Object.entries(exportsByBookId)) {
       for (const job of jobs) {
-        if (job.status === 'queued' || job.status === 'in_progress') {
+        /* cancelling is non-terminal (the work is still stopping), so it keeps
+           the pill up; only in_progress jobs feed the average and stall below. */
+        if (
+          job.status === 'queued' ||
+          job.status === 'in_progress' ||
+          job.status === 'cancelling'
+        ) {
           nonTerminalJobs.push({ bookId, job });
         }
       }

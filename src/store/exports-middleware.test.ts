@@ -239,6 +239,28 @@ describe('export poll middleware', () => {
     expect(getExport).toHaveBeenCalledTimes(2); // no polls after terminal
   });
 
+  /* srv-96 — `cancelling` is not terminal: the server is still stopping the
+     work, so the row only settles once a poll reads `cancelled`. */
+  it('keeps polling a job through cancelling and stops only at cancelled', async () => {
+    const job = (status: BookExportJob['status']) => makeJob({ id: 'exp_1', bookId: 'b1', status });
+    const getExport = vi
+      .fn()
+      .mockResolvedValueOnce(job('in_progress'))
+      .mockResolvedValueOnce(job('cancelling'))
+      .mockResolvedValueOnce(job('cancelling'))
+      .mockResolvedValue(job('cancelled'));
+    const store = makePollStore(getExport);
+    store.dispatch(exportsActions.exportStarted(job('in_progress')));
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(store.getState().exports.byBookId['b1'][0].status).toBe('cancelling');
+    await vi.advanceTimersByTimeAsync(100);
+    await vi.advanceTimersByTimeAsync(100);
+    expect(store.getState().exports.byBookId['b1'][0].status).toBe('cancelled');
+    await vi.advanceTimersByTimeAsync(500);
+    expect(getExport).toHaveBeenCalledTimes(4); // no polls after cancelled
+  });
+
   it('does not resurrect a job dismissed while a poll was in flight', async () => {
     const getExport = vi
       .fn()
