@@ -144,14 +144,16 @@ Unit tests cannot show a whole "Design full cast" job on a real 8 GB GPU running
 
 ### A7 · Design full cast — bulk Qwen voice design (plan 195)
 
-The bulk design job has only ever been run to 2 of 12 characters on the box, because of the halt now fixed by [PR #3161](https://github.com/dudarenok-maker/Castwright/pull/3161) ([#3027](https://github.com/dudarenok-maker/Castwright/issues/3027)). Four observations were never reached.
+The bulk design job has only ever been run to 2 of 12 characters on the box, because of the halt now fixed by [PR #3161](https://github.com/dudarenok-maker/Castwright/pull/3161) ([#3027](https://github.com/dudarenok-maker/Castwright/issues/3027)). Four observations were never reached, and two more that plan 195 owes were never listed, so six are owed.
 
 **Owed:**
 
 - The terminal summary counts (designed, failed, skipped) are correct for a run that reaches a genuine terminal state.
 - Series propagation reaches a sibling book, for a shared, undesigned character.
-- VRAM headroom holds for the whole 12-character run (VoiceDesign 1.7B beside a resident Ollama is the plan-108 OOM): no CUDA out-of-memory, and `committed_mb` and `vram_reserved_mb` stay within the ceiling to the terminal state. The 2026-09-06 reading covered only 2 characters.
+- VRAM headroom holds for the whole 12-character run (VoiceDesign 1.7B beside a resident Ollama is the plan-108 OOM): no CUDA out-of-memory error, and `committed_mb` stays within its 47.58 GB ceiling to the terminal state. `vram_reserved_mb` has no stated bound: record its readings across the run. The 2026-09-06 reading covered only 2 characters.
 - A second-tab single "Design & preview" request against a sibling book's character, sent while the bulk job holds the GPU, serialises correctly and then resolves with a result or a visible error. The 2026-09-06 attempt never resolved, with no error and no toast.
+- Rows flip: each character's cast row flips to "Designed" as the run designs it.
+- Designed voices survive an attempted re-analysis: once the run has designed voices, an attempted re-analysis of the book answers 409 and the designed voices survive it.
 
 **Proven so far:** 2026-09-06, the pill survived a hard reload mid-run (the client re-subscribed to the live job), and VRAM headroom held (`committed_mb` 8.4 to 18.8 GB against a 47.58 GB ceiling, `vram_reserved_mb` never above about 5.8 GB), but only across 2 characters. The concurrent request showed correct GPU fairness (`inflight_synth` never above 1) (`onbox-mechanical-batch1-results/step-2-a6-a7.md`).
 
@@ -192,7 +194,7 @@ The revisions panel and its hydrate gating have been fixed in code across [#3376
 
 ### A10 · Structured failure taxonomy (plan 173, fs-19)
 
-Tests cover the failure classifier, but the friendly message and remediation line have only been confirmed end to end for one of the two real failure modes the plan names. *Shipped* 2026-06-03 (`affa489`, closes #469).
+Tests cover the failure classifier, but the friendly message and remediation line have not been confirmed end to end for either of the two real failure modes the plan names: `recycle-storm` is confirmed on the chapter row and in the Activity log but not on its toast, and `vram-spill`'s row and Activity-log surfacing were never checked. *Shipped* 2026-06-03 (`affa489`, closes #469).
 
 **Owed:**
 
@@ -461,13 +463,19 @@ The in-app Coqui, Kokoro and Whisper installers now run with the sidecar held do
 
 **Owed:**
 
-- Coqui: in Admin → Model Manager click **Install Coqui XTTS v2**. The UI says "Stopping the voice engine…", any queued chapter waits, the install completes, and `pip check` is clean afterwards (GPU ONNX runtime intact).
+- Mid-render refusal, run first: with a chapter that has started rendering, click each engine's install button in Admin → Model Manager (the labels are under Setup). Each shows "Cannot install while a chapter is being generated" and does not silently abort the render. Check all three engines.
+- Coqui, once that render has ended: click **Try again** on the Coqui card. The UI says "Stopping the voice engine…", any chapter queued during the install waits, the install completes, and `pip check` is clean afterwards (GPU ONNX runtime intact).
 - Kokoro and Whisper: repeat the same install and check.
-- Mid-render refusal: with a chapter rendering (a queued chapter must already have started), click the same installers. Each shows "Cannot install while a chapter is being generated" and does not silently abort the render. Check all three engines.
 
 **Proven so far:** nothing run on a box. The idle watchdog (kills an installer or pip child that is silent for 30 minutes) is covered by unit tests only, because an on-box stall cannot be reproduced; it is not part of this row's observations.
 
-**Setup:** GPU box with a real sidecar and Qwen resident (the mid-render case needs Qwen; the plain install does not). Roughly 30 seconds per engine when the weights are already present, plus one refusal attempt per engine. Before each refusal attempt, uninstall that engine (or move its weights away): an installer whose engine is already installed answers "Already installed." before it checks for an active generation (`server/src/tts/coqui-install-bootstrap.ts`; the Kokoro and Whisper installers do the same), so the refusal never shows. A chapter that is queued but has not started does not trip the refusal either. No golden-audio comparison.
+**Setup:** GPU box with a real sidecar and Qwen resident (the mid-render case needs Qwen; the plain install does not). Every bullet needs each engine to start not installed. An installer whose engine is already installed answers "Already installed." before it checks for an active generation or holds the sidecar (`server/src/tts/coqui-install-bootstrap.ts:162-174`; the Kokoro and Whisper installers do the same), so neither the refusal nor the hold, the ONNX runtime restore or the `pip check` ever happens, and an installed engine's card shows only "… is installed" and a Re-check button. Each installer checks something different, so the state to produce differs per engine:
+
+- Coqui: remove the `coqui-tts` package from the sidecar venv and keep the XTTS v2 weights. Plan 220 does this with the app stopped, running `pip uninstall coqui-tts -y` in the sidecar venv. The card then reads "Coqui XTTS v2 weights present — package needs repair" with **Repair Coqui XTTS v2**, or "The Coqui package is missing" with **Install Coqui XTTS v2** once the voice engine has confirmed the package is gone.
+- Whisper: the `faster_whisper` package absent from the sidecar venv's site-packages, with the model kept in the Hugging Face cache. No documented step removes only this package, so the tester must produce that state. The card reads "Whisper ASR is not installed" with **Install Whisper ASR**.
+- Kokoro: its installer checks and downloads only the two weight files and has no pip step, so removing its package does not get past "Already installed.". Keep the package and move `kokoro-v1.0.onnx` and `voices-v1.0.bin` out of `server/tts-sidecar/voices/kokoro/`. The card reads "Kokoro is installed — voice weights not downloaded" with **Download weights**, and the install downloads the weights again (about 330 MB).
+- Order: run the refusal first, then the plain install once the render ends, so one uninstall covers both. A chapter that is queued but has not started does not trip the refusal. A refused attempt leaves the card reading "… install failed" with the refusal message and a **Try again** button, which starts the plain install (after a page reload the card shows its state's button from the list above instead).
+- Roughly 30 seconds per engine for Coqui and Whisper, whose weights stay in place; Kokoro adds its weight download. No golden-audio comparison.
 
 **Criteria:** no separate run sheet. Issue [#3056](https://github.com/dudarenok-maker/Castwright/issues/3056), PR [#3197](https://github.com/dudarenok-maker/Castwright/pull/3197).
 
@@ -777,7 +785,7 @@ The automated tests use 12 repo EPUBs and synthetic HTML. PR #4241's review show
 
 - **Version 1 is `main`, byte for byte, on the corpus.** Run a scratch differential outside the repo over the same 640-file corpus PR #4241 used (63 + 577 real EPUBs, read in place, sha256-deduplicated within each set), plus any `.mobi`/`.azw3` in the library. For each file, compare `JSON.stringify(await parseManuscript({ buffer, fileName, extractorVersion: 1 }))` on this branch against `JSON.stringify(await parseManuscript({ buffer, fileName }))` on `main` at the branch's merge base, with errors compared by message. You must see 0 files differ. Record the identical / differ / error-on-both counts.
 - **What version 2 changes.** Run the same files at version 1 and at version 2. Record how many files differ and how many change chapter count. For the 5 files whose paragraph count rises most, open one changed chapter at each version. No chapter body may contain `\n\n\n` or a paragraph that is only whitespace (`/\n\n\s*\n\n/`); record that count, which must be 0. Then count the mid-sentence breaks version 2 added: a new break where the paragraph on the left has no terminal punctuation (`.`, `!`, `?`, a closing quote or bracket, `…` or `:`) and the paragraph on the right starts with a lowercase letter. That is a block closer used for an inline element, for example `<div class="dropcap">T</div>he night was cold.`, which gives `T\n\nhe night was cold.` at version 2. Record that count, name every file where it is non-zero, open each hit and say whether the break is wrong. For the 3 corpus EPUBs whose manifest `href`s contain `&amp;` (PR #4241 review pass 3), record whether their version-2 output differs from version 1; none is expected, since epub2 reads them.
-- **An existing book keeps its text after the upgrade.** Before switching the server to this branch, pick one cast-confirmed EPUB book in the live library whose source the previous bullet shows changing at version 2. Note its `state.json` (no `manuscriptExtractorVersion` key), and the first and last sentence and speaker of one changed chapter in the Manuscript view. Restart the server on this branch and open the book. You must see the same sentences, the same speakers, and still no `manuscriptExtractorVersion` key in `state.json`. Record the chapter and the sentences.
+- **An existing book keeps its text after the upgrade.** On a server built from `feb52cad^1` (before #4217's fix), pick one cast-confirmed EPUB book in the live library whose source the previous bullet shows changing at version 2. Note its `state.json` (no `manuscriptExtractorVersion` key), and the first and last sentence and speaker of one changed chapter in the Manuscript view. Restart the server on `feb52cad` or later and open the book. A box already past `feb52cad` must go back to `feb52cad^1` for the first capture, or both captures run fixed code and prove nothing. You must see the same sentences, the same speakers, and still no `manuscriptExtractorVersion` key in `state.json`. Record the chapter and the sentences.
 - **A new import gets version 2.** Import that same EPUB again under a new title (for example append ` (v2 check)`). Its `state.json` must have `"manuscriptExtractorVersion": 2`, and the chapter from the previous bullet must show the new paragraph breaks. Record the paragraph counts of that chapter in both books, then delete the test book.
 
 **Setup:** The operator's real EPUB corpus (the 640 files of PR #4241's review, plus any `.mobi`/`.azw3`) and a live library with a cast-confirmed EPUB book; no GPU. The row does not name the corpus directories. "This branch" below is the branch of PR [#4318](https://github.com/dudarenok-maker/Castwright/pull/4318), which delivered #4217 (merge commit `feb52cad`).
@@ -1095,7 +1103,7 @@ Trusting the mkcert root CA and pairing from a phone's own OS trust store is a d
 **Owed:**
 
 - On a real phone, install the mkcert root CA and complete pairing over `castwright.local`. The host's Admin panel, "Authorize a device", generates the pairing QR code and link (`https://castwright.local/#/pair?c=…`). The pairing must complete on the phone with no certificate warning.
-- Plan 250 step 4's second half: delete the certs, set `LAN_HTTPS=1` and boot. The server boots HTTP with the missing-cert warning, with no crash. The 2026-09-06 `LAN_HTTPS=0` run covered only the first half.
+- Plan 250 step 4's second half: delete the certs, set `LAN_HTTPS=1` and boot. The server boots HTTP with the missing-cert warning, with no crash. The 2026-09-06 `LAN_HTTPS=0` run covered only the first half. Run this bullet last, or restore the certs before the phone bullet, because without them the box serves loopback HTTP only and phone pairing cannot work. To "delete" them, move the `certs/` folder (under `APP_RUN_DIR`, or `<repo>/.run/` when that is unset) aside and move it back afterwards; the warning itself names both expected files. If they are lost, `npm run install:cert-mobile` (the command the warning names) generates them again.
 
 **Proven so far:** 2026-09-06, on the host with a real `npm run start:lan` boot (non-default `LAN_HTTPS_PORT=9443`): the cert-provisioned log line printed; `https://castwright.local:9443/` loaded the full app with no cert warning; forcing `LAN_HTTPS=0` degraded to plain HTTP with `/api/info` returning 200 and no crash. Evidence: `docs/testing/onbox-human-checkpoint-results/step4-e2-e3-e8.md`.
 
@@ -1225,7 +1233,7 @@ Wave 2 made the Gemini output cap Auto, lets thinking models stay silent for up 
 
 **Proven so far:** Nothing. On 2026-11-26 (batch 2, #4699, a 19,928-character chapter, evidence [`onbox-batch-2-results/E111/`](onbox-batch-2-results/E111/)) the Auto and 8192 runs did not happen: `gemini-3.6-flash` answered `503 UNAVAILABLE` on three attempts, `gemini-3.7-flash` answered 503, and `gemini-3.5-flash` hit its daily quota. The Gemma check at `64` failed: the empty truncation reproduced twice (`bytes=0`, `thoughtPartsBeforeAnswer=3`), but neither was followed by a re-split and both runs ended in `analyzer-reasoning-overflow`. Filed as [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723).
 
-**Setup:** A Gemini key, no GPU. `gemini-3.6-flash` allows 20 requests a day and the two runs use it, so start on a fresh daily quota.
+**Setup:** A Gemini key, no GPU. `gemini-3.6-flash` allows 20 requests a day, and both runs may not fit in one: on 2026-11-28, as recorded in open PR [#4888](https://github.com/dudarenok-maker/Castwright/pull/4888), the Auto run alone used 19 of the 20 and the 8192 run's first request then got a 429. Start each run on a fresh daily quota.
 
 - The owner's decisions of 2026-11-28 on [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723) and [#4851](https://github.com/dudarenok-maker/Castwright/issues/4851) change how the Gemma check will be judged. That change is being made elsewhere, not in this row: open PR [#4888](https://github.com/dudarenok-maker/Castwright/pull/4888) (branch `chore/ops-onbox-gemini-rerun`) moves the check to reasoning `off` for #4723 and records the 2026-11-28 re-runs, and open issue [#4884](https://github.com/dudarenok-maker/Castwright/issues/4884) amends this row for #4851 once its fix ships. Until they land, this row and run sheet §2 still state the criterion as it was before those decisions.
 
@@ -1274,6 +1282,8 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 **Proven so far:** On 2026-11-26 (batch 2, #4699), Test on `gemini-3.6-flash` recorded `model-default`, `minimal`, `low`, `medium` and `high` all `accepted` on the second attempt. The stale-`minimal` refusal holds over the API: starting an analysis answered `analyzer-request-rejected` before any chapter work, saying the saved level "minimal" is not offered for this model. The catalog offers `gemini-3.8-flash` exactly `model-default, low, medium, high`. Evidence: [`onbox-batch-2-results/E114/`](onbox-batch-2-results/E114/).
 
 **Setup:** A Gemini API key, no GPU. `gemini-3.6-flash` allows 20 requests a day and E110 and E111 also use it, so run this on a different day. On 2026-11-26 the Gemini API was overloaded: Test on `gemini-3.8-flash` and `gemma-4-31b-it` failed on all 5 attempts each (503 or a 120 s thinking-window stop), and a single-chapter run on `gemini-3.6-flash` at `model-default` got no answer inside 120 s. Re-run when the API is not returning 503 for these models.
+
+- G1's default-level expectation predates the owner's decision of 2026-11-28 on [#4723](https://github.com/dudarenok-maker/Castwright/issues/4723), that an empty `MAX_TOKENS` with streamed thought parts failing as `analyzer-reasoning-overflow` is by design; open PR [#4888](https://github.com/dudarenok-maker/Castwright/pull/4888) records that leg as a FAIL against this wording with an owner decision owed, so do not file that overflow again as a new bug.
 
 **Criteria:** [`3084-openai-analyzer-onbox-acceptance.md` §13](3084-openai-analyzer-onbox-acceptance.md). Issue [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084).
 
