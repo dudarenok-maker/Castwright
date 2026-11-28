@@ -1088,7 +1088,18 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
        QWEN slot only — the slot the copy below reads (`sourceKey`); a cloned
        coqui slot says nothing about those bytes. `/assign` stamps the slot
        from the entry. */
-    if (hasClonedProvenance(character, 'qwen')) {
+    /* The slot carries a COPY of the entry's provenance and the two can disagree
+       (a relabelled pre-fix copy still sits in a `designed` slot), so the entry
+       whose bytes are copied is read too: cloned, or carrying consent / a
+       `clonedFrom` link (read defensively — the field lands with the migration),
+       refuses. */
+    const sourceEntry = assignedLibraryUuid ? await readEntry(assignedLibraryUuid) : null;
+    const sourceEntryIsClone =
+      !!sourceEntry &&
+      (sourceEntry.provenance === 'cloned' ||
+        !!sourceEntry.consent ||
+        !!(sourceEntry as { clonedFrom?: unknown }).clonedFrom);
+    if (hasClonedProvenance(character, 'qwen') || sourceEntryIsClone) {
       return res.status(403).json({
         error:
           'This voice was cloned from a recording, so it cannot be saved to My voices as a ' +

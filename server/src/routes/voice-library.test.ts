@@ -4574,6 +4574,63 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
   });
 
+  const relabConsent = {
+    personName: 'Dad',
+    relationship: 'family-with-permission' as const,
+    permittedUse: 'personal' as const,
+    attestedAt: '2026-01-01T00:00:00.000Z',
+    attestedBy: 'me',
+  };
+  it.each([
+    ['a cloned entry', { provenance: 'cloned' as const, consent: relabConsent }],
+    [
+      'an entry carrying consent',
+      {
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission' as const,
+          permittedUse: 'personal' as const,
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      },
+    ],
+    ['an entry with a clonedFrom link', { clonedFrom: 'orig-clone' }],
+  ])('refuses (403) when the slot says designed but the source ENTRY is %s', async (_label, over) => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-relab1'), 'RELABELLED-BYTES');
+    await vl.writeEntry({
+      voiceUuid: 'relab1',
+      name: 'Relabelled',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...over,
+    } as import('../workspace/voice-library.js').VoiceLibraryEntry);
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-relab', [
+      {
+        id: 'char-relab',
+        name: 'Relab',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab1', libraryUuid: 'relab1', provenance: 'designed' },
+        },
+      },
+    ]);
+    const libBefore = (await vl.listEntries()).length;
+    const ptsBefore = readdirSync(paths.qwenVoicesDir()).sort();
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-relab', characterId: 'char-relab', name: 'Copy' });
+
+    expect(res.status).toBe(403);
+    expect((await vl.listEntries()).length).toBe(libBefore);
+    expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
+  });
+
   it('promotes a DESIGNED qwen slot even when the coqui slot is a clone (copy reads qwen bytes only)', async () => {
     mkdirSync(paths.qwenVoicesDir(), { recursive: true });
     writeFileSync(qwenVoice.qwenVoicePtPath('qwen-desM'), 'DESIGNED-BYTES');
