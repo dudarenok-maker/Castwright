@@ -39,7 +39,7 @@ A clone can be cast in any book, in any language, and it reads a non-English boo
 
 ## 3. Your clone in My voices
 
-The clone sits in **My voices** beside your designed voices, with a **Cloned** badge, the consent line, and a chip for each engine it's ready on (**Qwen ✓**, **Coqui ✓**). From the card you can **Preview** it, tag it, pin it, **Assign** it, or **Revoke** it.
+The clone sits in **My voices** beside your designed voices, with a **Cloned** badge, the consent line, and a chip for each engine it's ready on (**Qwen ✓**, **Coqui ✓**). From the card you can **Preview** it, tag it, pin it, or **Revoke** it. To put it on a character, use the Cast screen (next section).
 
 <picture>
   <source media="(prefers-color-scheme: dark)" srcset="images/cloning-a-voice/03-my-voices-cloned-dark.png">
