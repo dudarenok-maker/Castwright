@@ -6,10 +6,16 @@
    A target chapter is evaluated at the REQUEST's Qwen key (the POST's own queue entry,
    by id, is never consulted for it; its other pending entries are); a pending non-target chapter is evaluated
    at its entry's stamped `modelKey` (engine and Qwen tier), or at the request's
-   engine and key when unstamped (§2.6, D8); several pending entries of one chapter
-   each count. `done` / `failed` entries, other books' entries and chapters that
-   are neither a target nor pending contribute nothing; a pending chapter with
-   no cached sentences contributes nothing.
+   engine and key when unstamped (§2.6, D8; not under `nonEnglish`, below); several
+   pending entries of one chapter each count. `done` / `failed` entries, other books'
+   entries and chapters that are neither a target nor pending contribute nothing; a
+   pending chapter with no cached sentences contributes nothing (unless its entry is
+   unknown, below).
+
+   With `nonEnglish` supplied (#4587), a pending entry's POST re-forces the cast at its own engine,
+   so an entry stamped with an eligible engine is evaluated at that engine with the cast forced for
+   it; an unstamped or non-eligible-stamped entry is unknown and ORs the full-cast keep in, with
+   or without cached sentences.
 
    PURE: the caller reads the queue file and the analysis cache. Reused by the
    same-book job union (#4557) and the post-score path (#4560). */
@@ -20,6 +26,7 @@ import type { QueueEntry, QueueStatus } from '../workspace/queue-io.js';
 import type { TtsEngine } from './index.js';
 import { canonicalModelKeyForEngine, engineForModelKey, type TtsModelKey } from './model-keys.js';
 import { chapterQwenTierNeeds } from './qwen-tier-needs.js';
+import { nonEnglishEngineFor } from './clone-engines.js';
 import type { CastCharacter } from './synthesise-chapter.js';
 
 const PENDING_STATUSES: ReadonlySet<QueueStatus> = new Set<QueueStatus>([
@@ -46,6 +53,14 @@ export interface RunQwenNeedsInput {
   /** The request's Qwen key (`resolveForEngine('qwen').modelKey`). */
   requestQwenModelKey: TtsModelKey;
   qwenUnavailable: boolean;
+  /** A non-English book's per-entry forcing inputs (#4587); absent for an English book. */
+  nonEnglish?: {
+    eligibleEngines: readonly TtsEngine[];
+    /** The cast BEFORE the engine forcing: each character's original `ttsEngine`. */
+    unforcedCast: CastCharacter[];
+    /** What an unknown pending entry keeps. */
+    fullCastKeep: { keep06: boolean; keep17: boolean };
+  };
 }
 
 /** One render of a chapter: the engine its POST defaults to and the Qwen key it runs at. */
@@ -53,6 +68,8 @@ interface ChapterRun {
   chapterId: number;
   defaultEngine: TtsEngine;
   qwenModelKey: TtsModelKey;
+  /** The cast forced for this run's engine; absent, the run uses `input.cast`. */
+  cast?: CastCharacter[];
 }
 
 export function computeRunQwenNeeds(input: RunQwenNeedsInput): { keep06: boolean; keep17: boolean } {
@@ -60,13 +77,17 @@ export function computeRunQwenNeeds(input: RunQwenNeedsInput): { keep06: boolean
     (input.analysisChapters as Record<number, SentenceOutput[] | undefined>)[id] ?? [];
   const targets = new Set(input.targetChapterIds);
   const runs = new Map<string, ChapterRun>();
-  const add = (r: ChapterRun) => runs.set(`${r.chapterId}|${r.defaultEngine}|${r.qwenModelKey}`, r);
+  /* A run with its own cast never replaces a run on `input.cast` (a target's). */
+  const add = (r: ChapterRun) =>
+    runs.set(`${r.chapterId}|${r.defaultEngine}|${r.qwenModelKey}|${r.cast ? 'own' : 'input'}`, r);
+  let keep06 = false;
+  let keep17 = false;
   for (const chapterId of targets) {
     add({ chapterId, defaultEngine: input.defaultEngine, qwenModelKey: input.requestQwenModelKey });
   }
   /* Every pending entry renders on its own POST, so a chapter with several counts once per entry
      (a re-queue at another tier needs both). A stamped entry runs at its stamp's ENGINE as well as
-     its Qwen tier; an unstamped one follows the request. */
+     its Qwen tier; an unstamped one follows the request, except under `nonEnglish` (unknown). */
   for (const e of input.queueEntries) {
     if (e.bookId !== input.bookId || !PENDING_STATUSES.has(e.status)) continue;
     /* Only this POST's own entry is skipped (by id): the target is already evaluated at the request's
@@ -76,21 +97,42 @@ export function computeRunQwenNeeds(input: RunQwenNeedsInput): { keep06: boolean
     if (input.ownQueueEntryId != null) {
       if (e.id === input.ownQueueEntryId) continue;
     } else if (targets.has(e.chapterId) && e.status === 'in_progress') continue;
+    const stampEngine = e.modelKey ? engineForModelKey(e.modelKey) : undefined;
+    const qwenModelKey = canonicalModelKeyForEngine(
+      'qwen',
+      e.modelKey ?? input.requestQwenModelKey,
+    );
+    if (!input.nonEnglish) {
+      add({
+        chapterId: e.chapterId,
+        defaultEngine: stampEngine ?? input.defaultEngine,
+        qwenModelKey,
+      });
+      continue;
+    }
+    const { eligibleEngines, unforcedCast, fullCastKeep } = input.nonEnglish;
+    if (!stampEngine || !eligibleEngines.includes(stampEngine)) {
+      keep06 ||= fullCastKeep.keep06;
+      keep17 ||= fullCastKeep.keep17;
+      continue;
+    }
     add({
       chapterId: e.chapterId,
-      defaultEngine: e.modelKey ? engineForModelKey(e.modelKey) : input.defaultEngine,
-      qwenModelKey: canonicalModelKeyForEngine('qwen', e.modelKey ?? input.requestQwenModelKey),
+      defaultEngine: stampEngine,
+      qwenModelKey,
+      cast: unforcedCast.map((c) => ({
+        ...c,
+        ttsEngine: nonEnglishEngineFor(c, eligibleEngines, stampEngine),
+      })),
     });
   }
 
-  let keep06 = false;
-  let keep17 = false;
   for (const r of runs.values()) {
     const sentences = sentencesOf(r.chapterId);
     if (sentences.length === 0 && !targets.has(r.chapterId)) continue;
     const need = chapterQwenTierNeeds({
       sentences,
-      cast: input.cast,
+      cast: r.cast ?? input.cast,
       castIdHistory: input.castIdHistory,
       defaultEngine: r.defaultEngine,
       runQwenModelKey: r.qwenModelKey,

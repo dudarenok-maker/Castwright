@@ -65,7 +65,7 @@ import {
   type TtsProvider,
 } from '../tts/index.js';
 import { resolveCharacterEngine, computeUsedQwenTiers } from '../tts/per-character-engine.js';
-import { resolveClonedRetargetEngine } from '../tts/clone-engines.js';
+import { nonEnglishEngineFor } from '../tts/clone-engines.js';
 import { finalizeChapterAudioWrite } from '../audio/finalize-chapter-write.js';
 import { clearMismatchedDesignedVoices } from '../tts/verify-designed-voice-language.js';
 import {
@@ -1108,21 +1108,24 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const nonEnglishBook = isNonEnglish(bookLanguage);
   const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
   const coquiEligible = eligibleEngines.includes('coqui');
+  /* #4587 — the cast the run needs re-force per pending entry: each character's `ttsEngine` from
+     BEFORE the forcing below, its voices from AFTER the clearing (a cleared voice stays cleared). */
+  let unforcedCast: CastCharacter[] = [];
   if (nonEnglishBook) {
+    const originalEngineById = new Map(cast.characters.map((c) => [c.id, c.ttsEngine]));
     /* fs-60 — honor an already-eligible manual engine choice (e.g. a character
        explicitly cast on Coqui via the now-unlocked picker) instead of blindly
        overwriting it. Anything NOT already eligible (unset, or an engine this
        book's language can't use — e.g. Kokoro) still forces to Qwen exactly as
        before. */
     for (const c of cast.characters) {
-      if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) continue;
       /* fs-38 Wave 3c — a coqui/qwen-cloned character riding the book default
          must retarget to whichever eligible clone-capable engine actually
          carries its cloned slot (preferring the current default `engine`
          when both qualify), NOT get force-moved to qwen where it has no
          voice at all. Falls back to the historical blind 'qwen' force for a
          non-cloned (or cloned-but-ineligible) character. */
-      c.ttsEngine = resolveClonedRetargetEngine(c, eligibleEngines, engine) ?? 'qwen';
+      c.ttsEngine = nonEnglishEngineFor(c, eligibleEngines, engine);
     }
     /* fs-2 / fs-32c — force re-design on cross-language reuse. Shared with the
        splice re-record path: clears any designed Qwen voice whose baked
@@ -1151,6 +1154,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `different language than this book — re-design ${names} before generating.`,
       });
     }
+    unforcedCast = cast.characters.map((c) => ({ ...c, ttsEngine: originalEngineById.get(c.id) }));
   }
 
   /* Per-character engine routing (plan 108). Engine is no longer one global
@@ -1322,7 +1326,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      fallback taken into account (`computeRunQwenNeeds`). A tier only a finished
      chapter, a silent cast member or a Kokoro-fallback character used is NOT
      kept, so a stray same-tier base can be evicted. A run that needs no tier
-     does not reconcile at all (D3).
+     does not reconcile at all (D3). On a non-English book each stamped pending
+     entry is evaluated at its own engine, and an unknown one (unstamped, or
+     stamped with an ineligible engine) keeps the full cast's tiers, whoever
+     speaks (#4587).
 
      Read for BOTH the run-start VRAM reconcile and `usesQuality17` (the render
      lease). The post-score reconcile passes this as `keep` too, but re-reads the
@@ -1338,6 +1345,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      still cost a reload. The same-book job union is below (#4557). */
   const fullCastQwenTiers = () =>
     computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
+  /* #4587 — fed to both needs reads (run start and post-score); absent for an English book. */
+  const nonEnglishNeeds: RunQwenNeedsInput['nonEnglish'] = nonEnglishBook
+    ? { eligibleEngines, unforcedCast, fullCastKeep: fullCastQwenTiers() }
+    : undefined;
   /* This run's own needs (#4556). `usedQwenTiers` below widens it to K(book). */
   let runNeeds: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
   let postScoreCastIdHistory: RunQwenNeedsInput['castIdHistory'];
@@ -1356,6 +1367,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         defaultEngine: engine,
         requestQwenModelKey: resolveForEngine('qwen').modelKey,
         qwenUnavailable,
+        ...(nonEnglishNeeds ? { nonEnglish: nonEnglishNeeds } : {}),
       });
     } catch (e) {
       console.warn(
@@ -2278,6 +2290,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                   requestQwenModelKey: resolveForEngine('qwen').modelKey,
                   qwenUnavailable,
                   fullCastKeep: fullCastQwenTiers(),
+                  ...(nonEnglishNeeds ? { nonEnglish: nonEnglishNeeds } : {}),
                 }),
                 fullCastKeep: fullCastQwenTiers(),
               }

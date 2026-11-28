@@ -13,6 +13,7 @@
 */
 
 import type { TtsEngine } from './model-keys.js';
+import type { CastCharacter } from './synthesise-chapter.js';
 
 export type CloneEngine = 'qwen' | 'coqui';
 
@@ -168,6 +169,18 @@ export function resolveClonedRetargetEngine(
     return currentEngine as CloneEngine;
   }
   return candidates[0];
+}
+
+/** The engine a character is forced to on a non-English book: its own
+    `ttsEngine` when set and eligible, otherwise the cloned retarget, otherwise
+    'qwen'. Pure, so a caller can ask the question without mutating a cast. */
+export function nonEnglishEngineFor(
+  c: CastCharacter,
+  eligibleEngines: readonly TtsEngine[],
+  defaultEngine: TtsEngine,
+): TtsEngine {
+  if (c.ttsEngine && eligibleEngines.includes(c.ttsEngine)) return c.ttsEngine;
+  return resolveClonedRetargetEngine(c, eligibleEngines, defaultEngine) ?? 'qwen';
 }
 
 /** RESOLUTION test — "which clone is this, exactly?" Used by anything that

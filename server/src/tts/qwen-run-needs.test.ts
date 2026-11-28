@@ -3,7 +3,8 @@
 import { describe, expect, it } from 'vitest';
 import type { QueueEntry } from '../workspace/queue-io.js';
 import { computeRunQwenNeeds, type RunQwenNeedsInput } from './qwen-run-needs.js';
-import { chr, sent, T06, T17 } from './qwen-tier-needs.fixtures.js';
+import { chr, NONE, sent, T06, T17 } from './qwen-tier-needs.fixtures.js';
+import type { CastCharacter } from './synthesise-chapter.js';
 
 const entry = (
   id: string,
@@ -109,6 +110,97 @@ describe("computeRunQwenNeeds: only a target chapter's own in_progress entry is 
         queueEntries: [entry('own', 3, 'in_progress', T17)],
         analysisChapters: { 3: [sent('narrator')] },
         cast: [narrator],
+      }),
+    ).toEqual({ keep06: true, keep17: false });
+  });
+});
+
+/* #4587 — on a non-English book each pending entry's POST re-forces the cast at ITS engine, so the
+   request-forced `cast` cannot answer for it. */
+describe('computeRunQwenNeeds: a non-English pending entry is evaluated at its stamp engine (#4587)', () => {
+  /* Cloned on both clone-capable engines and not pinned, so the forcing follows the run's engine. */
+  const dual = chr('narrator', {
+    ttsEngine: undefined,
+    overrideTtsVoices: {
+      qwen: { name: 'qwen-voice', provenance: 'cloned', libraryUuid: 'u-qwen' },
+      coqui: { name: 'xtts-voice', provenance: 'cloned', libraryUuid: 'u-coqui' },
+    },
+  });
+  const nonEnglish = (
+    unforcedCast: CastCharacter[],
+    fullCastKeep = NONE,
+  ): NonNullable<RunQwenNeedsInput['nonEnglish']> => ({
+    eligibleEngines: ['qwen', 'coqui'],
+    unforcedCast,
+    fullCastKeep,
+  });
+
+  it('a Coqui request keeps the tier of a Qwen-stamped pending chapter voiced by a dual clone', () => {
+    const coquiRequest: Partial<RunQwenNeedsInput> = {
+      targetChapterIds: [1],
+      defaultEngine: 'coqui',
+      queueEntries: [entry('e2', 2, 'queued', T17)],
+      analysisChapters: { 1: [sent('narrator')], 2: [sent('narrator')] },
+      cast: [{ ...dual, ttsEngine: 'coqui' }],
+    };
+    expect(run({ ...coquiRequest, nonEnglish: nonEnglish([dual]) })).toEqual({
+      keep06: false,
+      keep17: true,
+    });
+    expect(run(coquiRequest)).toEqual(NONE);
+  });
+
+  /* Chapter 2's speaker is pinned to Qwen 1.7B, so evaluating the entry as a run would keep 1.7B:
+     only the full-cast keep may come out of an unknown entry. */
+  describe.each([
+    ['kokoro-stamped', 'kokoro-v1'],
+    ['gemini-stamped', 'gemini-2.5-flash'],
+    ['unstamped', undefined],
+  ] as const)('a %s pending entry is unknown', (_label, stamp) => {
+    const cast = [chr('narrator', { ttsEngine: 'coqui' }), chr('wren', { ttsModelKey: T17 })];
+    const unknown: Partial<RunQwenNeedsInput> = {
+      queueEntries: [entry('e2', 2, 'queued', stamp)],
+      analysisChapters: { 1: [sent('narrator')], 2: [sent('wren')] },
+      cast,
+      nonEnglish: nonEnglish(cast, { keep06: true, keep17: false }),
+    };
+
+    it('takes the full-cast keep instead of being evaluated as a run', () => {
+      expect(run(unknown)).toEqual({ keep06: true, keep17: false });
+    });
+
+    it('ORs the full-cast keep into what the target chapters need', () => {
+      expect(
+        run({
+          ...unknown,
+          targetChapterIds: [1],
+          defaultEngine: 'qwen',
+          requestQwenModelKey: T17,
+          cast: [chr('narrator', { ttsModelKey: T17 }), chr('wren', { ttsModelKey: T17 })],
+        }),
+      ).toEqual({ keep06: true, keep17: true });
+    });
+  });
+
+  it('an eligible-stamped entry whose retargeted cast has no Qwen speaker contributes nothing', () => {
+    expect(
+      run({
+        queueEntries: [entry('e2', 2, 'queued', 'coqui-xtts-v2')],
+        analysisChapters: { 2: [sent('narrator')] },
+        cast: [{ ...dual, ttsEngine: 'qwen' }],
+        nonEnglish: nonEnglish([dual], { keep06: true, keep17: true }),
+      }),
+    ).toEqual(NONE);
+  });
+
+  it("a pending entry at the target's own engine and key does not replace the target's cast", () => {
+    expect(
+      run({
+        targetChapterIds: [1],
+        queueEntries: [entry('requeue', 1, 'queued', T06)],
+        analysisChapters: { 1: [sent('narrator')] },
+        cast: [chr('narrator')],
+        nonEnglish: nonEnglish([chr('narrator', { ttsEngine: 'coqui' })]),
       }),
     ).toEqual({ keep06: true, keep17: false });
   });
