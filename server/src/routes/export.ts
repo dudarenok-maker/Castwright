@@ -75,7 +75,9 @@ export interface BookExportJob {
   captionGranularity?: 'line' | 'sentence' | 'word';
   captionScope?: 'whole-book' | 'per-chapter';
   destination: 'download' | 'sync-folder';
-  status: 'queued' | 'in_progress' | 'done' | 'failed' | 'cancelled';
+  /** `cancelling` is non-terminal: DELETE asked the job to stop and its work is
+      still running; `cancelled` is set only once that work has stopped. */
+  status: 'queued' | 'in_progress' | 'cancelling' | 'done' | 'failed' | 'cancelled';
   filename: string;
   sizeBytes: number | null;
   progress: number | null;
@@ -178,6 +180,10 @@ async function rehydrateBook(bookDir: string, bookId: string): Promise<void> {
       /* A restart means no sync copy is in flight, whatever the manifest says
          (a DELETE during the copy persisted `true`). */
       if (job.syncCopyInFlight) job.syncCopyInFlight = false;
+      /* Likewise `cancelling`: the process doing that work is gone, so the work
+         has stopped. A job still running here is already in the map, which wins
+         below. The manifest is not rewritten. */
+      if (job.status === 'cancelling') markCancelled(job, cancelReason(job.syncPath));
       if (!jobs.has(job.id)) jobs.set(job.id, job);
     } catch {
       /* Corrupt manifest — skip, don't fail the GET. */
@@ -574,7 +580,7 @@ exportRouter.get('/:bookId/exports', async (req: Request, res: Response) => {
 });
 
 exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Response) => {
-  /* #3711 -- QUICK book-folder writer (the cancelled manifest write; it removes no artifact, #4228):
+  /* #3711 -- QUICK book-folder writer (the cancel's manifest write; it removes no artifact, #4228):
      holds book-op for its whole span, so a rename queued behind it lands in the new
      folder and this never recreates the old one. The cancelled job's token is released
      by its own `runBookJob`, so the cancel itself is not blocked by it. */
@@ -586,29 +592,32 @@ exportRouter.delete('/:bookId/exports/:exportId', async (req: Request, res: Resp
   if (!job || job.bookId !== located.state.bookId)
     return res.status(404).json({ error: 'export_not_found' });
 
-  /* Idempotent: already-terminal jobs (done / failed / cancelled) reply
-     204 without touching state. Lets the frontend retry a cancel click
-     without surfacing a spurious error if the job finished in between. */
-  if (job.status === 'done' || job.status === 'failed' || job.status === 'cancelled') {
+  /* Idempotent: a job already cancelling or terminal (done / failed /
+     cancelled) replies 204 without touching state. Lets the frontend retry a
+     cancel click without surfacing a spurious error if the job finished in
+     between. */
+  if (job.status !== 'queued' && job.status !== 'in_progress') {
     return res.status(204).end();
   }
 
-  /* Mark cancelled BEFORE aborting the controller — runExportJob's
-     catch checks `job.status === 'cancelled'` to decide whether to
-     overwrite with 'failed', so the order matters. */
-  job.status = 'cancelled';
-  job.completedAt = new Date().toISOString();
-  job.errorReason = cancelReason(job.syncPath);
-  jobs.set(job.id, { ...job });
-
+  /* A running build is only asked to stop: the job reads `cancelling` until
+     runExportJob has seen the abort and torn down, and it alone writes
+     `cancelled`. With no controller nothing is building (a manifest left over
+     from a process that died), so nothing would ever finish a `cancelling` job:
+     it ends `cancelled` here. A COPY goes into the map: the entry may be
+     runExportJob's own object, which DELETE never edits. */
   const controller = jobControllers.get(job.id);
+  const next: BookExportJob = { ...job };
+  if (controller) next.status = 'cancelling';
+  else markCancelled(next, cancelReason(next.syncPath));
+  jobs.set(next.id, next);
   controller?.abort();
 
-  /* Best-effort manifest write so a server restart sees the cancelled
-     state. If the disk write fails (the staging dir might already be
-     gone), the in-memory state is still authoritative. */
+  /* Best-effort manifest write so a server restart sees the cancel. If the
+     disk write fails (the staging dir might already be gone), the in-memory
+     state is still authoritative. */
   try {
-    await writeJsonAtomicOrdered(manifestPath(located.bookDir, job.id), job);
+    await writeJsonAtomicOrdered(manifestPath(located.bookDir, next.id), next);
   } catch {
     /* swallow */
   }
@@ -772,25 +781,28 @@ function cancelReason(syncPath: string | null): string {
     : 'Cancelled by user.';
 }
 
+/* The one shape of a finished cancel. */
+function markCancelled(job: BookExportJob, reason: string): void {
+  job.status = 'cancelled';
+  job.completedAt = new Date().toISOString();
+  job.errorReason = reason;
+}
+
 /* Publish a freshly set `syncPath` to the jobs map without copying
-   runExportJob's own object over the entry: DELETE may already have flipped the
-   map entry to `cancelled`, and `{ ...job }` here would revert it to
-   `in_progress`. Patches only the field (and the reason, when the entry is
-   already cancelled and was written before the path was known). Synchronous. */
+   runExportJob's own object over the entry: DELETE may already have set the
+   map entry to `cancelling`, and `{ ...job }` here would revert it to
+   `in_progress`. Patches only the field. Synchronous. */
 function publishSyncPath(job: BookExportJob): void {
   const cur = jobs.get(job.id);
   if (!cur) return;
-  jobs.set(job.id, {
-    ...cur,
-    syncPath: job.syncPath,
-    errorReason: cur.status === 'cancelled' ? cancelReason(job.syncPath) : cur.errorReason,
-  });
+  jobs.set(job.id, { ...cur, syncPath: job.syncPath });
 }
 
 /* Flip the in-flight marker on the job record around an un-cancellable
    sync-folder copy, patching the map entry the same way (DELETE may already
-   have flipped it to `cancelled`). The modal reads this after a cancel to know
-   whether to keep waiting for the copy's outcome (#4228). Synchronous. */
+   have set it to `cancelling`). A cancelled job stays `cancelling` until the
+   copy ends; the modal reads this marker after a cancel to know whether to
+   keep waiting for the copy's outcome (#4228). Synchronous. */
 function publishSyncCopyInFlight(job: BookExportJob, inFlight: boolean): void {
   job.syncCopyInFlight = inFlight;
   const cur = jobs.get(job.id);
@@ -800,7 +812,7 @@ function publishSyncCopyInFlight(job: BookExportJob, inFlight: boolean): void {
 
 /* A builder that resolves does not mean the export is still wanted: a zip
    builder registers every chapter up front and can finish after DELETE has
-   already flipped the job to `cancelled`. Checked before each step that makes
+   already asked the job to stop. Checked before each step that makes
    the artifact visible (sync-folder copy, rename into place, `done`) so a
    cancelled job ends cancelled. Drops `artifact` first, which must be a
    job-private path (the `.partial-<id>` build or the mp3-folder staging
@@ -912,6 +924,9 @@ async function runExportJob(
   try {
     const onProgress = (ratio: number) => {
       job.progress = ratio;
+      /* After a cancel the map entry reads `cancelling`; a copy of this job's
+         own object would turn it back into `in_progress`. */
+      if (signal.aborted) return;
       jobs.set(job.id, { ...job });
     };
     if (job.format === 'mp3-folder') {
@@ -1097,10 +1112,11 @@ async function runExportJob(
     job.status = 'done';
     job.completedAt = new Date().toISOString();
     /* Publish `done` to the jobs map in the same synchronous step as the last
-       cancel check, before any await: DELETE edits the map's copy, so until
+       cancel check, before any await: DELETE reads the map's entry, so until
        this runs a DELETE landing during the revoke below would read
-       `in_progress` and the `finally` would then write `done` + `downloadUrl`
-       back over it. After this, a DELETE sees `done` and is a no-op. Rule:
+       `in_progress`, answer `cancelling`, and the `finally` would then write
+       `done` + `downloadUrl` back over it. After this, a DELETE sees `done`
+       and is a no-op. Rule:
        every cancel check happens BEFORE the commit rename, the commit rename
        is never undone, and nothing awaits between the final synchronous
        `signal.throwIfAborted()` and this publish. */
@@ -1113,25 +1129,16 @@ async function runExportJob(
        linger forever. */
     await revokeStaleSameFormat(bookDir, job.bookId, job, job.id);
   } catch (e) {
-    /* Cancellation: the DELETE handler already flipped status to
-       'cancelled' before signalling abort. Honour that — don't
-       overwrite it with 'failed'. Same guard for races where the
-       signal trips for any reason while DELETE hasn't run yet. */
-    if (job.status === 'cancelled' || signal.aborted || (e as Error)?.name === 'AbortError') {
-      if (job.status !== 'cancelled') {
-        job.status = 'cancelled';
-        job.completedAt = new Date().toISOString();
-        /* Only DELETE aborts the controller, so an aborted signal means the
-           user cancelled; its own status flip landed on the jobs map's copy,
-           not on this object. */
-        job.errorReason = signal.aborted ? cancelReason(job.syncPath) : (e as Error)?.message || 'Cancelled.';
-      } else if (signal.aborted) {
-        /* `job` is still the map entry here (no progress tick or publish*
-           patch replaced it with a copy), so DELETE already flipped it and
-           wrote its reason before `syncPath` was known. Refresh the reason now
-           that the copy's outcome is. */
-        job.errorReason = cancelReason(job.syncPath);
-      }
+    /* Cancellation. The build has stopped and the inner catch has already
+       dropped its job-private files, so only now is the job terminal: the
+       `finally` publishes `cancelled` over DELETE's `cancelling`. Only DELETE
+       aborts the controller, so an aborted signal means the user cancelled;
+       its reason is read here, once any sync copy's outcome is known. */
+    if (signal.aborted || (e as Error)?.name === 'AbortError') {
+      markCancelled(
+        job,
+        signal.aborted ? cancelReason(job.syncPath) : (e as Error)?.message || 'Cancelled.',
+      );
     } else {
       job.status = 'failed';
       const failureReason =
