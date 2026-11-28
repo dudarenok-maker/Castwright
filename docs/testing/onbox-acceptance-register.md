@@ -746,17 +746,19 @@ row this register still carries. Keep the table even when it is empty.
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 21 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 20 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 2 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**91 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
+> **Last change: 2026-11-28 (#4738), 92 → 91.** Row **E115** (Gemini config payload, #3084 wave 5b) DISCHARGED and removed; it owed only the rejected-value bullet (#4718). **2026-11-28 — #4718 fix on-box (`fix/server-4718-gemini-400-classify`), claude/claude:** Rejected value re-run — **PASS** on `f36e7873`, real Gemini key, `gemini-3.5-flash-lite`, the Coalfall fixture (3 chapters). This worktree's dev server on port 8130 (the worktree's own 8090 was held by another process), a throwaway `USER_SETTINGS_FILE`, TTS sidecar auto-start off; stdout was redirected to `logs/server.log`. Gemini answered the 400 on the first attempt. All three `chapter-failed` frames read `"code":"analyzer-request-rejected"` with the value `"[redacted]"`. `Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value'` counts 0 (also 0 in `logs/server.err.log`; each file has 6 `[redacted]` lines). On screen, the three Analysing failure cards end `"[redacted]"` and the probe value is not in the page HTML (the first-run Setup wizard opened first, so the route was opened by hash). Evidence: `docs/testing/onbox-4718-results/E115/`. The other three bullets passed on 2026-11-26 on `main` at `035ff80a` (#4700, `docs/testing/onbox-batch-2-results/E115/`; the output-cap label was read from the catalog API, not the browser) and were not re-run. **Row verdict: DISCHARGE** Group E 21 → 20. `next-id` markers untouched (allocate-once).
+>
+> **Previous change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
 >
 > **Previous change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
 >
@@ -8278,27 +8280,6 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 > - **G1 — NOT RUN.** Needs a Gemma `on` run on a cap-exhausting chapter; Gemma returned `503` on every call, so no chapter run was attempted.
 >
 > **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash` and `gemma-4-31b-it`, A8, thought tokens (3.6-flash default vs high; Gemma off vs on), G1, and the Advanced settings row for stale `minimal` (browser); re-run when the Gemini API is not returning 503 for these models**
-
-### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
-
-The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that it accepts a payload `topK`, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.
-
-- **`topK`.** `{"config": {"topK": 40}}` completes a chapter.
-- **Output cap.** `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params".
-- **Rejected value.** `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
-- **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
-
-*Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
-
-> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4700):** Run on this worktree's server (
-pm --prefix server run dev, port 8130, `main` at 035ff80a), real Gemini key, `analysisEngine` set to gemini; the run used `gemini-3.5-flash-lite` (the saved default). Book: the Coalfall fixture, 15,657 bytes, 3 chapters, analysed whole (not a single chapter). Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/). The server ran in dev mode, so its stdout (`server-log-trimmed.txt`) stands in for `logs/server.log`.
->
-> - **`topK` — PASS.** `{"config":{"topK":40}}` saved (200) and the run completed: 3 chapters, 14 characters, no error event (`case1-topK-sse-trimmed.txt`; log `Chapter 3/3 cast done — 13 characters`). Control: the catalog label for that payload is `"+ custom params"` only.
-> - **Output cap — PASS.** With `{"config":{"maxOutputTokens":2048}}` `GET /api/analyzer/models` gives `requestControlLabelParts=["+ custom params","max output set by custom params"]` for `gemini-3.5-flash-lite`; with `topK` it is `"+ custom params"` alone (`step2-label.txt`). Read from the catalog API, not the browser label.
-> - **Rejected value — FAIL (bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718)).** The redaction part holds: Gemini answered `400 INVALID_ARGUMENT` and the probe value is `[redacted]` in every SSE `chapter-failed` message and every server log line. The string `castwright-onbox-probe-value` appears in neither, nor in `analysis-last-outcome.json`. But all three chapters were classified `"code":"unknown"` (remediation "Click Retry on this chapter…") and the run ended `cast_incomplete`. `analyzer-request-rejected` never appears (`case3-bogus.sse.txt`). The browser view was not opened.
-> - **Protected key — PASS.** Saving `{"config":{"httpOptions":{"baseUrl":"http://127.0.0.1:1"}}}` answered `400`: `Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.` (`step4-save-httpOptions.txt`).
->
-> **Row verdict: KEEP — still owed: rejected value (the error code is `unknown`, not `analyzer-request-rejected`; #4718)**
 
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 
