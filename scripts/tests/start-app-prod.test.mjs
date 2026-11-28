@@ -894,3 +894,14 @@ test('the server spawn passes serverChildEnv and both report-exclusion flags', (
   );
   assert.equal(code.match(/\bspawn\(/g)?.length, 1, 'one server spawn, so the pin covers it');
 });
+
+// #3264: confirmOwnServerFromMarker's pid check is tested directly, but it only
+// bites when main() hands it the spawned child's pid; without `ownerPid` the
+// wait falls back to null and a sibling's stale marker passes. Pin that one line.
+test('main() passes the spawned child pid to the post-spawn waitForOwnServer', () => {
+  const src = readFileSync(new URL('../start-app-prod.mjs', import.meta.url), 'utf8');
+  const code = src.replace(/\/\*[\s\S]*?\*\//g, '').replace(/^[ \t]*\/\/.*$/gm, '');
+  const calls = code.match(/await waitForOwnServer\(\{[\s\S]*?\}\);/g) ?? [];
+  assert.equal(calls.length, 1, 'one waitForOwnServer call in main(), so the pin covers it');
+  assert.match(calls[0], /\bownerPid: child\.pid,/);
+});
