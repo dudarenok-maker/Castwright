@@ -303,6 +303,75 @@ test('scanForOwnServer: an already-elapsed deadline aborts before probing the ne
   assert.equal(await scanForOwnServer(port, 1, false, runDir, Date.now() - 1), null);
 });
 
+// The pre-spawn scan passes probeServed so a server started before the marker
+// existed (no marker file) is still recognised from its /api/health runDir, and a
+// confirming marker cannot outvote a body that names a different runDir.
+test('scanForOwnServer: with a health probe, a listening port with NO marker whose /api/health names OUR runDir is confirmed', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Infinity, async () => served(runDir)), port);
+});
+
+test('scanForOwnServer: with a health probe, NO marker and a sibling runDir or no readable body is not confirmed', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Infinity, async () => served('/sibling/.run')), null);
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Infinity, async () => null), null);
+  assert.equal(
+    await scanForOwnServer(port, 1, false, runDir, Infinity, async () => {
+      throw new Error('boom');
+    }),
+    null,
+  );
+});
+
+test('scanForOwnServer: with a health probe, a closed port is not probed or confirmed', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await closedPort();
+  let probed = false;
+  const probeServed = async () => {
+    probed = true;
+    return served(runDir);
+  };
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Infinity, probeServed), null);
+  assert.equal(probed, false);
+});
+
+test('scanForOwnServer: with a health probe, a confirming marker is outvoted by a body naming a sibling runDir', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir, port, https: false, pid: process.pid });
+  assert.equal(await scanForOwnServer(port, 1, false, runDir, Infinity, async () => served('/sibling/.run')), null);
+});
+
+test('scanForOwnServer: with a health probe, a confirming marker stands when the body is unreadable or names our runDir', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await listenSilently(t);
+  writeServerOwner({ runDir, port, https: true, pid: process.pid });
+  assert.equal(await scanForOwnServer(port, 1, true, runDir, Infinity, async () => null), port);
+  assert.equal(await scanForOwnServer(port, 1, true, runDir, Infinity, async () => served(runDir)), port);
+});
+
+// #3264 review: a pre-marker own server rebound to :port+1 must still be found
+// by the real pre-spawn scan, or the launcher starts a second server on the
+// same workspace.
+test('decideLaunchAction: #3264 a pre-marker OWN server rebound to :port+1 (no marker, /api/health names our runDir) → skip, not spawn', async (t) => {
+  const runDir = makeRunDir(t);
+  const rebound = await listenSilently(t);
+  const port = rebound - 1;
+  const decision = await decideLaunchAction({
+    port,
+    altPort: port,
+    lanHttps: false,
+    runDir,
+    url: `http://localhost:${port}/`,
+    probePort: async (p) => p === rebound,
+    probeServed: async (p) => (p === rebound ? served(runDir) : null),
+  });
+  assert.equal(decision.kind, 'skip');
+  assert.ok(decision.messageLines.some((l) => l.includes(`:${rebound}`)));
+});
+
 test('confirmOwnServerFromMarker: marker + live pid + answering port is confirmed; a dead pid is not', async () => {
   const probes = {
     readServerOwner: (_runDir, port) => ({ pid: 4242, port, https: true, startedAt: '' }),

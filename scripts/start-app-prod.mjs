@@ -315,10 +315,11 @@ function healthNamesOtherRunDir(served, ownRunDir) {
    server without running its release, so stop-app.mjs prunes it after the
    kill and the next server boot prunes dead pids' markers. Residual: a leftover
    marker whose pid was reused before either ran, while a foreign process holds
-   the same port, reads as ours here. On the target and alternate ports a
-   readable /api/health naming another runDir overrides it (decideLaunchAction);
-   the rebound scan below has no such check, so a foreign listener that does
-   not answer /api/health is the case left, rare but not impossible.
+   the same port, reads as ours here. In decideLaunchAction (target and
+   alternate ports, and the pre-spawn rebound scan) a readable /api/health
+   naming another runDir overrides it; the post-spawn scan has no such check,
+   and a foreign listener that does not answer /api/health is the case left,
+   rare but not impossible.
    Exported for scripts/tests/start-app-prod.test.mjs. */
 export async function confirmOwnServerFromMarker(
   port,
@@ -343,12 +344,34 @@ export async function confirmOwnServerFromMarker(
    blown open-ended by a slow multi-candidate pass (Castwright#3030 round 3,
    finding N8). `_lanHttps` is unused since #3264 (no network probe left to
    pick a protocol for); it stays so the signature callers use is unchanged.
-   Exported for scripts/tests/start-app-prod.test.mjs. */
-export async function scanForOwnServer(startPort, maxPorts, _lanHttps, runDir, deadline = Infinity) {
+
+   `probeServedFn`, when given, adds /api/health to the candidate check, as
+   decideLaunchAction does for the target and alternate ports: a marker that
+   confirms still loses to a readable body naming another runDir, and a listening
+   port with NO confirming marker is ours only if its body names our runDir (a
+   server started before the marker existed). Only the pre-spawn scan passes it;
+   waitForOwnServer's post-spawn scan stays marker-only, since the child it just
+   spawned always writes a marker. Exported for
+   scripts/tests/start-app-prod.test.mjs. */
+export async function scanForOwnServer(
+  startPort,
+  maxPorts,
+  lanHttps,
+  runDir,
+  deadline = Infinity,
+  probeServedFn = null,
+) {
   for (let i = 0; i < maxPorts; i += 1) {
     if (Date.now() >= deadline) return null;
     const candidate = startPort + i;
-    if (await confirmOwnServerFromMarker(candidate, runDir)) return candidate;
+    const marked = await confirmOwnServerFromMarker(candidate, runDir);
+    if (!probeServedFn) {
+      if (marked) return candidate;
+      continue;
+    }
+    if (!marked && !(await probePort(candidate))) continue;
+    const served = await probeServedFn(candidate, lanHttps).catch(() => null);
+    if (marked ? !healthNamesOtherRunDir(served, runDir) : isOwnServerInstance(served, runDir)) return candidate;
   }
   return null;
 }
@@ -423,7 +446,7 @@ function ownServerOnTargetSkip(port, url, served) {
    a healthy own server that /api/health cannot be read from (HTTPS with mkcert
    unreachable) is still recognised. Without a confirming marker the
    /api/health answer decides, which covers a server started before the marker
-   existed.
+   existed. The rebound scan below does the same per candidate.
 
    Returns one of:
      { kind: 'fail', message }                                   — main() should fail(message)
@@ -482,7 +505,7 @@ export async function decideLaunchAction({
     foreignOccupantCwd = served.configLoad?.cwd ?? 'unknown';
   }
 
-  const stalePort = await scanForOwnServerFn(port + 1, 19, lanHttps, runDir, Date.now() + 5000);
+  const stalePort = await scanForOwnServerFn(port + 1, 19, lanHttps, runDir, Date.now() + 5000, probeServedFn);
   if (stalePort !== null) {
     return {
       kind: 'skip',
