@@ -18,6 +18,7 @@ import { accountSlice } from '../store/account-slice';
 import { configSlice } from '../store/config-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { seedSameCardPersona } from '../test/seed-same-card-persona';
+import { useAppSelector } from '../store';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -183,6 +184,9 @@ function renderDrawer(
     myVoices?: VoiceLibraryEntry[];
     onSave?: (next: Character, meta: { hadConflict: boolean }) => void;
     onLock?: (character: Character) => void;
+    /* Render the drawer from the store's live cast row (as layout.tsx does)
+       rather than a static prop, so slot mirrors reach it. */
+    live?: boolean;
   } = {},
 ) {
   const store = makeStore({
@@ -191,12 +195,18 @@ function renderDrawer(
     libraryBook: extra.libraryBook,
     myVoices: extra.myVoices,
   });
+  if (extra.live) store.dispatch(castActions.setCharacters([character]));
+  function LiveCharacter({ children }: { children: (c: Character) => React.ReactElement }) {
+    const row = useAppSelector((s) => s.cast.characters.find((c) => c.id === character.id));
+    return children(row ?? character);
+  }
   return {
     store,
     ...render(
       <Provider store={store}>
+        <LiveCharacter>{(liveCharacter) => (
         <ProfileDrawer
-          character={character}
+          character={extra.live ? liveCharacter : character}
           bookId={extra.bookId}
           voice={extra.voice}
           onClose={() => {}}
@@ -214,6 +224,7 @@ function renderDrawer(
           renderedFallbackEngine={extra.renderedFallbackEngine}
           onReassignLines={extra.onReassignLines}
         />
+        )}</LiveCharacter>
       </Provider>,
     ),
   };
@@ -2272,13 +2283,63 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     };
     renderDrawer(
       { ...baseChar, ttsEngine: 'qwen' },
-      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned] },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned], live: true },
     );
     fireEvent.click(screen.getByTestId('profile-drawer-my-voice-clone1'));
     await waitFor(() => expect(assignLibraryVoice).toHaveBeenCalledWith('clone1', expect.anything()));
     await waitFor(() => expect(screen.queryByTestId('profile-drawer-my-voice-clone1')).toBeNull());
     expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
     expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('after picking a clone then Removing it, a fresh design shows Save + the designed line again', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    unassignLibraryVoice.mockResolvedValue({ cleared: ['qwen'] });
+    const cloned: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'clone1',
+      name: 'My clone',
+      provenance: 'cloned',
+    };
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned], live: true },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-clone1'));
+    await waitFor(() => expect(screen.getByTestId('profile-drawer-remove-my-voice')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('profile-drawer-remove-my-voice'));
+    await waitFor(() => expect(unassignLibraryVoice).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId('profile-drawer-remove-my-voice')).toBeNull());
+    act(() => {
+      store.dispatch(
+        castActions.setOverrideVoiceName({
+          characterId: 'halloran',
+          engine: 'qwen',
+          name: 'qwen-halloran-fresh',
+          provenance: 'designed',
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
+  });
+
+  it('still shows "Save to my voices" for a DESIGNED qwen slot when the coqui slot is a clone', () => {
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-desP', libraryUuid: 'desP', provenance: 'designed' },
+          coqui: { name: 'xtts-cloneP', libraryUuid: 'cloneP', provenance: 'cloned' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
+    expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
   });
 
   it('does not show "Save to my voices" before any Qwen voice is designed', () => {

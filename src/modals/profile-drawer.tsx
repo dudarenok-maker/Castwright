@@ -401,14 +401,11 @@ export function ProfileDrawer({
       (voice?.ttsVoice?.provider === 'qwen' ? voice.ttsVoice.name : null) ??
       null,
   );
-  /* Whether the qwen voice in play is a CLONE (cast slot says so, or the My
-     voices entry just picked is one). "Save to my voices" would copy a clone
-     into an unconsented `designed` entry that Revoke can't reach, so the
-     server refuses it (403) and the drawer must not offer it. `pickedClone`
-     is the session override set by `assignMyVoice`; null = defer to the slot. */
-  const [pickedClone, setPickedClone] = useState<boolean | null>(null);
-  const qwenVoiceIsClone =
-    pickedClone ?? character.overrideTtsVoices?.qwen?.provenance === 'cloned';
+  /* Whether the qwen voice in play is a CLONE, read off the live cast slot
+     (`assignMyVoice` mirrors `provenance` into it). "Save to my voices" would
+     copy a clone into an unconsented `designed` entry that Revoke can't
+     reach, so the server refuses it (403) and the drawer must not offer it. */
+  const qwenVoiceIsClone = character.overrideTtsVoices?.qwen?.provenance === 'cloned';
   /* srv-43: voiceUuid of the just-designed or just-approved voice, seeded
      before the cast refetch so "Play 12s" can resolve the uuid-keyed cache
      entry immediately. Starts from the persisted value (if any). */
@@ -501,7 +498,6 @@ export function ProfileDrawer({
       if (routedEngine === 'qwen') {
         setDesignedVoiceId(`qwen-${entry.voiceUuid}`);
         setStagedVoiceUuid(entry.voiceUuid);
-        setPickedClone(entry.provenance === 'cloned');
       }
       /* The routed engine's slot is the one the user was actually asking
          for; the server declining it is a partial success, not a silent one.
