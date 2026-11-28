@@ -20,7 +20,27 @@ describe('help categories', () => {
     expect(IDS.size).toBe(HELP_CATEGORIES.length);
     expect(HELP_CATEGORIES.every((c) => c.label.length > 0)).toBe(true);
   });
-  it('has exactly 55 items (29 failures + 26 topics)', () => {
-    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(55);
+  it('has exactly 56 items (29 failures + 27 topics)', () => {
+    expect(HELP_FAILURE_ENTRIES.length + HELP_TOPICS.length).toBe(56);
+  });
+  it('includes the clone-your-own-voice topic under Voices & languages', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.category).toBe('voices');
+    expect(topic?.body).toContain('Clone a voice');
+  });
+  it('does not tell a working Coqui install to press Repair (#4868 review)', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('Repair');
+  });
+  it('names the two clone-capable engines and says Kokoro and Gemini cannot clone', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('Both voice engines');
+    expect(topic?.body).not.toContain('three voice engines');
+    expect(topic?.body).toContain('Kokoro and Gemini voices can’t');
+  });
+  it('does not promise Revoke erases chapters already made with the clone', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('everything made from it');
+    expect(topic?.body).toContain('stay in that voice until you re-cast');
   });
 });
