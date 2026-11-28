@@ -5,7 +5,7 @@
    'in-book' row whose pooled anchors' stamped tier (inBookModelKey) differs, is mixed or is missing, are dropped
    ("no centroid" -> acoustic-only candidate skipped, reported in stillSuspect). */
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, rmSync, mkdirSync, writeFileSync } from 'node:fs';
+import { mkdtempSync, rmSync, mkdirSync, writeFileSync, readFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -230,5 +230,60 @@ describe('#3518 qa-repair centroid filter — Qwen tier', () => {
     const done = await runCase({ oldTier: T06, noSnapshot: true, rowKind: 'in-book', rowTier: T06, requestKey: T06, embed: 'high' });
     expect(synthesiseChapter).toHaveBeenCalled();
     expect(done.repaired).toContain(0);
+  });
+});
+
+/* #4225 — the per-segment tier stamp through a repair. The build, splice and finalize fakes above are
+   swapped for the real ones for this one write; only the synth stays fake. */
+describe('#4225 qa-repair carries the per-segment rendered model key through the real finalize', () => {
+  it('stamps the re-recorded segment with the repair key and leaves every other entry byte-identical', async () => {
+    const { buildSynthReplacements: realBuild } = await vi.importActual<typeof import('../audio/build-synth-replacement.js')>('../audio/build-synth-replacement.js');
+    const { spliceChapterSegments: realSplice } = await vi.importActual<typeof import('../audio/splice-chapter.js')>('../audio/splice-chapter.js');
+    const { finalizeChapterAudioWrite: realFinalize } = await vi.importActual<typeof import('../audio/finalize-chapter-write.js')>('../audio/finalize-chapter-write.js');
+    vi.mocked((await import('../audio/build-synth-replacement.js')).buildSynthReplacements).mockImplementationOnce(realBuild);
+    vi.mocked((await import('../audio/splice-chapter.js')).spliceChapterSegments).mockImplementationOnce(realSplice);
+    vi.mocked((await import('../audio/finalize-chapter-write.js')).finalizeChapterAudioWrite).mockImplementationOnce(realFinalize);
+    const { loadAnalysisCache } = await import('../store/analysis-cache.js');
+    const analysis = { chapters: { 1: [30, 31, 32].map((id) => ({ id, chapterId: 1, characterId: 'castor', text: 'Yes.' })) } };
+    /* The route reads the cache twice: for the scan's line text, then for the re-record. */
+    vi.mocked(loadAnalysisCache).mockResolvedValueOnce(analysis).mockResolvedValueOnce(analysis);
+    /* The replacement is as long as the line it replaces, so no later line is retimed. */
+    vi.mocked(synthesiseChapter).mockClear();
+    synthesiseChapter.mockResolvedValueOnce({ pcm: tone(1.0, 12000), sampleRate: SR, embeddings: [] });
+
+    /* Line 1 is dead silence, so the signal scan flags it alone; the half second of tail keeps the
+       decoded length clear of the last segment's end. */
+    const { encodePcmToAudio } = await import('../tts/mp3.js');
+    const pcm = Buffer.concat([tone(1.0, 12000), Buffer.alloc(SR * 2), tone(1.5, 12000)]);
+    writeFileSync(join(audioRoot, `${SLUG}.mp3`), await encodePcmToAudio(pcm, SR, { format: 'mp3', quality: 2 }));
+    rmSync(join(audioRoot, `${SLUG}.render-integrity.json`), { force: true });
+    writeFileSync(join(bookDir, '.audiobook', 'cast.json'), JSON.stringify({
+      characters: [{ id: 'castor', name: 'Castor', gender: 'female', attributes: [], ttsEngine: 'qwen', overrideTtsVoices: { qwen: { name: 'castor-alden-B', libraryUuid: 'b' } } }],
+    }));
+    const line = (i: number, extra: object) => ({
+      groupIndex: i, characterId: 'castor', sentenceIds: [30 + i], startSec: i, endSec: i + 1,
+      voiceName: 'qwen-b', resolvedCharacterId: 'castor', ...extra,
+    });
+    /* Line 2 is a legacy entry: no stamp. */
+    const prior = [line(0, { renderedModelKey: T06 }), line(1, { renderedModelKey: T06 }), line(2, {})];
+    const segPath = join(audioRoot, `${SLUG}.segments.json`);
+    writeFileSync(segPath, JSON.stringify({
+      bookId, chapterId: 1, chapterTitle: 'Chapter 1', durationSec: 3.5, sampleRate: SR, modelKey: T06,
+      synthesizedAt: new Date().toISOString(), segments: prior,
+      characterSnapshots: { castor: { voiceEngine: 'qwen', resolvedVoiceName: 'qwen-b', modelKey: T06 } },
+    }));
+
+    const res = await request(app).post(`/api/books/${encodeURIComponent(bookId)}/chapters/1/audio-qa-repair`).send({ dryRun: false, modelKey: T17 });
+
+    const done = parseSse(res.text).find((e) => e.type === 'qa_repair_complete');
+    expect(done, res.text).toBeTruthy();
+    expect(done.repaired).toEqual([1]);
+    expect(synthesiseChapter).toHaveBeenCalledTimes(1);
+    const after = JSON.parse(readFileSync(segPath, 'utf8')).segments;
+    expect(after).toHaveLength(3);
+    expect(after[1].renderedModelKey).toBe(T17);
+    expect(JSON.stringify(after[0])).toBe(JSON.stringify(prior[0]));
+    expect(JSON.stringify(after[2])).toBe(JSON.stringify(prior[2]));
+    expect(after[2]).not.toHaveProperty('renderedModelKey');
   });
 });
