@@ -198,40 +198,71 @@ describe('R55: a cast-identity write is refused with 409 book_busy while an anal
 
   /* A lock-free check before the book-op span would pass here: the job registers while
      the request is parked on book-op, after any such check and before the write. */
-  it.each([
-    ['POST /cast/merge', post('/cast/merge', { sourceId: 'wren', targetId: 'marlow' })],
-    ['POST /cast/merge-suggestions/accept', post('/cast/merge-suggestions/accept', { sourceId: 'wren', targetId: 'marlow' })],
-  ])('%s: a job registered while the request waits on book-op still refuses it (no TOCTOU)', async (_n, send) => {
+  /* Parks `send` on `book-op:<parkId>`, registers the analysis job for that book while it
+     waits, then expects the request refused and every book in `dirs` unchanged. */
+  async function expectRefusedWhileParked(
+    parkId: string,
+    send: () => request.Test,
+    dirs: string[],
+  ): Promise<void> {
     const { withBookOp, __addBookJobToken } = await import('../workspace/book-op-lock.js');
     const { __keyWaitersForTest } = await import('../workspace/file-lock.js');
-    const before = snapshot(bookDir);
+    const before = dirs.map(snapshot);
     let releaseOp!: () => void;
     const held = new Promise<void>((r) => (releaseOp = r));
     let acquired!: () => void;
     const holding = new Promise<void>((r) => (acquired = r));
-    const op = withBookOp(bookId, async () => {
+    const op = withBookOp(parkId, async () => {
       acquired();
       await held;
     });
     await holding;
     const pending = send().then((r) => r);
-    for (let i = 0; i < 500 && __keyWaitersForTest(`book-op:${bookId}`) === 0; i++) {
+    for (let i = 0; i < 500 && __keyWaitersForTest(`book-op:${parkId}`) === 0; i++) {
       await new Promise((r) => setTimeout(r, 5));
     }
-    expect(__keyWaitersForTest(`book-op:${bookId}`)).toBe(1);
+    expect(__keyWaitersForTest(`book-op:${parkId}`)).toBe(1);
     /* What `runBookJob` does under book-op; it cannot be called here, since this test
        already holds book-op and runBookJob would queue behind the request. */
-    const releaseJob = __addBookJobToken(bookId, 'analysis');
+    const releaseJob = __addBookJobToken(parkId, 'analysis');
     releaseOp();
     try {
       await op;
       const res = await pending;
       expect(res.status).toBe(409);
       expect(res.body.code).toBe('book_busy');
-      expect(snapshot(bookDir)).toEqual(before);
+      expect(dirs.map(snapshot)).toEqual(before);
     } finally {
       releaseJob();
     }
+  }
+
+  it.each([
+    ['POST /cast/merge', post('/cast/merge', { sourceId: 'wren', targetId: 'marlow' })],
+    ['POST /cast/merge-suggestions/accept', post('/cast/merge-suggestions/accept', { sourceId: 'wren', targetId: 'marlow' })],
+  ])('%s: a job registered while the request waits on book-op still refuses it (no TOCTOU)', async (_n, send) => {
+    await expectRefusedWhileParked(bookId, send, [bookDir]);
+  });
+
+  /* The override names two books; either one's book-op can be the one it waits on. */
+  it.each([
+    ['source', () => bookId],
+    ['target', () => otherBookId],
+  ])('POST /library-cast/override: a job registered on the %s book while it waits on book-op still refuses it (no TOCTOU)', async (_n, parkId) => {
+    await expectRefusedWhileParked(
+      parkId(),
+      () =>
+        request(app)
+          .post('/api/library-cast/override')
+          .set('Content-Type', 'application/json')
+          .send({
+            sourceBookId: bookId,
+            sourceCharacterId: 'wren',
+            targetBookId: otherBookId,
+            targetCharacterId: 'wren',
+          }),
+      [bookDir, otherDir],
+    );
   });
 });
 
