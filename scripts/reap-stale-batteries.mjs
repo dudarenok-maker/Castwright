@@ -88,10 +88,10 @@ const SUPERVISOR_NAME_RE = /^(node|cmd|sh|bash|powershell|pwsh)(?:\.exe)?$/i;
 // DECLARED GAPS (enumerated on purpose; an honest gap beats an implied one —
 // PR #3063 review pass 2, C1; PR #3063 review pass 4, P1; PR #3063 review
 // pass 5, Q1):
-//   * Invoke-Pester runs IN-PROCESS (scripts/tests/run.ps1:32) and never
+//   * Invoke-Pester runs IN-PROCESS (the Invoke-Pester call at the end of scripts/tests/run.ps1) and never
 //     appears on any command line, so a Pester run is recognisable ONLY via
 //     this repo's own launcher path (scripts/tests/run.ps1, spawned by
-//     run-powershell.mjs:52). A Pester run started any other way is invisible
+//     run-powershell.mjs's spawnSync). A Pester run started any other way is invisible
 //     to this tool and will never be reaped. Pinned by a named test.
 //   * pytest IS recognised as an invocation, but can never ENABLE a kill:
 //     every pytest subtree contains python.exe, and classify()'s

@@ -13,6 +13,17 @@ BeforeAll {
     $modulePath = Join-Path $PSScriptRoot "..\lib\sidecar-sweep-port.psm1"
     Import-Module $modulePath -Force
 
+    # Parent pid for note fixtures. Process.Parent exists only in pwsh 7 (it is
+    # $null under Windows PowerShell 5.1, which wrote `"ppid":,` and got the
+    # note rejected), so use CIM where it exists and fall back to .Parent
+    # where it does not (pwsh on POSIX).
+    function Get-ParentPid {
+        if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+            return (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
+        }
+        return (Get-Process -Id $PID).Parent.Id
+    }
+
     # #2632 N52 — `Set-Content -Encoding utf8` WRITES a UTF-8 BOM under
     # Windows PowerShell 5.1 (measured: `ef bb bf 4c` — the file's own
     # fixtures were quietly exercising the BOM-prefixed cell on every run
@@ -59,7 +70,7 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'returns the per-checkout port recorded in tts.owner.<port>.json over server\.env (#2632 N27 fix)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
@@ -236,7 +247,7 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'matches lowercase tts.owner.*.json (control for the case-sensitivity cell)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
 
@@ -284,7 +295,7 @@ Describe 'Get-SidecarSweepPort' {
         $notePath1 = Join-Path $script:tempDir "tts.owner.9010.json"
         $notePath2 = Join-Path $script:tempDir "tts.owner.9011.json"
         $pidStr = $PID
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
 
         # Two notes (we use current process for testing, but they could be dead or live)
         Set-Content -Path $notePath1 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
@@ -400,7 +411,7 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     # site to independently mutate away from what's tested here.
     It 'includes the resolved sidecar port from tts.owner.<port>.json' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
