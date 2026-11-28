@@ -19,6 +19,9 @@ import { listGeminiModels, _resetGeminiCatalogForTest, type GeminiModelsClient }
 import { allKnobs } from '../../config/registry.js';
 import { coerceAndValidate } from '../../config/resolver.js';
 import type { TransportRequest } from '../runner/transport.js';
+import { mapFinish } from '../runner/finish.js';
+import { AnalyzerReasoningOverflowError, AnalyzerTruncatedError } from '../errors.js';
+import { classifyAnalysisFailure } from '../../routes/failure-taxonomy.js';
 
 type Part = { text?: string; thought?: boolean };
 function chunk(parts: Part[], extra: { finishReason?: string; thoughtsTokenCount?: number } = {}) {
@@ -413,4 +416,63 @@ describe('thinking window, request ceiling and the per-attempt timing log (#3084
   });
 });
 
+});
+
+describe('an empty thought part is not reasoning evidence (#4851)', () => {
+  const MODEL = 'gemma-4-31b-it';
+  const ctx = { kind: 'gemini' as const, model: MODEL };
+
+  afterEach(() => {
+    vi.restoreAllMocks();
+  });
+
+  /** One thought part, then Gemma's empty MAX_TOKENS closing chunk. */
+  async function runEmptyMaxTokens(thoughtPart: Part, last: { thoughtsTokenCount?: number } = {}) {
+    const info = vi.spyOn(console, 'info').mockImplementation(() => {});
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const gen = vi.fn().mockResolvedValue(
+      streamOf([chunk([thoughtPart]), chunk([{ text: '' }], { finishReason: 'MAX_TOKENS', ...last })]),
+    );
+    const result = await new GeminiTransport({ apiKey: 'test-key', model: MODEL, client: clientWith(gen) }).send(request());
+    const timing = info.mock.calls
+      .map((call) => call.map(String).join(' '))
+      .filter((line) => line.startsWith('[gemini] stream-timing'));
+    let failure: unknown;
+    try {
+      mapFinish(result, ctx);
+    } catch (err) {
+      failure = err;
+    }
+    return { result, timing, failure };
+  }
+
+  it.each<[string, Part]>([
+    ['an empty-text thought part', { thought: true, text: '' }],
+    ['a thought part with no text key', { thought: true }],
+  ])('%s leaves an empty MAX_TOKENS as a truncation, so it is re-split (#528)', async (_name, part) => {
+    const { result, timing, failure } = await runEmptyMaxTokens(part);
+    expect(result.reasoningSeen).toBe(false);
+    expect(result.finish).toBe('length');
+    expect(failure).toBeInstanceOf(AnalyzerTruncatedError);
+    expect(failure).not.toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(timing).toHaveLength(1);
+    expect(timing[0]).toMatch(/ thoughtPartsBeforeAnswer=0$/);
+  });
+
+  it('a thought part with text still reports an empty MAX_TOKENS as reasoning overflow (#4723)', async () => {
+    const { result, timing, failure } = await runEmptyMaxTokens({ thought: true, text: 'Let me consider…' });
+    expect(result.reasoningSeen).toBe(true);
+    expect(failure).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(classifyAnalysisFailure(failure, 'Gemma').code).toBe('analyzer-reasoning-overflow');
+    expect(timing).toHaveLength(1);
+    expect(timing[0]).toMatch(/ thoughtPartsBeforeAnswer=1$/);
+  });
+
+  it('an empty thought part counts when a later chunk reports thought tokens', async () => {
+    const { result, timing, failure } = await runEmptyMaxTokens({ thought: true, text: '' }, { thoughtsTokenCount: 40 });
+    expect(result.reasoningSeen).toBe(true);
+    expect(failure).toBeInstanceOf(AnalyzerReasoningOverflowError);
+    expect(timing).toHaveLength(1);
+    expect(timing[0]).toMatch(/ thoughtPartsBeforeAnswer=1$/);
+  });
 });

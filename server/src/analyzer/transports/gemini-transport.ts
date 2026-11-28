@@ -289,6 +289,9 @@ export class GeminiTransport implements ChatTransport {
     let firstChunkMs: number | null = null;
     let firstAnswerMs: number | null = null;
     let thoughtPartsBeforeAnswer = 0;
+    /* #4851 — empty thought parts count only if this attempt's usage reports thought tokens, on any chunk. */
+    let emptyThoughtPartsBeforeAnswer = 0;
+    let usageReportsThoughts = false;
 
     const signals: AbortSignal[] = [watchdog.signal, ceiling];
     if (req.signal) signals.push(req.signal);
@@ -360,6 +363,7 @@ export class GeminiTransport implements ChatTransport {
       let finishReason: string | undefined;
       let promptBlockReason: string | undefined;
       let reasoningSeen = false;
+      let emptyThoughtSeen = false;
 
       const iterator = (stream as AsyncIterable<GeminiChunk>)[Symbol.asyncIterator]();
       while (true) {
@@ -371,17 +375,21 @@ export class GeminiTransport implements ChatTransport {
         armIdleTimer(buf !== '');
         const chunk = next.value;
 
-        /* Thought parts → reasoningSeen, but never enter the text buffer. */
-        const parts = chunk.candidates?.[0]?.content?.parts;
-        if (parts) {
-          for (const p of parts) {
-            if (p.thought) reasoningSeen = true;
-          }
-        }
-
         if (firstChunkMs === null) firstChunkMs = Date.now() - requestStartedAt;
-        if (!buf) {
-          thoughtPartsBeforeAnswer += (chunk.candidates?.[0]?.content?.parts ?? []).filter((p) => p.thought === true).length;
+
+        /* #4851 — a thought part is reasoning evidence (reasoningSeen, and the
+           count before the answer) only when its text is non-empty, or when this
+           attempt's usage reports thought tokens: at reasoning `off` Gemma still
+           streams an empty placeholder. Thought text never enters the buffer. */
+        for (const p of chunk.candidates?.[0]?.content?.parts ?? []) {
+          if (p.thought !== true) continue;
+          if ((p.text ?? '') !== '') {
+            reasoningSeen = true;
+            if (!buf) thoughtPartsBeforeAnswer += 1;
+          } else {
+            emptyThoughtSeen = true;
+            if (!buf) emptyThoughtPartsBeforeAnswer += 1;
+          }
         }
 
         const usage = chunk.usageMetadata;
@@ -393,6 +401,7 @@ export class GeminiTransport implements ChatTransport {
         }
         if (usage?.thoughtsTokenCount && Number.isFinite(usage.thoughtsTokenCount)) {
           thoughtsTokenCount = usage.thoughtsTokenCount;
+          usageReportsThoughts ||= usage.thoughtsTokenCount > 0;
         }
 
         const chunkFinish = chunk.candidates?.[0]?.finishReason;
@@ -508,7 +517,7 @@ export class GeminiTransport implements ChatTransport {
 
       return {
         text: buf,
-        reasoningSeen,
+        reasoningSeen: reasoningSeen || (emptyThoughtSeen && usageReportsThoughts),
         finish,
         finishReason:
           finishReason && finishReason !== 'STOP' && finishReason !== 'FINISH_REASON_UNSPECIFIED'
@@ -560,6 +569,7 @@ export class GeminiTransport implements ChatTransport {
     } finally {
       disarmIdleTimer();
       releaseAbortListener();
+      if (usageReportsThoughts) thoughtPartsBeforeAnswer += emptyThoughtPartsBeforeAnswer;
       /* #3084 P5 — one line per request attempt, for on-box tuning of the
          thinking window. Counts and timings only: never request or response
          content. */
