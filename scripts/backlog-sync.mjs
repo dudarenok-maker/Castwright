@@ -70,14 +70,14 @@ function extractBlock(text, labelLineRe) {
 export function parseWhatBenefit(body) {
   const text = String(body ?? '');
   const what =
-    extractInline(text, /^-\s*_What\b[^:]*:_\s*(.+)$/m) ??
-    extractInline(text, /^\*\*What\b[^*]*:\*\*\s*(.+)$/m) ??
-    extractBlock(text, /^#{1,6}\s*What\b/i) ??
+    extractInline(text, /^-\s*_What(?:\s*\([^)]*\))?:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*What(?:\s*\([^)]*\))?:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*What(?:\s*\([^)]*\))?:?$/i) ??
     extractBlock(text, /^\*\*What\*\*$/i);
   const benefit =
-    extractInline(text, /^-\s*_Benefit\b[^:]*:_\s*(.+)$/m) ??
-    extractInline(text, /^\*\*Benefit\b[^*]*:\*\*\s*(.+)$/m) ??
-    extractBlock(text, /^#{1,6}\s*Benefit\b/i) ??
+    extractInline(text, /^-\s*_Benefit(?:\s*\([^)]*\))?:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*Benefit(?:\s*\([^)]*\))?:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*Benefit(?:\s*\([^)]*\))?:?$/i) ??
     extractBlock(text, /^\*\*Benefit\*\*$/i);
   return { what, benefit };
 }

@@ -181,3 +181,41 @@ test('toBacklogIssues skips a project item whose content is a PullRequest or Dra
   assert.equal(featureIssues.length, 1);
   assert.equal(featureIssues[0].id, 'fs-9');
 });
+
+test('parseWhatBenefit takes the ## What section, not a later "**What it does not have:**" bold line or "## What integration..." heading (#4913)', () => {
+  const body = [
+    '## What',
+    '',
+    'Add the clone-only model as an engine.',
+    'Second line of the paragraph.',
+    '',
+    '## The model',
+    '',
+    '**What it does not have:** preset voices, voice design, or any style control.',
+    '',
+    '## What integration would involve',
+    '',
+    'Wiring work.',
+    '',
+    '## Benefit',
+    '',
+    'More voices.',
+  ].join('\n');
+  assert.deepEqual(parseWhatBenefit(body), {
+    what: 'Add the clone-only model as an engine. Second line of the paragraph.',
+    benefit: 'More voices.',
+  });
+});
+
+test('parseWhatBenefit ignores over-matching inline labels but accepts the legal What/Benefit label shapes (#4913)', () => {
+  assert.equal(parseWhatBenefit('**What it does not have:** nope').what, null);
+  assert.equal(parseWhatBenefit('- _What integration would involve:_ nope').what, null);
+  assert.equal(parseWhatBenefit('**Benefits we lose:** nope').benefit, null);
+  assert.equal(parseWhatBenefit('## What integration would involve\n\nnope').what, null);
+  assert.equal(parseWhatBenefit('**What:** a').what, 'a');
+  assert.equal(parseWhatBenefit('**What (user):** b').what, 'b');
+  assert.equal(parseWhatBenefit('- _What:_ c').what, 'c');
+  assert.equal(parseWhatBenefit('- _What (x):_ d').what, 'd');
+  assert.equal(parseWhatBenefit('**Benefit (user):** e').benefit, 'e');
+  assert.equal(parseWhatBenefit('## What (scope)\n\nf').what, 'f');
+});
