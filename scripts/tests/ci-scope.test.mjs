@@ -44,6 +44,13 @@ test('computeScopes routes a shared attribution-eval fixture diff to the fronten
   assert.equal(scopes.step_test, true);
 });
 
+// The frontend clone-readiness selectors and help-topics.clone-labels.test.tsx import
+// server/src/tts/clone-engines.ts, so a diff of only that file must schedule step_test.
+test('computeScopes routes server/src/tts/clone-engines.ts to the frontend test step', () => {
+  const scopes = computeScopes(['server/src/tts/clone-engines.ts'], { eventName: 'pull_request' });
+  assert.equal(scopes.step_test, true);
+});
+
 // Defect D.
 test('computeScopes routes a workflow diff to test:hooks', () => {
   const scopes = computeScopes(['.github/workflows/verify.yml'], { eventName: 'pull_request' });
