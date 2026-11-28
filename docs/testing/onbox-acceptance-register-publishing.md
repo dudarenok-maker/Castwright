@@ -601,7 +601,7 @@ and would have let the exact #1931 race straight back through. See
 > (`<!-- next-id: BLK… -->`, `<!-- next-id: UNC… -->`), floor 101. A new
 > Blocked row is a `### <ID> · <title>` heading and a new Unconfirmed row is
 > a `- **<ID> · <title>** (…)` bullet, where `<ID>` is the ID named by that
-> section's own next-id marker (e.g. `BLK107` / `UNC103` when this note was
+> section's own next-id marker (e.g. `BLK107` (removed from the register 2026-11-28 by owner ruling, #4953) / `UNC103` when this note was
 > written; take the marker's current value); bump the marker in the same commit.
 > IDs are allocate-once and never reused, exactly like lettered rows, and
 > `register:build` rejects a Blocked or Unconfirmed row that has none. These
