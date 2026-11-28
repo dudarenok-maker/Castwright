@@ -39,6 +39,8 @@ import { bookMetaActions, selectEffectiveMeta, selectIsDirty } from '../store/bo
 import { revisionsActions, selectDriftForBook } from '../store/revisions-slice';
 import { buildCastConfirmEvent } from '../lib/change-log';
 import { api } from '../lib/api';
+import { THIS_BOOK_FALLBACK_TITLE, librarySyncBusyToast } from '../lib/library-sync-busy';
+import { notificationsActions } from '../store/notifications-slice';
 import { stageEqual } from '../lib/router';
 import { resolveSegmentForSec } from '../lib/resolve-segment-for-sec';
 import { buildAnalyzerPickerGroups } from '../lib/models';
@@ -925,12 +927,33 @@ export function ConfirmRoute() {
            the workspace's cast state in this slice, so no client-side
            dispatch is needed for it — the next time that book opens it
            will hydrate from the updated file. */
-          const res = await api.overrideLibraryCast({
-            sourceBookId: bookId,
-            sourceCharacterId,
-            targetBookId,
-            targetCharacterId,
-          });
+          let res;
+          try {
+            res = await api.overrideLibraryCast({
+              sourceBookId: bookId,
+              sourceCharacterId,
+              targetBookId,
+              targetCharacterId,
+            });
+          } catch (err) {
+            /* #4564 (owner decision, PR #4862 pass 1) — a book started analysing after the
+               screen loaded, so the server refused the sync. Say so by name (the server's
+               sentence says "this book", wrong when the busy one is the library book) and
+               rethrow: the view still logs it and confirms the cast. */
+            if ((err as { code?: unknown } | null)?.code === 'book_busy') {
+              const busyTitle = castReadOnly
+                ? manuscript.title || THIS_BOOK_FALLBACK_TITLE
+                : characters.find((c) => c.id === sourceCharacterId)?.matchedFrom?.bookTitle || targetBookId;
+              dispatch(
+                notificationsActions.pushToast({
+                  kind: 'error',
+                  message: librarySyncBusyToast(busyTitle),
+                  dedupeKey: `library-sync-busy:${castReadOnly ? bookId : targetBookId}`,
+                }),
+              );
+            }
+            throw err;
+          }
           if (res?.source) {
             dispatch(castActions.updateCharacter(res.source, { routeBacked: true }));
           }
