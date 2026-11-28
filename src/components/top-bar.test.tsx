@@ -1104,16 +1104,17 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     const home = screen.getByRole('button', { name: 'Castwright — home' });
     const wordmark = within(home).getByText('Castwright');
     expect(wordmark.className).toMatch(/hidden/);
-    expect(wordmark.className).toMatch(/lg:inline/);
+    expect(wordmark.className).toMatch(/2xl:inline/);
   });
 
   /* #4691 decision A — Help / Theme / Account stay inline from sm up, so the
-     bar sheds width elsewhere: the version pill is lg+, and the book title
-     truncates (full text kept in `title`) instead of holding its width. */
-  it('hides the version pill below lg', () => {
+     bar sheds width elsewhere: the wordmark text and version pill are 2xl+ (owner
+     decision 2026-11-28), and the book title truncates (full text kept in `title`)
+     down to a 44px / few-character floor instead of holding its width. */
+  it('hides the version pill below 2xl', () => {
     renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
     expect(screen.getByTestId('version-pill').parentElement!.className).toMatch(
-      /hidden lg:inline-flex/,
+      /hidden 2xl:inline-flex/,
     );
   });
 
@@ -1121,10 +1122,12 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     const long = 'The Coalfall Commission: A Very Long Subtitle That Cannot Fit';
     renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen', projectTitle: long })} />);
     const button = screen.getByTitle(long);
-    expect(button.className).toMatch(/min-w-0/);
+    expect(button.className).toMatch(/min-w-\[44px\]/);
+    expect(button.className).not.toMatch(/min-w-0\b/);
     expect(button.className).not.toMatch(/shrink-0/);
     const text = within(button).getByText(long);
     expect(text.className).toMatch(/truncate/);
+    expect(text.className).toMatch(/min-w-\[3ch\]/);
     expect(text.className).toMatch(/max-w-\[/);
   });
 

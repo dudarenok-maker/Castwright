@@ -389,12 +389,12 @@ export function TopBar({
           tip a hair past the 412px phone viewport (a 9px overflow that surfaced
           only on the Linux mobile-chrome runner, where font metrics render
           wider than Windows/macOS); the middle strip already scrolls. Paired
-          with hiding the redundant VersionPill below lg (below) so the clip is
+          with hiding the redundant VersionPill below 2xl (below) so the clip is
           pure insurance and never cuts a visible control (Admin, Help, Theme and
           Account live in the phone drawer, not inline, below `sm`). clip (not hidden)
           leaves the y-axis visible so the portaled status/account popovers are
           unaffected. Caught by e2e/responsive/baseline.spec.ts at Pixel-7. */}
-      <div className="max-w-[1500px] mx-auto px-3 md:px-6 h-16 flex items-center gap-2 lg:gap-3 xl:gap-4 2xl:gap-8 overflow-x-clip">
+      <div className="max-w-[1500px] mx-auto px-3 md:px-6 h-16 flex items-center gap-2 sm:gap-1 md:gap-2 lg:gap-3 xl:gap-4 2xl:gap-8 overflow-x-clip">
         <NavDrawer
           stage={stage}
           view={view}
@@ -412,19 +412,25 @@ export function TopBar({
           className="font-bold text-base tracking-tight inline-flex items-center gap-2 hover:opacity-80 transition-opacity shrink-0 min-h-[44px]"
         >
           <CastwaveMark className="w-6 h-6 shrink-0" aria-hidden="true" />
-          {/* Wordmark text hidden below lg (#916, #4691) — the mark alone is the
-              home affordance there; this reclaims ~85px so the right cluster fits
-              (Help / Theme / Account stay inline from sm up). */}
-          <span className="hidden lg:inline">Castwright</span>
+          {/* Wordmark text hidden below 2xl (#916, #4691; owner decision 2026-11-28)
+              — the mark alone is the home affordance there; this reclaims ~85px so
+              the right cluster fits (Help / Theme / Account stay inline from sm up)
+              and all six tabs fit from 1280 during a render. */}
+          <span className="hidden 2xl:inline">Castwright</span>
         </button>
+        {/* The title is the one flexing item, but it keeps a floor (owner decision
+            2026-11-28): >= 44px (the touch target) and room for the `/`, the
+            arrow (md+) and a few characters + ellipsis, so it never collapses to
+            nothing nor lets its `/` / arrow spill over the next control. */}
         {projectTitle && (
           <button
             onClick={onTitleClick ?? onHome}
             title={projectTitle}
-            className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors min-w-0 min-h-[44px]"
+            data-testid="topbar-title"
+            className="flex items-center gap-2 text-sm text-ink/60 hover:text-ink transition-colors min-w-[44px] md:min-w-[64px] min-h-[44px]"
           >
             <span className="text-ink/40 shrink-0">/</span>
-            <span className="font-medium text-ink truncate min-w-0 max-w-[140px] lg:max-w-[240px] xl:max-w-none">
+            <span className="font-medium text-ink truncate min-w-[3ch] max-w-[140px] lg:max-w-[240px] xl:max-w-none">
               {projectTitle}
             </span>
             <IconArrowLeft className="w-3.5 h-3.5 text-ink/40 shrink-0 hidden md:inline" />
@@ -474,7 +480,7 @@ export function TopBar({
             <StatusPill summary={statusSummary} detail={statusDetail} />
           </div>
         )}
-        <div className="flex items-center gap-2 lg:gap-3 shrink-0">
+        <div className="flex items-center gap-2 sm:gap-1 md:gap-2 lg:gap-3 shrink-0">
           {/* On phone the Admin pill moves into the hamburger drawer (#916) on
               EVERY stage (#4567: the drawer now exists on no-nav stages too, and
               its trigger would otherwise push an inline pill off-screen). sm+
@@ -494,10 +500,11 @@ export function TopBar({
               Queue · {queueCount}
             </button>
           )}
-          {/* Hidden below lg (#4691) — the version is also in the footer + Account,
-              and dropping it here gives the book-route top bar room for Help /
-              Theme / Account from 412px to 1023px (see overflow-x-clip note above). */}
-          <span className="hidden lg:inline-flex">
+          {/* Hidden below 2xl (#4691; owner decision 2026-11-28) — the version is also
+              in the footer + Account, and dropping it here gives the book-route top
+              bar room for Help / Theme / Account and every tab (see overflow-x-clip
+              note above). */}
+          <span className="hidden 2xl:inline-flex">
             <VersionPill onClick={onOpenAccount} />
           </span>
           {/* Below sm, Help / Theme / Account live in the drawer rows on every
