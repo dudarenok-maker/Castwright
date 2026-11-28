@@ -2325,6 +2325,29 @@ test('pesterFingerprint passes -ExecutionPolicy Bypass (5.1 Restricted blocks th
   assert.ok(args.indexOf('-NoProfile') >= 0);
 });
 
+test('pesterFingerprint falls through on any spawn error except a timeout (EFTYPE, EACCES)', () => {
+  for (const code of ['EFTYPE', 'EACCES']) {
+    const seen = [];
+    const fake = (shell) => {
+      seen.push(shell);
+      return shell === 'pwsh'
+        ? { error: Object.assign(new Error('x'), { code }) }
+        : { status: 0, stdout: '5.5.0|p\n' };
+    };
+    assert.equal(pesterFingerprint(fake), '5.5.0|p', code);
+    assert.deepEqual(seen, ['pwsh', 'powershell'], code);
+  }
+});
+
+test('pesterFingerprint: a lib that fails to load reads error:, not unavailable (real shell)', () => {
+  const missing = join(mkTmp(), 'no-such-select-pester5.ps1');
+  const haveShell = ['pwsh', 'powershell'].some(
+    (s) => !spawnSync(s, ['-NoProfile', '-Command', '$null'], { windowsHide: true }).error,
+  );
+  if (!haveShell) return; // no PowerShell on PATH at all: nothing to pin
+  assert.match(pesterFingerprint(undefined, missing), /^error:/);
+});
+
 test('pesterFingerprint falls back to powershell only when pwsh is ENOENT', () => {
   const seen = [];
   const noPwsh = (shell) => {

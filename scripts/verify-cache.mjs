@@ -1321,10 +1321,12 @@ function detectSiblingContention() {
 // Same selection as scripts/tests/run.ps1 (highest Pester 5.x, via the shared
 // select-pester5.ps1) under the shell run-powershell.mjs picks (pwsh first,
 // else Windows PowerShell), so the fingerprint moves exactly when the Pester
-// that actually runs changes. `spawn` is a parameter only so tests can pin
-// the shell order without installing anything.
-export function pesterFingerprint(spawn = spawnSync) {
-  const lib = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'select-pester5.ps1');
+// that actually runs changes. `spawn` and `lib` are parameters only so tests can
+// pin the shell order and the failed-load path without installing anything.
+export function pesterFingerprint(
+  spawn = spawnSync,
+  lib = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'select-pester5.ps1'),
+) {
   const script =
     "$ErrorActionPreference = 'Stop'; " +
     `. '${lib.replace(/'/g, "''")}'; ` +
@@ -1338,10 +1340,11 @@ export function pesterFingerprint(spawn = spawnSync) {
       timeout: 15000,
       windowsHide: true,
     });
-    // Only a missing shell falls through, as run-powershell does; a timeout or
-    // a failed load must not read as "no Pester" ('unavailable'), nor be
-    // answered by a different shell than the runner would use.
-    if (r.error?.code === 'ENOENT') continue;
+    // A shell that cannot be spawned (ENOENT, EACCES, EFTYPE, ...) falls
+    // through to the next, as run-powershell's which() does. A timeout does not
+    // (pwsh resolved, so the runner would use it), and neither does a failed
+    // load: it must not read as "no Pester" ('unavailable').
+    if (r.error && r.error.code !== 'ETIMEDOUT') continue;
     if (r.error) return `error:${r.error.code ?? 'spawn'}`;
     if (r.status !== 0) return `error:exit${r.status}`;
     return (r.stdout ?? '').trim() || 'error:empty';
