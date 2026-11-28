@@ -1,5 +1,6 @@
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs';
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync } from 'node:fs';
+import { unlink } from 'node:fs/promises';
 import { spawnSync } from 'node:child_process';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
@@ -250,6 +251,34 @@ describeIfFfmpeg('buildCaptions', () => {
         onProgress: () => controller.abort(),
       }),
     ).rejects.toMatchObject({ name: 'AbortError' });
+  });
+
+  /* Same abort shape as above, plus the route's cleanup order
+     (routes/export.ts's inner catch): reject first, THEN `unlink(outPath)`
+     (ENOENT swallowed), then wait. N4's dropped `existsSync` check was weak
+     only because it ran without that `unlink` first. Done in the route's
+     order it is the regression assertion: without
+     `await pipeline.donePromise.catch(() => {})` in the catch, the builder
+     rethrows before the write stream's deferred create lands, the route's
+     `unlink` hits ENOENT, and the 0-byte file then appears and is orphaned. */
+  it('leaves no file behind once the route unlinks after an abort rejection (per-chapter scope)', async () => {
+    const controller = new AbortController();
+    const outPath = join(bookDir, 'aborted-per-chapter-orphan.zip');
+    await expect(
+      buildCaptions({
+        bookDir,
+        state,
+        captionFileFormat: 'vtt',
+        captionGranularity: 'line',
+        captionScope: 'per-chapter',
+        outPath,
+        signal: controller.signal,
+        onProgress: () => controller.abort(),
+      }),
+    ).rejects.toMatchObject({ name: 'AbortError' });
+    await unlink(outPath).catch(() => {});
+    await new Promise((r) => setTimeout(r, 50));
+    expect(existsSync(outPath)).toBe(false);
   });
 
   it('forwards a ZipFile-level internal error to the rejection instead of crashing the process (per-chapter scope)', async () => {
