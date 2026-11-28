@@ -142,7 +142,7 @@ describe('synthesiseChapter voice routing', () => {
   });
 
   it('uses different voice buckets per speaker within the same chapter (multi-character regression)', async () => {
-    /* The exact bug scenario from Day One of the the Coalfall Commission: three
+    /* The exact bug scenario from Day One of the Coalfall Commission: three
        speakers, only the narrator gendered by id. Without the hint plumbing,
        Oduvan and Ro both collapsed onto the narrator-cool bucket. */
     const cast: CastCharacter[] = [
@@ -2758,7 +2758,7 @@ describe('synthesiseChapter — orphaned characterId falls back to narrator', ()
   });
 });
 
-/* Plan 148 — defensive per-call synth timeout. The the Hollow Tide stall: a Qwen call
+/* Plan 148 — defensive per-call synth timeout. The Hollow Tide stall: a Qwen call
    ran away on degenerate back-matter and never returned, hanging the chapter
    (and the queue) for an hour. The watchdog must turn that into a chapter
    failure the queue rides past. */
