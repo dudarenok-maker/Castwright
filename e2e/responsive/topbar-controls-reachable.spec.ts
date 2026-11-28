@@ -3,9 +3,10 @@
  * sm (640) Help / Theme / Account live in the drawer on every stage (the
  * analysing stage gets the hamburger too); at sm+ the inline copies stay.
  * Owner decisions 2026-11-28 (#4691): from 640 to 1023 the book title in the
- * bar truncates with an ellipsis and the version pill hides below lg, so Help /
- * Theme / Account stay inline at every width from sm up; at xl (1280+) every
- * inline nav tab fits instead of the middle strip clipping the last one.
+ * bar truncates with an ellipsis (with a 44px floor) and the wordmark text and
+ * version pill hide below 2xl (1536), so Help / Theme / Account stay inline at
+ * every width from sm up; at xl (1280+) every inline nav tab fits instead of
+ * the middle strip clipping the last one. The queue chip is an icon + count.
  *
  * The in-viewport check enumerates every visible interactive element in the
  * header generically (not a hard-coded 3), so a future control that overflows
@@ -16,13 +17,13 @@
  *
  * Runs under all three projects (responsive/* glob). Phone-only and sm+-only
  * assertions are skipped by viewport width; the dedicated-widths test at the
- * bottom resizes the page itself, so it pins 640 to 1280 in every project.
+ * bottom resizes the page itself, so it pins 640 to 1600 in every project.
  *
  * Stage variants beyond the plain routes, both driven in mock mode through the
  * real reducers on `window.__store__`: "long title" (hydrateFromBookState with a
  * title longer than "The Coalfall Commission") and "generate mid-render" (an
  * open generation stream at 45% plus queued chapters, which is what renders the
- * `Generating · 45%` status pill and the `Queue · N` chip). */
+ * `Generating · 45%` status pill and the queue chip). */
 import { test, expect, type Page } from '@playwright/test';
 import { goToAnalysing, waitForLibraryViewReady, waitForListenViewReady } from '../helpers';
 
@@ -65,7 +66,7 @@ async function openGenerate(page: Page): Promise<void> {
 
 /* A generation stream 9/20 done with one chapter running and eleven queued (a
    whole-book render, the widest the bar gets): the status pill becomes
-   `Generating · 45%` and the `Queue · 12` chip appears. */
+   `Generating · 45%` and the queue chip (icon + `12`) appears. */
 async function startMidRender(page: Page): Promise<void> {
   await page.evaluate(() => {
     const store = (window as unknown as StoreWindow).__store__;
@@ -92,7 +93,9 @@ async function startMidRender(page: Page): Promise<void> {
     });
   });
   await expect(page.getByTestId('status-pill').first()).toHaveText('Generating · 45%');
-  await expect(page.getByTestId('topbar-queue-chip')).toHaveText('Queue · 12');
+  const chip = page.getByTestId('topbar-queue-chip');
+  await expect(chip).toHaveText('12');
+  await expect(chip).toHaveAccessibleName('Generation queue — 12 pending');
 }
 
 async function setLongTitle(page: Page): Promise<void> {
@@ -341,10 +344,11 @@ test.describe('top-bar controls reachable — sm+ inline cluster unchanged', () 
 });
 
 /* The project viewports (412 / 834 / 1280) sample three widths; the owner's
- * decisions cover the whole 640..1279 range, so each stage is opened once and
- * the page is resized through the widths that bracket the sm / md / lg / xl
- * breakpoints. Below xl no inline nav tab is rendered; at 1280 every tab must be
- * fully visible (the clipping-ancestor check fails a tab cut off by the strip). */
+ * decisions cover the whole 640..1600 range, so each stage is opened once and
+ * the page is resized through the widths that bracket the sm / md / lg / xl /
+ * 2xl breakpoints. Below xl no inline nav tab is rendered; from 1280 every tab
+ * must be fully visible (the clipping-ancestor check fails a tab cut off by the
+ * strip). */
 const WIDTHS = [640, 768, 834, 1023, 1024, 1279, 1280, 1400, 1535, 1536, 1600];
 test.describe('top-bar controls reachable — explicit widths 640 to 1600', () => {
   for (const stage of STAGES) {
@@ -353,31 +357,38 @@ test.describe('top-bar controls reachable — explicit widths 640 to 1600', () =
     }) => {
       test.slow();
       await stage.open(page);
+      // Collect every failing width so one run reports them all, not just the first.
+      const failures: string[] = [];
       for (const width of WIDTHS) {
-        await page.setViewportSize({ width, height: 800 });
-        // Let the layout settle after the breakpoint flip before measuring.
-        await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
-        await expectHeaderControlsInViewport(page);
-        // Owner decision 2026-11-28: the wordmark text and the version pill show
-        // from 2xl (1536) only; the logo mark itself always stays.
-        const wide = width >= 1536;
-        expect(
-          await page.getByTestId('version-pill').isVisible(),
-          `version pill visibility at ${width}`,
-        ).toBe(wide);
-        expect(
-          await page.getByRole('button', { name: 'Castwright — home' }).getByText('Castwright').isVisible(),
-          `wordmark text visibility at ${width}`,
-        ).toBe(wide);
-        if (width >= 1280 && !stage.name.startsWith('analysing') && stage.name !== 'books home') {
-          for (const tab of ['Cast', 'Manuscript', 'Generate', 'Listen', 'Log', 'Voices']) {
-            await expect(
-              page.locator('header nav').getByRole('button', { name: tab, exact: true }),
-              `inline tab "${tab}" visible at ${width}`,
-            ).toBeVisible();
+        try {
+          await page.setViewportSize({ width, height: 800 });
+          // Let the layout settle after the breakpoint flip before measuring.
+          await page.evaluate(() => new Promise((r) => requestAnimationFrame(() => r(null))));
+          await expectHeaderControlsInViewport(page);
+          // Owner decision 2026-11-28: the wordmark text and the version pill show
+          // from 2xl (1536) only; the logo mark itself always stays.
+          const wide = width >= 1536;
+          expect(
+            await page.getByTestId('version-pill').isVisible(),
+            `version pill visibility at ${width}`,
+          ).toBe(wide);
+          expect(
+            await page.getByRole('button', { name: 'Castwright — home' }).getByText('Castwright').isVisible(),
+            `wordmark text visibility at ${width}`,
+          ).toBe(wide);
+          if (width >= 1280 && !stage.name.startsWith('analysing') && stage.name !== 'books home') {
+            for (const tab of ['Cast', 'Manuscript', 'Generate', 'Listen', 'Log', 'Voices']) {
+              await expect(
+                page.locator('header nav').getByRole('button', { name: tab, exact: true }),
+                `inline tab "${tab}" visible at ${width}`,
+              ).toBeVisible();
+            }
           }
+        } catch (e) {
+          failures.push(`@${width}px: ${(e as Error).message.split('\n')[0]}`);
         }
       }
+      expect(failures, 'widths where a header control does not fit').toEqual([]);
     });
   }
 });
