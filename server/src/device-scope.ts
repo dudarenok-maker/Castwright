@@ -1,0 +1,70 @@
+/* The correctness criterion is the UNION of endpoint sets over every SUPPORTED
+   APK version — not the set derived from HEAD. Installed clients are not
+   upgraded in lockstep: release.yml publishes a standalone APK and
+   apk:companion's auto-incrementing versionCode means field devices update on
+   their own schedule.
+
+   Rows are ADDED when a new client ships, and REMOVED only when the last APK
+   that used them is out of support. Do NOT edit this table to track HEAD.
+
+   Coupled to apps/android/test/data/companion_endpoints_test.dart's nine pins. There is
+   deliberately no mechanical link (see the design of record, §Q1): a Dart
+   parser here would not run — no verify.yml scope regex anchors on apps/ — and
+   its failure mode is silent green.
+
+   Pure leaf: NO imports, no IO, so it cannot join an import cycle.
+
+   Matching is on the RAW pathname of originalUrl: no decoding, no case
+   folding. The guard is mounted on ['/api', '/workspace'], so req.path would
+   present /info for both mounts (M6). */
+
+export interface CompanionRule {
+  method: 'GET' | 'PUT' | 'POST';
+  pattern: RegExp;
+}
+
+export const COMPANION_ALLOWLIST: readonly CompanionRule[] = [
+  { method: 'GET', pattern: /^\/api\/info$/ },
+  { method: 'GET', pattern: /^\/api\/library\/sync-manifest$/ },
+  { method: 'GET', pattern: /^\/api\/books\/[^/]+\/cover$/ },
+  // Rows 4 and 5 are two different routes: JSON peaks, then the audio file.
+  { method: 'GET', pattern: /^\/api\/books\/[^/]+\/chapters\/[0-9]+\/audio$/ },
+  { method: 'GET', pattern: /^\/api\/books\/[^/]+\/chapters\/[0-9]+\/audio\.(mp3|m4a|ogg)$/ },
+  { method: 'GET', pattern: /^\/api\/books\/[^/]+\/listen-progress$/ },
+  { method: 'PUT', pattern: /^\/api\/books\/[^/]+\/listen-progress$/ },
+  { method: 'PUT', pattern: /^\/api\/books\/[^/]+\/listen-stats$/ },
+  { method: 'POST', pattern: /^\/api\/books\/[^/]+\/shelf-status$/ },
+];
+
+/** The pathname of an originalUrl: split at the FIRST `?` or `#`; never decoded. */
+export function pathnameOf(originalUrl: string): string {
+  const i = originalUrl.search(/[?#]/);
+  return i === -1 ? originalUrl : originalUrl.slice(0, i);
+}
+
+/* A companion request target is considered at all only if it is made solely of
+   RFC 3986 path/query characters. parseurl leaves its fast path, falling back to legacy
+   url.parse, only for `#`, `\t\n\f\r`, space, U+00A0, U+FEFF, or a first character other
+   than `/`. url.parse then percent-escapes { } | ^ ` \ " < > and the like, which shifts
+   the router's prefix trim on the parameterised /api/books/:bookId mount, so the path
+   this guard matched and the path the router ends up routing diverge. The escapable
+   characters are denied as well as the triggers. Deny, never normalise (#4720 review
+   passes 1-3). */
+const PLAIN_TARGET = /^[A-Za-z0-9\-._~%!$&'()*+,;=:@/?]*$/;
+
+/** Whether the raw request-target is plain enough that guard and router agree on its path. */
+export function isPlainTarget(originalUrl: string): boolean {
+  return PLAIN_TARGET.test(originalUrl);
+}
+
+/** Whether a companion-scoped device may call `method` on `pathname`. */
+export function companionAllows(method: string | undefined, pathname: string): boolean {
+  if (!method) return false;
+  /* Express turns "\" into "/" (legacy url.parse, for a target containing #,
+     whitespace, U+00A0 or U+FEFF), so the guard and the router would read
+     different paths. No endpoint above contains one: deny, never normalise. */
+  if (pathname.includes('\\')) return false;
+  let m = method.toUpperCase();
+  if (m === 'HEAD') m = 'GET';
+  return COMPANION_ALLOWLIST.some((r) => r.method === m && r.pattern.test(pathname));
+}

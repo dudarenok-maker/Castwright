@@ -1,0 +1,98 @@
+# E115 (discharged 2026-11-28 (#4738), removed from the register) evidence - logs/server.err.log (stderr of the same server), '[cover]' lines dropped.
+2026-11-28 09:19:44.501 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 8933,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch2\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}
+2026-11-28 09:19:44.617 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 5512,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch1\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}
+2026-11-28 09:19:44.773 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 17554,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch3\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}
+2026-11-28 09:21:19.419 [tts:catalog-audit] Could not reach http://127.0.0.1:9010/speakers within 120s — skipping audit. Start the sidecar and run `curl http://127.0.0.1:9010/api/sidecar/catalog-audit` (or restart the server) to retry.
+2026-11-28 09:22:16.954 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 5512,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch1\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}
+2026-11-28 09:22:16.999 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 8933,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch2\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}
+2026-11-28 09:22:17.208 [gemini] generate failed {
+  model: 'gemini-3.5-flash-lite',
+  status: 400,
+  name: 'ApiError',
+  message: `{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 400,\\n    \\"message\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\",\\n    \\"status\\": \\"INVALID_ARGUMENT\\",\\n    \\"details\\": [\\n      {\\n        \\"@type\\": \\"type.googleapis.com/google.rpc.BadRequest\\",\\n        \\"fieldViolations\\": [\\n          {\\n            \\"field\\": \\"safety_settings[0].category\\",\\n            \\"description\\": \\"Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), \\\\\\"[redacted]\\\\\\"\\"\\n          }\\n        ]\\n      }\\n    ]\\n  }\\n}\\n","code":400,"status":"Bad Request"}}`,
+  userTurnLength: 17554,
+  userTurnHead: '---\n' +
+    'manuscriptId: mns_FFabxFO60Q\n' +
+    'stage: 1-ch3\n' +
+    '---\n' +
+    '\n' +
+    '# Phase 0a — Per-chapter cast detection\n' +
+    '\n' +
+    'Identify every speaking character that appears in the chapter below — new and\n' +
+    'recurring — and return them as'
+}

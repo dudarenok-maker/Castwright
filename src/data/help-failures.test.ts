@@ -35,6 +35,14 @@ describe('help content (fe-29)', () => {
     expect(e.remediation).toMatch(/endpoint/i);
     expect(e.remediation).toMatch(/Settings/);
   });
+  it('the analyzer-unreachable entry Help renders covers a Gemini 500/503 outage, and keeps the Ollama advice (#4718)', () => {
+    const e = HELP_FAILURE_ENTRIES.find((x) => x.code === 'analyzer-unreachable')!;
+    const guidance = `${e.remediation} ${e.helpDetail ?? ''}`;
+    expect(guidance).toMatch(/Gemini/);
+    expect(guidance).toMatch(/outage|Google/i);
+    expect(guidance).toMatch(/retry|resume/i);
+    expect(e.remediation).toMatch(/ollama serve/);
+  });
   it('curated topics each have a title and body', () => {
     expect(HELP_TOPICS.length).toBeGreaterThanOrEqual(5);
     for (const t of HELP_TOPICS) {

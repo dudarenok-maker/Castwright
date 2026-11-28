@@ -756,7 +756,11 @@ row this register still carries. Keep the table even when it is empty.
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
+> **Last change: 2026-11-28 (#4738), 92 → 91.** Row **E115** (Gemini config payload, #3084 wave 5b) DISCHARGED and removed; it owed only the rejected-value bullet (#4718). **2026-11-28 — #4718 fix on-box (`fix/server-4718-gemini-400-classify`), claude/claude:** Rejected value re-run — **PASS** on `f36e7873`, real Gemini key, `gemini-3.5-flash-lite`, the Coalfall fixture (3 chapters). This worktree's dev server on port 8130 (the worktree's own 8090 was held by another process), a throwaway `USER_SETTINGS_FILE`, TTS sidecar auto-start off; stdout was redirected to `logs/server.log`. Gemini answered the 400 on the first attempt. All three `chapter-failed` frames read `"code":"analyzer-request-rejected"` with the value `"[redacted]"`. `Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value'` counts 0 (also 0 in `logs/server.err.log`; each file has 6 `[redacted]` lines). On screen, the three Analysing failure cards end `"[redacted]"` and the probe value is not in the page HTML (the first-run Setup wizard opened first, so the route was opened by hash). Evidence: `docs/testing/onbox-4718-results/E115/`. The other three bullets passed on 2026-11-26 on `main` at `035ff80a` (#4700, `docs/testing/onbox-batch-2-results/E115/`; the output-cap label was read from the catalog API, not the browser) and were not re-run. **Row verdict: DISCHARGE** Group E 21 → 20. `next-id` markers untouched (allocate-once).
+>
+> **Previous change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
+>
+> **Previous change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
 >
 > **Previous change: 2026-11-26 (#4699, #4715), 92 → 90.** Rows **A126** and **B107** DISCHARGED and removed by on-box batch 2 (#4699). **A126** (a cold model load learns its own weights, a warm op learns nothing): all five bullets passed on a real RTX 4070 Laptop 8 GB with a real Qwen sidecar (run 2026-11-27, child #4710): the cold-load counter rose by exactly 1 per cold load to 5 with `learned_mb` 1745 (93% of the first load's `nvidia-smi` rise of 1873 MiB); warm 0.6B and 1.7B-Base renders (`POST /synthesize` only, 0 `/synthesize-batch`) recorded nothing; a Qwen cold load beside resident Coqui did not absorb Coqui's 2097 MiB (`learned_mb` unchanged); a cold reload after a long warm run fitted (rise 1796 MiB against 1745 + reserve, 0 OOM, 0 503); the mint key learned only from cold mints (5 samples, `learned_mb` 5468). Evidence: `docs/testing/onbox-batch-2-results/A126/`. **B107** (Ollama reasoning levels and Test attribution): all four bullets passed against a real Ollama 0.40.5 daemon (run 2026-11-26, child #4705): the non-thinking `llama3.1:8b` recorded `on`/`low`/`medium`/`high` rejected and `off`/`model-default` accepted; the thinking `qwen3.5:4b` recorded `low` accepted and offered only in its own row; a run with a rejected level fails before the first chapter naming the level and the Test date; a re-created tag's `scope:configured` Test dropped the earlier levels (the build change was made by re-creating a throwaway tag, not a remote re-pull). One copy observation is recorded in the batch-2 evidence and is not owed: a rejected level that is also not offered fails with copy that names the level but not the Test date. Evidence: `docs/testing/onbox-batch-2-results/B107/`. Group A 55 → 54, group B 11 → 10; the 13 other batch-2 rows stay owed with their KEEP verdicts unchanged. `next-id` markers untouched (allocate-once).
 >
@@ -7540,7 +7544,7 @@ D1's five languages, which are done.
 
 ## Group E — not the GPU box
 
-<!-- next-id: E120 -->
+<!-- next-id: E121 -->
 
 Acceptance on machines that are not the primary GPU box — Windows installs, macOS, browser-based (E2/E3/E5 for front-end acceptance), or platform-independent infrastructure (E1/E9). E1 groups on the Pinokio box (E7 and E11, its former groupmates, discharged 2026-09-08); E9 needs two live checkouts.
 
@@ -8346,27 +8350,6 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 >
 > **Row verdict: KEEP — still owed: Test for `gemini-3.8-flash`; thought tokens on `gemini-3.6-flash` (`model-default` vs `high`); G1 default-level leg (FAIL as the row is worded; needs an owner decision, see #4723)**
 
-### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
-
-The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that it accepts a payload `topK`, that a payload output cap changes the run label, and that a rejected value is redacted from the failure.
-
-- **`topK`.** `{"config": {"topK": 40}}` completes a chapter.
-- **Output cap.** `{"config": {"maxOutputTokens": 2048}}` makes the label read "max output set by custom params".
-- **Rejected value.** `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` returns `analyzer-request-rejected`, with the value redacted on screen and in `logs/server.log`.
-- **Protected key.** Saving `{"config": {"httpOptions": {"baseUrl": "http://127.0.0.1:1"}}}` is refused, naming `config.httpOptions`.
-
-*Needs:* a Gemini API key; no GPU. *Criteria:* run sheet [`3084-openai-analyzer-onbox-acceptance.md`](3084-openai-analyzer-onbox-acceptance.md) §15. Clears when each bullet is recorded.
-
-> **2026-11-26 — on-box batch 2 (#4699), claude lane (#4700):** Run on this worktree's server (
-pm --prefix server run dev, port 8130, `main` at 035ff80a), real Gemini key, `analysisEngine` set to gemini; the run used `gemini-3.5-flash-lite` (the saved default). Book: the Coalfall fixture, 15,657 bytes, 3 chapters, analysed whole (not a single chapter). Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/). The server ran in dev mode, so its stdout (`server-log-trimmed.txt`) stands in for `logs/server.log`.
->
-> - **`topK` — PASS.** `{"config":{"topK":40}}` saved (200) and the run completed: 3 chapters, 14 characters, no error event (`case1-topK-sse-trimmed.txt`; log `Chapter 3/3 cast done — 13 characters`). Control: the catalog label for that payload is `"+ custom params"` only.
-> - **Output cap — PASS.** With `{"config":{"maxOutputTokens":2048}}` `GET /api/analyzer/models` gives `requestControlLabelParts=["+ custom params","max output set by custom params"]` for `gemini-3.5-flash-lite`; with `topK` it is `"+ custom params"` alone (`step2-label.txt`). Read from the catalog API, not the browser label.
-> - **Rejected value — FAIL (bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718)).** The redaction part holds: Gemini answered `400 INVALID_ARGUMENT` and the probe value is `[redacted]` in every SSE `chapter-failed` message and every server log line. The string `castwright-onbox-probe-value` appears in neither, nor in `analysis-last-outcome.json`. But all three chapters were classified `"code":"unknown"` (remediation "Click Retry on this chapter…") and the run ended `cast_incomplete`. `analyzer-request-rejected` never appears (`case3-bogus.sse.txt`). The browser view was not opened.
-> - **Protected key — PASS.** Saving `{"config":{"httpOptions":{"baseUrl":"http://127.0.0.1:1"}}}` answered `400`: `Gemini custom parameters: Gemini "config" accepts only temperature, topP, topK, maxOutputTokens, presencePenalty, frequencyPenalty, seed, safetySettings. Refused: config.httpOptions.` (`step4-save-httpOptions.txt`).
->
-> **Row verdict: KEEP — still owed: rejected value (the error code is `unknown`, not `analyzer-request-rejected`; #4718)**
-
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 
 The automated tests pin the ranking, the repair and the banner against synthetic books. Only a real library shows that the sweep keeps the id on the right twin, leaves both books intact, and surfaces the notice once. Build the twin by copying a real, rendered book's folder under a second title folder (e.g. `<Author>/<Series>/<Title> copy`) so both `state.json` files carry the same `bookId`; then give one twin the work (rendered audio, a cast) and make the other the emptier one, or leave them equal to exercise the tiebreakers. Start the server (`npm start`) and observe:
@@ -8501,6 +8484,22 @@ The automated tests pin the range list, the message text and the log write again
 4. **A late pause after a finished chapter does not restamp.** Download only the book's last chapter (or play offline so the next chapter is not downloaded) and let it play to the end without touching the phone; the pane keeps showing a pause button. Wait several minutes, listen to the book on the web in the meantime, then tap pause or leave the player. The stored and server `listenedAt` is the time the chapter ended, not the time you tapped pause, and the web position survives the next sync.
 
 *Needs:* an Android phone with the companion APK built from this branch's merge (`npm run apk:companion`) and a paired server on LAN HTTPS; a wired headset or Bluetooth audio device; no GPU. Clears when each observation is recorded.
+
+### E120 · Companion token scope end to end on a real phone: nine allowed endpoints, the legacy no-scope record, one re-pair ([#898](https://github.com/dudarenok-maker/Castwright/issues/898), PR B) · **a real Android phone; no GPU needed**
+
+Every companion token is now `scope: 'companion'` and reaches nine method+path pairs; a record with no scope does not authenticate. The unit tests drive `requireLanToken` against a mocked request, so they cannot prove the phone-to-desktop path over real LAN HTTPS. Eight of the nine rows fail SILENTLY on the phone (spec §Q2), so a wrong allowlist row is close to invisible there.
+
+1. **Pair a fresh phone (QR).** `device-tokens.json` holds `"scope":"companion"` and `"schema":3` for the new record.
+2. **The library works.** The library populates, **cover art appears** (row 3: a miss shows a placeholder with no error), a book downloads, a chapter plays offline.
+3. **Stream an undownloaded chapter** over LAN (row 5). It plays.
+4. **The waveform renders** (row 4: a miss shows a plain bar).
+5. **Position and status round-trip.** The listening position round-trips to the desktop Listen view (rows 6 and 7), the session's listening time shows on the desktop (row 8, `PUT listen-stats`; a miss is silent, so this is its only positive check), and finishing a book updates its shelf status (row 9).
+6. **Zero denials.** The desktop server log shows ZERO `[lan-auth] scope-denied` lines for the session. Any line is a missing allowlist row.
+7. **The legacy case.** Before upgrading the server, pair a phone and download a book fully. Upgrade to this build (the existing record has no scope, so it answers 401). Open the app on the LAN: it must reach the **pairing screen**, not report the computer offline (PR A's handshake fix, E118).
+8. **Re-pair once.** Steps 2-5 work again after ONE re-pair, not a loop.
+9. **Negative control.** From a LAN browser on `https://castwright.local`, redeem a browser pairing: the full desktop UI still works (`/redeem-browser` mints `full`).
+
+*Needs:* a real Android phone with an APK built from PR A installed, the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set, and for step 7 a `device-tokens.json` written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with PR A's row, E118. No separate run sheet (like E117, this row has none). Clears when each observation is recorded.
 
 ## Group G — GitHub Actions itself
 

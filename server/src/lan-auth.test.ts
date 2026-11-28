@@ -5,8 +5,22 @@ import { mkdtempSync, existsSync, readFileSync, writeFileSync, rmSync } from 'no
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
+const mockState = vi.hoisted(() => ({
+  scope: 'full' as 'full' | 'companion',
+  label: 'Anna phone',
+}));
 vi.mock('./workspace/device-tokens.js', () => ({
-  isValidDeviceToken: (t: string) => t === 'goodtoken',
+  authenticateDeviceToken: (t: string) =>
+    t === 'goodtoken'
+      ? {
+          id: 'd1',
+          label: mockState.label,
+          tokenHash: 'h',
+          createdAt: '',
+          expiresAt: '',
+          scope: mockState.scope,
+        }
+      : null,
 }));
 
 import {
@@ -23,14 +37,21 @@ interface ReqOpts {
   ip?: string;
   headers?: Record<string, string>;
   query?: Record<string, unknown>;
+  method?: string;
+  originalUrl?: string;
+  path?: string;
 }
 function mkReq(opts: ReqOpts = {}) {
   const ip = opts.ip ?? '203.0.113.5'; // documentation range — non-loopback by default
+  const originalUrl = opts.originalUrl ?? '/api/info';
   return {
     ip,
     socket: { remoteAddress: ip },
     headers: opts.headers ?? {},
     query: opts.query ?? {},
+    method: opts.method ?? 'GET',
+    originalUrl,
+    path: opts.path ?? originalUrl.replace(/^\/api(?=\/)/, '').split('?')[0],
   } as never;
 }
 function mkRes() {
@@ -213,6 +234,194 @@ describe('lan-auth (srv-20)', () => {
     requireLanToken(req, res as never, next);
     expect(next).not.toHaveBeenCalled();
     expect(res._res.statusCode).toBe(401);
+  });
+});
+
+/* #898 (PR B) — companion-scope enforcement. Two vacuity hazards shape this
+   block: (1) a loopback caller returns next() BEFORE any token check, so every
+   deny case drives a NON-loopback ip; (2) the allow cases assert next(), which
+   the not-enforced and loopback short-circuits also produce, so those two are
+   pinned positively below (invariants 1 and 2) and the deny assertions are the
+   ones that go red under the inverted mutations (M14: loopback ip, M15: guard
+   off). */
+describe('requireLanToken companion scope (#898)', () => {
+  const origHttps = process.env.LAN_HTTPS;
+  const origToken = process.env.LAN_AUTH_TOKEN;
+  const DENY_IP = '203.0.113.5';
+  const bearer = { authorization: 'Bearer goodtoken' };
+
+  beforeEach(() => {
+    process.env.LAN_HTTPS = '1';
+    process.env.LAN_AUTH_TOKEN = 'sekret-token';
+    mockState.scope = 'companion';
+  });
+  afterEach(() => {
+    mockState.scope = 'full';
+    mockState.label = 'Anna phone';
+    vi.restoreAllMocks();
+    if (origHttps === undefined) delete process.env.LAN_HTTPS;
+    else process.env.LAN_HTTPS = origHttps;
+    if (origToken === undefined) delete process.env.LAN_AUTH_TOKEN;
+    else process.env.LAN_AUTH_TOKEN = origToken;
+  });
+
+  function drive(opts: ReqOpts) {
+    const res = mkRes();
+    const next = vi.fn();
+    requireLanToken(mkReq(opts), res as never, next);
+    return { res, next };
+  }
+
+  // Invariant 1: loopback bypasses the guard entirely, scope included.
+  it('invariant 1: a companion token on a DENIED route from loopback passes', () => {
+    const { next } = drive({
+      ip: '::ffff:127.0.0.1',
+      headers: bearer,
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover',
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  // Invariant 2: guard off (no shared secret) lets everything through.
+  it('invariant 2: with LAN_AUTH_TOKEN unset a denied route passes', () => {
+    delete process.env.LAN_AUTH_TOKEN;
+    const { next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover',
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('denies a companion token on DELETE /api/books/x/cover with 403 scope-denied', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { res, next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(403);
+    expect(res._res.body).toEqual({ error: 'scope-denied', scope: 'companion' });
+  });
+
+  it.each([
+    ['GET', '/api/info'],
+    ['GET', '/api/library/sync-manifest'],
+    ['GET', '/api/books/b1/cover'],
+    ['GET', '/api/books/b1/chapters/3/audio'],
+    ['GET', '/api/books/b1/chapters/3/audio.mp3'],
+    ['GET', '/api/books/b1/chapters/3/audio.m4a'],
+    ['GET', '/api/books/b1/chapters/3/audio.ogg'],
+    ['GET', '/api/books/b1/listen-progress'],
+    ['PUT', '/api/books/b1/listen-progress'],
+    ['PUT', '/api/books/b1/listen-stats'],
+    ['POST', '/api/books/b1/shelf-status'],
+  ])('a companion token passes on the allowlisted %s %s', (method, originalUrl) => {
+    const { next, res } = drive({ ip: DENY_IP, headers: bearer, method, originalUrl });
+    expect(next).toHaveBeenCalledTimes(1);
+    expect(res._res.statusCode).toBe(200);
+  });
+
+  // M6: Express presents path=/info for BOTH mounts; only originalUrl tells them apart.
+  it('denies /workspace/info even though req.path is /info', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { res, next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'GET',
+      originalUrl: '/workspace/info',
+      path: '/info',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(403);
+  });
+
+  // The discriminating variant of the M6 case: here req.path (/api/info) WOULD
+  // match the allowlist while originalUrl (/workspace/info) must not, so a guard
+  // that reads req.path lets it through and this goes red.
+  it('denies /workspace/info even when req.path would match an allowlisted row', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { res, next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'GET',
+      originalUrl: '/workspace/info',
+      path: '/api/info',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(403);
+  });
+
+  // Matching is raw: a case-folding mutant at the call site would grant this.
+  it('denies GET /API/INFO (no case folding)', () => {
+    vi.spyOn(console, 'warn').mockImplementation(() => {});
+    const { res, next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'GET',
+      originalUrl: '/API/INFO',
+    });
+    expect(next).not.toHaveBeenCalled();
+    expect(res._res.statusCode).toBe(403);
+  });
+
+  // Invariant 3: the legacy shared secret is not scoped.
+  it('invariant 3: the shared secret on a denied route passes', () => {
+    const { next } = drive({
+      ip: DENY_IP,
+      headers: { authorization: 'Bearer sekret-token' },
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover',
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs a denial in the exact documented format', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    drive({ ip: DENY_IP, headers: bearer, method: 'DELETE', originalUrl: '/api/books/x/cover?q=1' });
+    expect(warn.mock.calls[0]?.[0]).toBe(
+      '[lan-auth] scope-denied companion device "Anna phone" (d1): DELETE /api/books/x/cover',
+    );
+  });
+
+  // The label is client-chosen at /redeem: a newline in it must not forge log lines.
+  it('writes a denial as one log line even when the device label carries a newline', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    mockState.label = 'x\n[lan-auth] scope-denied companion device "forged"';
+    drive({ ip: DENY_IP, headers: bearer, method: 'DELETE', originalUrl: '/api/books/x/cover' });
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]?.[0])).not.toContain('\n');
+  });
+
+  it('a full-scope token on a denied route passes', () => {
+    mockState.scope = 'full';
+    const { next } = drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover',
+    });
+    expect(next).toHaveBeenCalledTimes(1);
+  });
+
+  it('logs exactly one warning per denial naming method, pathname and device', () => {
+    const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    drive({
+      ip: DENY_IP,
+      headers: bearer,
+      method: 'DELETE',
+      originalUrl: '/api/books/x/cover?x=1',
+    });
+    expect(warn).toHaveBeenCalledTimes(1);
+    const msg = String(warn.mock.calls[0]?.[0]);
+    expect(msg).toContain('DELETE');
+    expect(msg).toContain('/api/books/x/cover');
+    expect(msg).not.toContain('x=1');
+    expect(msg).toContain('Anna phone');
   });
 });
 
