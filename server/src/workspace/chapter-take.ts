@@ -533,18 +533,20 @@ function isoDateUtc(): string {
     and never overwrites: every target is checked absent BEFORE any file moves,
     and a present target throws with nothing moved. Directories are created
     only under an EXISTING `audio/` (non-recursive), so a vanished `audio/`
-    throws ENOENT and the book folder is never recreated (N15). Each call is
-    one event with its own subfolder (jid = `mintTakeId()`). Returns the event
-    folder. */
+    throws ENOENT and the book folder is never recreated (N15). Without an
+    `eventFolder`, each call is one event with its own subfolder (jid =
+    `mintTakeId()`); a journal's replay passes its own folder name, which may
+    already exist. Returns the event folder. */
 export async function quarantineToOrphaned(
   handle: AnyBookHandle,
   files: string[],
   reason: string,
+  eventFolder: string = `${isoDateUtc()}-${mintTakeId()}`,
 ): Promise<string> {
   assertHeld(handle, 'quarantineToOrphaned');
   const root = audioDir(handle.bookDir);
   const orphaned = join(root, '.orphaned');
-  const eventDir = join(orphaned, `${isoDateUtc()}-${mintTakeId()}`);
+  const eventDir = join(orphaned, eventFolder);
 
   const targets = files.map((f) => ({ from: f, to: join(eventDir, basename(f)) }));
   const seen = new Set<string>();
@@ -2139,4 +2141,277 @@ export async function takeCommitted(
     }
   }
   return false;
+}
+
+/* ------------------------------------------------------------------ *
+ * Replay: the per-part decider (§5.A "Journal rules": the idempotence table,
+ * R8-1, R9-1, R9-2, E15)
+ *
+ * One step of a per-slug journal is a list of renames, forward or in a
+ * rollback. Every part is probed and decided from what is on disk BEFORE any
+ * part is renamed, so a step stops between two parts only on a rename the OS
+ * refuses. Nothing is unlinked or overwritten: a copy the journal cannot claim
+ * moves to the journal's event folder under `.orphaned/`.
+ * ------------------------------------------------------------------ */
+
+/** One part of a step: move it `from` -> `to` (full paths). `size` and `takeId`
+    are what the journal recorded for that part of the take the step moves. */
+export type PartMove = TakeJournalPart & {
+  take: TakeJournalRole;
+  takeId: TakeId | null;
+  from: string;
+  to: string;
+};
+
+/** A part replay gave up on. The caller records it in the journal's `lost`. */
+export type LostPart = TakeJournalLostPart;
+
+/** A rename of a take part (a quarantine is one too) that the OS refused: a
+    move-step failure. */
+export class TakeMoveStepError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string, cause: unknown) {
+    super(`[take] ${slug}: a take part could not be moved: ${(cause as Error).message}`, { cause });
+    this.name = 'TakeMoveStepError';
+    this.slug = slug;
+  }
+}
+
+/** Whether each of a move's two names is on disk. */
+export interface PartProbe {
+  source: boolean;
+  target: boolean;
+}
+
+/** A part's row in the idempotence table. */
+export type PartRow =
+  | 'rename'
+  | 'done'
+  /** Both present, the target journal-unique: the source copy is foreign. */
+  | 'foreign-source'
+  /** Both present, the source journal-unique: the slug name was refilled. */
+  | 'foreign-target'
+  /** Both present, both slug names: E15 decides. */
+  | 'two-slug-names'
+  /** Absent under both names: lost, once the re-probe schedule agrees. */
+  | 'absent';
+
+/* R9-1: a name only this journal creates. Every other name is a slug name, which
+   a sync client or Explorer can refill. Phase 4's drop journal adds its
+   only-copy target under `.orphaned/`. */
+function isJournalUnique(path: string, journal: TakeJournal): boolean {
+  const name = basename(path);
+  const { slug } = journal.chapter;
+  return (
+    name.startsWith(`${slug}.next-${journal.newTakeId}.`) ||
+    name.startsWith(discardPrefix(slug, journal.jid))
+  );
+}
+
+/** The row `probe` puts `move` in. Pure: reads no disk. */
+export function decidePartRow(probe: PartProbe, move: PartMove, journal: TakeJournal): PartRow {
+  if (!probe.source) return probe.target ? 'done' : 'absent';
+  if (!probe.target) return 'rename';
+  if (isJournalUnique(move.to, journal)) return 'foreign-source';
+  if (isJournalUnique(move.from, journal)) return 'foreign-target';
+  return 'two-slug-names';
+}
+
+const isMissing = (err: unknown): boolean => (err as NodeJS.ErrnoException)?.code === 'ENOENT';
+
+/* Only ENOENT is "absent". Any other error propagates, so a held file is never
+   taken for a lost one (`existsSync` would answer false). */
+async function isPresent(path: string): Promise<boolean> {
+  try {
+    await stat(path);
+    return true;
+  } catch (err) {
+    if (!isMissing(err)) throw err;
+    return false;
+  }
+}
+
+async function probePart(move: PartMove): Promise<PartProbe> {
+  const [source, target] = await Promise.all([isPresent(move.from), isPresent(move.to)]);
+  return { source, target };
+}
+
+/* Probe every part, then re-probe the ones absent under both names after each
+   delay of the rename backoff, ALL ON ONE SCHEDULE (R9-2): OneDrive can move a
+   just written file into its staging and drop it back. */
+async function probeParts(
+  moves: readonly PartMove[],
+  sleep: (ms: number) => Promise<void>,
+): Promise<PartProbe[]> {
+  const probes = await Promise.all(moves.map(probePart));
+  for (const delay of RENAME_RETRY_DELAYS_MS) {
+    const absent = [...probes.keys()].filter((i) => !probes[i].source && !probes[i].target);
+    if (absent.length === 0) break;
+    await sleep(jitteredDelayMs(delay));
+    await Promise.all(
+      absent.map(async (i) => {
+        probes[i] = await probePart(moves[i]);
+      }),
+    );
+  }
+  return probes;
+}
+
+/* E15: which of two copies at two slug names is the protocol's. `null`: nothing
+   tells them apart. */
+async function decideTwoSlugNames(move: PartMove): Promise<'source' | 'target' | null> {
+  if (move.takeId && (move.part === 'segments' || move.part === 'embeddings')) {
+    const carries = async (path: string) =>
+      takeIdOf(await readJsonTolerant<{ takeId?: unknown }>(path)) === move.takeId;
+    const [source, target] = [await carries(move.from), await carries(move.to)];
+    if (source !== target) return source ? 'source' : 'target';
+  }
+  const sized = async (path: string) => (await stat(path)).size === move.size;
+  const [source, target] = [await sized(move.from), await sized(move.to)];
+  if (source !== target) return source ? 'source' : 'target';
+  if (!source) return null;
+  /* Identical copies are either one right: the one at the target counts. */
+  return (await readFile(move.from)).equals(await readFile(move.to)) ? 'target' : null;
+}
+
+interface PartRun {
+  handle: AnyBookHandle;
+  journal: TakeJournal;
+  sleep: (ms: number) => Promise<void>;
+  /** `<iso-date>-<jid>`, one per step. */
+  eventFolder: string;
+  lost: LostPart[];
+  quarantined: string[];
+}
+
+/* Into the journal's event folder, or a numbered sibling of it when that already
+   holds the name (a slug name refilled twice), so an earlier quarantine never
+   blocks the part. */
+async function quarantineCopy(run: PartRun, path: string, reason: string): Promise<void> {
+  const orphaned = join(audioDir(run.handle.bookDir), '.orphaned');
+  let folder = run.eventFolder;
+  for (let n = 2; existsSync(join(orphaned, folder, basename(path))); n++) {
+    folder = `${run.eventFolder}-${n}`;
+  }
+  try {
+    const dir = await quarantineToOrphaned(run.handle, [path], reason, folder);
+    run.quarantined.push(join(dir, basename(path)));
+  } catch (err) {
+    /* A vanished file is not a refusal: `settlePart` re-probes it. */
+    if (isMissing(err)) throw err;
+    throw new TakeMoveStepError(run.journal.chapter.slug, err);
+  }
+}
+
+function recordLost(run: PartRun, move: PartMove, why: string): void {
+  const ref: TakePartRef =
+    move.part === 'audio' ? { part: move.part, ext: move.ext } : { part: move.part };
+  const basenames = [basename(move.from), basename(move.to)];
+  run.lost.push({ ...ref, take: move.take, basenames });
+  console.warn(`[take] ${run.journal.chapter.slug}: lost ${basenames.join(' / ')} (${why})`);
+}
+
+/* Act on a part's row short of the rename itself; `true` when it is still to be
+   renamed. */
+async function takeRow(run: PartRun, move: PartMove, probe: PartProbe): Promise<boolean> {
+  switch (decidePartRow(probe, move, run.journal)) {
+    case 'rename':
+      return true;
+    case 'done':
+      return false;
+    case 'absent':
+      recordLost(run, move, 'absent under both names at every probe');
+      return false;
+    case 'foreign-source':
+      await quarantineCopy(run, move.from, 'replay: the part had already moved');
+      return false;
+    case 'foreign-target':
+      await quarantineCopy(run, move.to, 'replay: the slug name was refilled');
+      return true;
+    case 'two-slug-names': {
+      const ours = await decideTwoSlugNames(move);
+      if (ours) {
+        const foreign = ours === 'source' ? move.to : move.from;
+        await quarantineCopy(run, foreign, 'replay: not the copy the journal moves');
+        return ours === 'source';
+      }
+      /* Neither may stay live, so the take is never mixed. The target goes first:
+         in a rollback it is the live name, the one a player or ffmpeg holds, and a
+         refusal there leaves both copies for the next replay to decide again. */
+      await quarantineCopy(run, move.to, 'replay: two copies the journal cannot tell apart');
+      await quarantineCopy(run, move.from, 'replay: two copies the journal cannot tell apart');
+      recordLost(run, move, 'two copies the journal cannot tell apart');
+      return false;
+    }
+  }
+}
+
+/* `takeRow`, where a file that vanishes under the decision (ENOENT) is re-probed
+   on the schedule and takes the row it then has. */
+async function settlePart(run: PartRun, move: PartMove, probe: PartProbe): Promise<boolean> {
+  try {
+    return await takeRow(run, move, probe);
+  } catch (err) {
+    if (!isMissing(err)) throw err;
+  }
+  const [again] = await probeParts([move], run.sleep);
+  try {
+    return await takeRow(run, move, again);
+  } catch (err) {
+    if (!isMissing(err)) throw err;
+    throw new TakeMoveStepError(run.journal.chapter.slug, err);
+  }
+}
+
+/* Rename one decided part. A target refilled since the decision is decided again,
+   never overwritten. ENOENT never blocks a slug: both names are re-probed on the
+   schedule and the part takes the matching row. A part that is still to be
+   renamed and answers ENOENT a second time is a refused rename. */
+async function renamePart(run: PartRun, move: PartMove): Promise<void> {
+  for (let attempt = 0; ; attempt++) {
+    const now = await probePart(move);
+    if (now.target && !(await settlePart(run, move, now))) return;
+    try {
+      await renameWithRetry(move.from, move.to);
+      return;
+    } catch (err) {
+      if (!isMissing(err) || attempt > 0) {
+        throw new TakeMoveStepError(run.journal.chapter.slug, err);
+      }
+    }
+    const [again] = await probeParts([move], run.sleep);
+    if (!(await settlePart(run, move, again))) return;
+  }
+}
+
+/** Run one step of `journal`: decide every part of `moves` (quarantining any
+    foreign copy), then rename the ones still to move, in the order given (audio
+    first), under the caller's book-op.
+
+    Returns the parts lost, for the caller to record in the journal, and where
+    each quarantined copy now is. Throws `TakeMoveStepError` when the OS refuses
+    a rename; a probe or a comparison read that fails throws its own error. */
+export async function applyPartMoves(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  moves: PartMove[],
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<{ lost: LostPart[]; quarantined: string[] }> {
+  assertHeld(handle, 'applyPartMoves');
+  const run: PartRun = {
+    handle,
+    journal,
+    sleep: opts.sleep ?? ((ms) => new Promise<void>((resolve) => setTimeout(resolve, ms))),
+    eventFolder: `${isoDateUtc()}-${journal.jid}`,
+    lost: [],
+    quarantined: [],
+  };
+  const probes = await probeParts(moves, run.sleep);
+  const toRename: PartMove[] = [];
+  for (const [i, move] of moves.entries()) {
+    if (await settlePart(run, move, probes[i])) toRename.push(move);
+  }
+  for (const move of toRename) await renamePart(run, move);
+  return { lost: run.lost, quarantined: run.quarantined };
 }
