@@ -82,6 +82,7 @@ describe('VoiceLibraryCard — cloned provenance', () => {
     expect(text).toMatch(/recording and the voice built from it are permanently deleted/i);
     expect(text).not.toMatch(/everything derived/i); // generated chapters are NOT deleted
     expect(text).toMatch(/chapters you.ve already generated keep the voice until you re-cast/i);
+    expect(text).toMatch(/exported or\s+synced, share clips and phone downloads keep the voice too/i); // existing copies keep it
     expect(text).toMatch(/can.t be undone/i); // irreversibility
     expect(text).toMatch(/fail to render until reassigned/i); // cast-character impact
   });
