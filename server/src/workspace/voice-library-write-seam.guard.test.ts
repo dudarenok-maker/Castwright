@@ -165,7 +165,7 @@ const G2_EXPECTED = new Map<string, number>([
   ['routes/voice-library.ts', 4],
   ['tts/clone-voice-resolver.ts', 6],
   ['tts/synthesise-chapter.ts', 1],
-  ['workspace/clone-copy-autolink.ts', 2],
+  ['workspace/clone-copy-autolink.ts', 3],
   ['workspace/purge-clone-artifacts.ts', 2],
   ['workspace/voice-library.ts', 1],
 ]);
