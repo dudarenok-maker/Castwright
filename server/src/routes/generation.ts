@@ -1108,7 +1108,11 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   const nonEnglishBook = isNonEnglish(bookLanguage);
   const eligibleEngines = resolveEligibleEngines(bookLanguage, ALL_TTS_ENGINES);
   const coquiEligible = eligibleEngines.includes('coqui');
+  /* #4587 — the cast the run needs re-force per pending entry: each character's `ttsEngine` from
+     BEFORE the forcing below, its voices from AFTER the clearing (a cleared voice stays cleared). */
+  let unforcedCast: CastCharacter[] = [];
   if (nonEnglishBook) {
+    const originalEngineById = new Map(cast.characters.map((c) => [c.id, c.ttsEngine]));
     /* fs-60 — honor an already-eligible manual engine choice (e.g. a character
        explicitly cast on Coqui via the now-unlocked picker) instead of blindly
        overwriting it. Anything NOT already eligible (unset, or an engine this
@@ -1150,6 +1154,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
           `different language than this book — re-design ${names} before generating.`,
       });
     }
+    unforcedCast = cast.characters.map((c) => ({ ...c, ttsEngine: originalEngineById.get(c.id) }));
   }
 
   /* Per-character engine routing (plan 108). Engine is no longer one global
@@ -1337,6 +1342,10 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
      still cost a reload. The same-book job union is below (#4557). */
   const fullCastQwenTiers = () =>
     computeUsedQwenTiers(cast.characters, engine, resolveForEngine('qwen').modelKey);
+  /* #4587 — fed to both needs reads (run start and post-score); absent for an English book. */
+  const nonEnglishNeeds: RunQwenNeedsInput['nonEnglish'] = nonEnglishBook
+    ? { eligibleEngines, unforcedCast, fullCastKeep: fullCastQwenTiers() }
+    : undefined;
   /* This run's own needs (#4556). `usedQwenTiers` below widens it to K(book). */
   let runNeeds: { keep06: boolean; keep17: boolean } = { keep06: false, keep17: false };
   let postScoreCastIdHistory: RunQwenNeedsInput['castIdHistory'];
@@ -1355,6 +1364,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
         defaultEngine: engine,
         requestQwenModelKey: resolveForEngine('qwen').modelKey,
         qwenUnavailable,
+        ...(nonEnglishNeeds ? { nonEnglish: nonEnglishNeeds } : {}),
       });
     } catch (e) {
       console.warn(
@@ -2277,6 +2287,7 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
                   requestQwenModelKey: resolveForEngine('qwen').modelKey,
                   qwenUnavailable,
                   fullCastKeep: fullCastQwenTiers(),
+                  ...(nonEnglishNeeds ? { nonEnglish: nonEnglishNeeds } : {}),
                 }),
                 fullCastKeep: fullCastQwenTiers(),
               }

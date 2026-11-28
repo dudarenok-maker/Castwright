@@ -1256,3 +1256,171 @@ describe('#4556 run needs: the reconcile keeps only the tiers the unfinished cha
     }
   }, 10_000);
 });
+
+/* #4587 — on a non-English book each pending entry's POST re-forces the cast at ITS engine, so both
+   needs reads (run start, post-score) pass the pre-forcing cast through. Real POST of a Russian book
+   under a Coqui request: ch1 (the target) speaks only a Coqui narrator, ch2 (never a target) only a
+   character cloned on both engines. `mute` speaks nowhere: it makes Qwen "in use" and is pinned 1.7B,
+   so the full-cast keep ({false,true}) differs from what a 0.6B-stamped ch2 entry needs ({true,false}). */
+describe('#4587 non-English run needs: a pending entry is evaluated at its stamp engine', () => {
+  const NE_TITLE = 'Russian Run Needs Test';
+  const NE_MANUSCRIPT = 'm_ru_run_needs_test';
+  let neBookId: string;
+  let neDir: string;
+
+  const pending = (modelKey?: string) => ({
+    id: 'ne-pending',
+    bookId: neBookId,
+    chapterId: 2,
+    scope: 'this' as const,
+    addedAt: '2026-11-28T00:00:00.000Z',
+    status: 'queued' as const,
+    order: 1,
+    ...(modelKey ? { modelKey: modelKey as 'qwen3-tts-0.6b' } : {}),
+  });
+  const writeQueue = (entries: Array<ReturnType<typeof pending>>) =>
+    writeQueueFile(queuePath, { entries, paused: false });
+  async function postCh1() {
+    const res = await fetch(`${baseUrl}/api/books/${neBookId}/generation`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        modelKey: 'coqui-xtts-v2',
+        chapterIds: [1],
+        force: true,
+        fallbackConfirmed: true,
+      }),
+    });
+    const reader = res.body!.getReader();
+    for (;;) {
+      const { done } = await reader.read();
+      if (done) break;
+    }
+  }
+  const resolvedKeeps = () =>
+    reconcileCalls.map((c) => {
+      const k = c[0] as { keep06: boolean; keep17: boolean } | null;
+      return k && { keep06: k.keep06, keep17: k.keep17 };
+    });
+  const CASES = [
+    ['a Qwen 0.6B-stamped entry keeps the 0.6B', 'qwen3-tts-0.6b', { keep06: true, keep17: false }],
+    ['an unstamped entry keeps the full cast', undefined, { keep06: false, keep17: true }],
+  ] as const;
+
+  beforeAll(async () => {
+    const [{ makeBookId }, cacheModule] = await Promise.all([
+      import('../workspace/paths.js'),
+      import('../store/analysis-cache.js'),
+    ]);
+    neBookId = makeBookId(AUTHOR, SERIES, NE_TITLE);
+    neDir = join(workspaceRoot, 'books', AUTHOR, SERIES, NE_TITLE);
+    mkdirSync(join(neDir, '.audiobook'), { recursive: true });
+    mkdirSync(join(neDir, 'audio'), { recursive: true });
+    writeFileSync(
+      join(neDir, '.audiobook', 'state.json'),
+      JSON.stringify({
+        bookId: neBookId,
+        manuscriptId: NE_MANUSCRIPT,
+        author: AUTHOR,
+        title: NE_TITLE,
+        series: SERIES,
+        updatedAt: '2026-11-28T00:00:00.000Z',
+        schema: 1,
+        language: 'ru',
+        chapters: [1, 2].map((id) => ({ id, title: `Глава ${id}`, slug: `glava-${id}` })),
+      }),
+    );
+    writeFileSync(
+      join(neDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          {
+            id: 'narrator',
+            name: 'Narrator',
+            ttsEngine: 'coqui',
+            overrideTtsVoices: { coqui: { name: 'Damien Black' } },
+          },
+          {
+            id: 'dana',
+            name: 'Dana',
+            overrideTtsVoices: {
+              qwen: { name: 'qwen-u_dana', provenance: 'cloned', libraryUuid: 'u_dana' },
+              coqui: { name: 'xtts-u_dana', provenance: 'cloned', libraryUuid: 'u_dana' },
+            },
+          },
+          { id: 'mute', name: 'Mute', ttsModelKey: 'qwen3-tts-1.7b' },
+        ],
+      }),
+    );
+    const line = (id: number, who: string) => [
+      { id: id * 10, chapterId: id, characterId: who, text: 'Привет.' },
+    ];
+    await cacheModule.saveAnalysisCache(NE_MANUSCRIPT, {
+      chapters: { 1: line(1, 'narrator'), 2: line(2, 'dana') },
+    });
+  });
+
+  beforeEach(async () => {
+    reconcileCalls.length = 0;
+    synthesiseImpl = async () => ({
+      pcm: Buffer.alloc(2),
+      sampleRate: 24000,
+      durationSec: 1,
+      segments: [],
+    });
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(async () => ({ kokoroLoaded: false, devices: {} }));
+    await writeQueue([]);
+  });
+  afterEach(async () => {
+    const { setProbeSidecarHealthProvider } = await import('../gpu/sidecar-health-gate.js');
+    setProbeSidecarHealthProvider(null);
+  });
+
+  it.each(CASES)(
+    'run start: %s',
+    async (_label, stamp, expected) => {
+      await writeQueue([pending(stamp)]);
+      await postCh1();
+      expect(resolvedKeeps()).toEqual([expected]);
+    },
+    10_000,
+  );
+
+  /* The queue is empty at run start (nothing to reconcile) and the entry arrives while the score
+     pass is held open, so only the post-score recompute can see it. */
+  it.each(CASES)(
+    'post-score: %s',
+    async (_label, stamp, expected) => {
+      const { __awaitScoringSettled } = await import('./generation.js');
+      const cfg = await import('../config/resolver.js');
+      const actualConfigValue = cfg.configValue;
+      let releaseScore: (() => void) | undefined;
+      scoreBookImpl = () =>
+        new Promise((r) => {
+          releaseScore = () =>
+            r({ usedQwenTiers: { keep06: false, keep17: false }, mismatchCount: 0 });
+        });
+      const spy = vi
+        .spyOn(cfg, 'configValue')
+        .mockImplementation((key) =>
+          key === 'qa.speaker.enabled' ? true : actualConfigValue(key),
+        );
+      try {
+        await postCh1();
+        await vi.waitFor(() => expect(releaseScore).toBeTypeOf('function'));
+        expect(resolvedKeeps()).toEqual([]);
+        await writeQueue([pending(stamp)]);
+        releaseScore!();
+        await __awaitScoringSettled(neBookId);
+        expect(resolvedKeeps()).toEqual([expected]);
+      } finally {
+        releaseScore?.();
+        await __awaitScoringSettled(neBookId);
+        spy.mockRestore();
+        scoreBookImpl = null;
+      }
+    },
+    10_000,
+  );
+});
