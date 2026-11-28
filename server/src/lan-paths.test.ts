@@ -92,7 +92,7 @@ describe('separator-insensitive home matching (#4446 review)', () => {
   it('collapseHomePath matches forward-slash and doubled-backslash spellings on win32', () => {
     expect(collapseHomePath('C:/Users/you/Sync', w(wh))).toBe('~/Sync');
     expect(collapseHomePath('C:\\\\Users\\\\you\\\\venv', w(wh))).toBe('~\\\\venv');
-    expect(collapseHomePath('c:/users/you', w(wh))).toBe('~');
+    expect(collapseHomePath('c:/users/YOU', w(wh))).toBe('~');
   });
   it('collapseHomePath keeps the ann/anna boundary across spellings', () => {
     expect(collapseHomePath('C:/Users/youa/x', w(wh))).toBe('C:/Users/youa/x');
