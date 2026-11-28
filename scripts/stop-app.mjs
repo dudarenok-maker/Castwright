@@ -21,6 +21,7 @@ import {
 } from './lib/sidecar-sweep-port.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
+import { pruneDeadServerOwners } from './lib/server-owner.mjs';
 import { waitForExit } from './restart-after-upgrade.mjs';
 
 // PR #3404 review pass 2 — a kill request only asks the target to exit; it
@@ -177,6 +178,7 @@ export async function main({
   probe = probeAndSweep,
   log = info,
   exit = process.exit,
+  pruneOwners = pruneDeadServerOwners,
 } = {}) {
   let killedAny = false;
   let failedAny = false;
@@ -188,6 +190,10 @@ export async function main({
     const pid = Number.parseInt(raw, 10);
     if (!Number.isInteger(pid) || pid <= 0) continue;
     const outcome = await kill(pid);
+    // #3264 — taskkill /F never runs the server's own marker release, so drop
+    // its owner marker here, while the pid is freshly dead and cannot have been
+    // reused yet.
+    if (name === 'server' && (outcome === 'killed' || outcome === 'gone')) pruneOwners(runDirPath);
     if (outcome === 'killed') {
       log(`[STOP] ${name} pid=${pid}`);
       killedAny = true;

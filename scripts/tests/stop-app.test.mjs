@@ -230,6 +230,48 @@ test('main: positive control — every pid already gone prints [GONE] and the OK
   assert.match(out, /\[OK\] nothing to stop/);
 });
 
+// #3264 — taskkill /F never runs the server's own marker release, so the stop
+// prunes the dead server's owner marker itself, while its pid is freshly dead.
+async function pruneCalls({ server, tts }) {
+  const runDir = mkdtempSync(join(tmpdir(), 'stop-app-prune-'));
+  if (server) writeFileSync(join(runDir, 'server.pid'), '1111', 'utf8');
+  if (tts) writeFileSync(join(runDir, 'tts.pid'), '2222', 'utf8');
+  const calls = [];
+  try {
+    await main({
+      kill: async (pid) => ({ 1111: server, 2222: tts })[pid],
+      runDirPath: runDir,
+      probe: async () => false,
+      log: () => {},
+      exit: () => {},
+      pruneOwners: (d) => calls.push(d),
+    });
+  } finally {
+    rmSync(runDir, { recursive: true, force: true });
+  }
+  return { calls, runDir };
+}
+
+test('main: a killed server prunes its dead owner marker', async () => {
+  const { calls, runDir } = await pruneCalls({ server: 'killed' });
+  assert.deepEqual(calls, [runDir]);
+});
+
+test('main: an already-gone server prunes its leftover owner marker', async () => {
+  const { calls, runDir } = await pruneCalls({ server: 'gone' });
+  assert.deepEqual(calls, [runDir]);
+});
+
+test('main: a server that could not be stopped prunes nothing', async () => {
+  const { calls } = await pruneCalls({ server: 'failed' });
+  assert.deepEqual(calls, []);
+});
+
+test('main: a stopped sidecar alone prunes nothing', async () => {
+  const { calls } = await pruneCalls({ tts: 'killed' });
+  assert.deepEqual(calls, []);
+});
+
 test('main: a killed pid prints [STOP] and no OK summary', async () => {
   const { out } = await runMain({ server: 'killed' });
   assert.match(out, /\[STOP\] server pid=1111/);

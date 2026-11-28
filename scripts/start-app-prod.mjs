@@ -295,15 +295,30 @@ export function isOwnServerInstance(served, ownRunDir, { normalize = defaultNorm
   return normalize(servedRunDir) === normalize(ownRunDir);
 }
 
+/* Whether a readable /api/health body names a runDir other than ours. A body
+   that is missing, or names none, says nothing, so it never overrides a marker.
+   It does override one: a dead server's marker can outlive it (Windows kills the
+   server without running its release; stop-app.mjs and the next boot prune it,
+   but a reused pid keeps it alive in the meantime), so a body that names another
+   runDir outvotes it on the target and alternate ports. */
+function healthNamesOtherRunDir(served, ownRunDir) {
+  return typeof served?.configLoad?.runDir === 'string' && !isOwnServerInstance(served, ownRunDir);
+}
+
 /* Is THIS worktree's own server the one serving `port`? Answered from the owner
    marker the server writes for the port it actually bound (#3264,
    lib/server-owner.mjs), with no /api/health request, so it works when the
    server is on HTTPS and findRootCa() comes up empty. Identity comes from the
    marker's LOCATION: it sits in this checkout's own runDir. It counts only if
    the marker parses for this port, its pid is alive AND the port accepts a TCP
-   connect. Accepted residual: a dead server's leftover marker whose pid has
-   been reused, while a foreign process holds the same port, would read as ours.
-   That is vanishingly unlikely and deliberately not engineered around.
+   connect. The marker is not always removed: on Windows a stop kills the
+   server without running its release, so stop-app.mjs prunes it after the
+   kill and the next server boot prunes dead pids' markers. Residual: a leftover
+   marker whose pid was reused before either ran, while a foreign process holds
+   the same port, reads as ours here. On the target and alternate ports a
+   readable /api/health naming another runDir overrides it (decideLaunchAction);
+   the rebound scan below has no such check, so a foreign listener that does
+   not answer /api/health is the case left, rare but not impossible.
    Exported for scripts/tests/start-app-prod.test.mjs. */
 export async function confirmOwnServerFromMarker(
   port,
@@ -443,21 +458,23 @@ export async function decideLaunchAction({
 
   const alreadyUp = await probePortFn(port);
   if (alreadyUp) {
+    let served;
     if (await confirmOwnServerFromMarkerFn(port, runDir)) {
-      // Best-effort: the health answer only feeds the server/.env warning here.
-      const health = await probeServedFn(port, lanHttps).catch(() => null);
-      return ownServerOnTargetSkip(port, url, health);
+      // Best-effort: an unreadable health answer leaves the marker deciding.
+      served = await probeServedFn(port, lanHttps).catch(() => null);
+      if (!healthNamesOtherRunDir(served, runDir)) return ownServerOnTargetSkip(port, url, served);
+    } else {
+      served = await probeServedFn(port, lanHttps);
+      if (!served) {
+        return {
+          kind: 'fail',
+          message:
+            `Port :${port} is occupied by a process that does not answer /api/health — ` +
+            `likely a stale or foreign server. Run "npm run stop" and retry.`,
+        };
+      }
+      if (isOwnServerInstance(served, runDir)) return ownServerOnTargetSkip(port, url, served);
     }
-    const served = await probeServedFn(port, lanHttps);
-    if (!served) {
-      return {
-        kind: 'fail',
-        message:
-          `Port :${port} is occupied by a process that does not answer /api/health — ` +
-          `likely a stale or foreign server. Run "npm run stop" and retry.`,
-      };
-    }
-    if (isOwnServerInstance(served, runDir)) return ownServerOnTargetSkip(port, url, served);
     /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
        answers on our target port — not a duplicate of this worktree's own
        instance, so don't refuse to start outright. */
@@ -486,12 +503,10 @@ export async function decideLaunchAction({
      owner marker identifies it (#3264); /api/health is asked only when no
      marker does, as for a server started before the marker existed. */
   if (altPort !== port && (await probePortFn(altPort))) {
-    const altIsOwn =
-      (await confirmOwnServerFromMarkerFn(altPort, runDir)) ||
-      isOwnServerInstance(
-        await probeServedFn(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443)),
-        runDir,
-      );
+    const altHttps = altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443);
+    const altIsOwn = (await confirmOwnServerFromMarkerFn(altPort, runDir))
+      ? !healthNamesOtherRunDir(await probeServedFn(altPort, altHttps).catch(() => null), runDir)
+      : isOwnServerInstance(await probeServedFn(altPort, altHttps), runDir);
     if (altIsOwn) {
       return {
         kind: 'skip',

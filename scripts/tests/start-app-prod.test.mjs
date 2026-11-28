@@ -598,6 +598,34 @@ test('decideLaunchAction: #3264 own marker on altPort and no /api/health answer 
   );
 });
 
+// A marker whose pid was reused (Windows never runs the server's release on a
+// kill) must not outvote a readable /api/health that names a different runDir.
+test('decideLaunchAction: #3264 own marker on the target port but /api/health names a sibling runDir → proceed, not skip', async (t) => {
+  const { decision } = await decideWithOwnMarkerOnTarget(t, async () =>
+    served('/sibling/.run', { cwd: '/sibling/server' }),
+  );
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(decision.mayHaveRebound, true);
+  assert.match(decision.infoMessage, /\/sibling\/server/);
+});
+
+test('decideLaunchAction: #3264 own marker on altPort but /api/health names a sibling runDir → proceed, not skip', async (t) => {
+  const runDir = makeRunDir(t);
+  const port = await closedPort();
+  const altPort = await listenSilently(t);
+  writeServerOwner({ runDir, port: altPort, https: false, pid: process.pid });
+  const decision = await decideLaunchAction({
+    port,
+    altPort,
+    lanHttps: true,
+    runDir,
+    url: `https://localhost:${port}/`,
+    probeServed: async () => served('/sibling/.run', { cwd: '/sibling/server' }),
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+});
+
 import { bannerLine, formatBuildManifestLine } from '../start-app-prod.mjs';
 
 test('bannerLine renders the Castwright banner with the version', () => {
