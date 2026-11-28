@@ -132,6 +132,27 @@ describe('TopBar — global nav', () => {
   });
 });
 
+describe('TopBar — queue chip (#4691)', () => {
+  it('renders an icon + the bare count, with the full meaning in the accessible name', () => {
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'books', queueCount: 12, onOpenQueue: vi.fn() })} />,
+    );
+    const chip = screen.getByTestId('topbar-queue-chip');
+    expect(chip.textContent).toBe('12');
+    expect(chip.querySelector('svg')).not.toBeNull();
+    expect(chip).toHaveAttribute('aria-label', 'Generation queue — 12 pending');
+    expect(chip).toHaveAttribute('title', 'Generation queue');
+    expect(screen.getByRole('button', { name: 'Generation queue — 12 pending' })).toBe(chip);
+  });
+
+  it('is absent when nothing is queued', () => {
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'books', queueCount: 0, onOpenQueue: vi.fn() })} />,
+    );
+    expect(screen.queryByTestId('topbar-queue-chip')).not.toBeInTheDocument();
+  });
+});
+
 describe('TopBar — persistent Help affordance (fe-29)', () => {
   it('renders the Help menu trigger and opens a popover with the three actions', () => {
     renderWithStore(<TopBar {...makeProps()} />);

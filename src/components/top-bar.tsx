@@ -7,6 +7,7 @@ import {
   IconWarning,
   IconMenu,
   IconCheck,
+  IconLayers,
   CastwaveMark,
 } from '../lib/icons';
 import { Avatar } from './primitives';
@@ -497,7 +498,8 @@ export function TopBar({
               data-testid="topbar-queue-chip"
               className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full bg-peach/15 hover:bg-peach/25 text-magenta text-xs font-semibold min-h-[44px] fine-pointer:min-h-0"
             >
-              Queue · {queueCount}
+              <IconLayers className="w-3.5 h-3.5 shrink-0" aria-hidden="true" />
+              {queueCount}
             </button>
           )}
           {/* Hidden below 2xl (#4691; owner decision 2026-11-28) — the version is also
