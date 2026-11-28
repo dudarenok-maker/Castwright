@@ -90,6 +90,7 @@ import { createCastDesignMiddleware } from './cast-design-stream-middleware';
 import { castDesignSlice, castDesignActions } from './cast-design-slice';
 import { castSlice } from './cast-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
 import { notificationsSlice } from './notifications-slice';
 import { ToastStack } from '../components/toast-stack';
 
@@ -102,6 +103,7 @@ function makeStore(recorded?: { type: string }[]) {
     reducer: {
       castDesign: castDesignSlice.reducer,
       cast: castSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
@@ -982,6 +984,7 @@ describe('a design that separates a declined row, then a later cast save (#4067)
       reducer: {
         castDesign: castDesignSlice.reducer,
         cast: castSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         notifications: notificationsSlice.reducer,
         ui: uiSlice.reducer,

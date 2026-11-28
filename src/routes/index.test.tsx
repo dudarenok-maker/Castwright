@@ -18,6 +18,7 @@ import { castSlice, castActions } from '../store/cast-slice';
 import { chaptersSlice } from '../store/chapters-slice';
 import { manuscriptSlice, manuscriptActions } from '../store/manuscript-slice';
 import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { librarySlice, libraryActions } from '../store/library-slice';
 import { queueSlice } from '../store/queue-slice';
 import { revisionsSlice } from '../store/revisions-slice';
@@ -175,8 +176,9 @@ vi.mock('../lib/api', () => ({
    real route table mounts. */
 void appRouter;
 
-function makeStore(opts: { persist?: boolean } = {}) {
+function makeStore(opts: { persist?: boolean; preloaded?: object } = {}) {
   return configureStore({
+    ...(opts.preloaded ? { preloadedState: opts.preloaded as never } : {}),
     reducer: {
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
@@ -595,6 +597,51 @@ describe('AnalysingRoute — the manuscript id comes only from its own book', ()
     expect(screen.getByText(/12,345/)).toBeInTheDocument();
   });
 
+  /* #3519 — the loaded-book pair says which book the slices hold. The manuscript
+     slice's ids differ from it only as redux-persist restores them. */
+  it.each([
+    {
+      name: 'the pair holds this book and the manuscript slice names another: the pair wins',
+      pair: { bookId: 'b1', manuscriptId: 'm-pair' },
+      slice: { bookId: 'b2', manuscriptId: 'm-slice' },
+      analysed: 'm-pair',
+      title: 'Slice Title',
+    },
+    {
+      name: 'the pair holds another book and the manuscript slice names this one: the pair wins',
+      pair: { bookId: 'b2', manuscriptId: 'm-pair' },
+      slice: { bookId: 'b1', manuscriptId: 'm-slice' },
+      analysed: 'm-lib',
+      title: 'Library Title',
+    },
+    {
+      name: 'a reload left the pair empty: the restored title shows, the restored id is not analysed',
+      pair: { bookId: null, manuscriptId: null },
+      slice: { bookId: 'b1', manuscriptId: 'm-slice' },
+      analysed: 'm-lib',
+      title: 'Slice Title',
+    },
+  ])('$name', async ({ pair, slice, analysed, title }) => {
+    const store = makeStore({
+      preloaded: {
+        loadedBook: loadedPair(pair),
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          ...slice,
+          title: 'Slice Title',
+          wordCount: 12345,
+        },
+      },
+    });
+    libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-lib', title: 'Library Title' })]);
+
+    renderAtAnalysing(store);
+
+    expect(await screen.findByRole('heading', { level: 1 })).toHaveTextContent(title);
+    fireEvent.click(await screen.findByRole('button', { name: /start analysis/i }));
+    await waitFor(() => expect(analyseMock).toHaveBeenCalledWith(analysed, expect.any(Object)));
+  });
+
   it("control: an unattributed slice is not used when the stage names a different book", async () => {
     const store = makeStore();
     libraryOf(store, [makeBook({ bookId: 'b1', manuscriptId: 'm-own', title: 'Own Title' })]);
@@ -881,6 +928,46 @@ describe('BooksRoute — re-parse wipes stale redux state', () => {
     });
     /* Manuscript slice reset so the layout's next per-book hydrate guard
        won't short-circuit when the user clicks "Analyse now". */
+    expect(store.getState().manuscript.manuscriptId).toBeNull();
+    expect(store.getState().manuscript.title).toBeNull();
+  });
+
+  it('after a reload (empty pair) still clears the restored manuscript fields of the re-parsed book (#3519)', async () => {
+    const store = makeStore({
+      preloaded: {
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          bookId: 'b1',
+          manuscriptId: 'mns-real',
+          title: 'Restored Title',
+        },
+      },
+    });
+    store.dispatch(
+      libraryActions.hydrate({
+        authors: [
+          {
+            name: 'Della Renwick',
+            series: [
+              {
+                name: 'Standalones',
+                books: [makeBook({ status: 'cast_pending', manuscriptId: 'mns-real' })],
+              },
+            ],
+          },
+        ],
+      }),
+    );
+    expect(store.getState().loadedBook.loadedBookId).toBeNull();
+    reparseBookMock.mockResolvedValue({ state: { chapters: [] }, chapterCount: 0, chapterTitles: [], chapters: [] });
+    getLibraryMock.mockResolvedValue({ authors: [] });
+    getWorkspaceInfoMock.mockResolvedValue({ root: '/tmp/audiobooks', source: 'env' });
+    const { showInfo } = renderBooks(store);
+    fireEvent.click(screen.getByLabelText('Book options'));
+    fireEvent.click(screen.getByRole('button', { name: /Re-parse manuscript/i }));
+    const reparseButtons = screen.getAllByRole('button', { name: /Re-parse manuscript/i });
+    fireEvent.click(reparseButtons[reparseButtons.length - 1]);
+    await waitFor(() => expect(showInfo).toHaveBeenCalled());
     expect(store.getState().manuscript.manuscriptId).toBeNull();
     expect(store.getState().manuscript.title).toBeNull();
   });

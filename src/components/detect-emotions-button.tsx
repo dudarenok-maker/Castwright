@@ -17,7 +17,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
-import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { selectHoldsBook, selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { selectLoadedBook } from '../store/loaded-book-slice';
 import { selectCastReadOnly } from '../store/book-busy-slice';
 import { refuseIfManuscriptEditsLocked } from '../store/restructure-lock';
@@ -67,7 +67,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
      failing they still hold the previous book, whose sentences the Manuscript
      view shows under this one: a run bound then would write that book's
      sentences and save them into this book. */
-  const holdsBook = useAppSelector((s) => bookId != null && s.manuscript.bookId === bookId);
+  const holdsBook = useAppSelector((s) => bookId != null && selectHoldsBook(s, bookId));
 
   // Close the ⌄ menu on an outside click or Escape (mirrors the Review Script menu).
   useEffect(() => {
@@ -89,7 +89,7 @@ export function DetectEmotionsButton({ disabled = false }: { disabled?: boolean 
   if (!bookId) return null;
 
   const run = async (scope: { chapterId?: number }) => {
-    if (store.getState().manuscript.bookId !== bookId) return; // #3435 — see holdsBook
+    if (!selectHoldsBook(store.getState(), bookId)) return; // #3435 — see holdsBook
     /* #4098 — an analysis run (or its latched era) makes the book read-only: the
        persistence gate drops every manuscript save at build time, so a run here
        would spend the analyzer quota and report tagged lines that never saved.

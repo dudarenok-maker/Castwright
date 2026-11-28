@@ -203,6 +203,48 @@ describe('fs-33 — DetectEmotionsButton', () => {
       expect(toasts.map((t) => t.message).join(' ')).toMatch(/not saved/i);
     });
 
+    /* #3519 — the pair and the manuscript slice name different books; the stage
+       names bX. */
+    function storeNaming(pairBookId: string | null, sliceBookId: string) {
+      return configureStore({
+        reducer: {
+          manuscript: manuscriptSlice.reducer, loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer,
+          chapters: chaptersSlice.reducer, prosody: prosodySlice.reducer,
+          scriptReview: scriptReviewSlice.reducer, notifications: notificationsSlice.reducer,
+        },
+        preloadedState: {
+          loadedBook: loadedPair({ bookId: pairBookId, manuscriptId: pairBookId && 'm-pair' }),
+          manuscript: {
+            ...manuscriptSlice.getInitialState(),
+            bookId: sliceBookId,
+            manuscriptId: 'm-slice',
+            sentences: [{ id: 1, chapterId: 1, characterId: 'wren', text: 'A line' } as never],
+          },
+          ui: { ...uiSlice.getInitialState(), stage: { kind: 'ready', bookId: 'bX', view: 'manuscript', currentChapterId: 1 } as never },
+        },
+      });
+    }
+
+    it('runs for the stage book the pair holds, whatever the manuscript slice names (#3519)', async () => {
+      detectEmotions.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      detectInstruct.mockResolvedValue({ annotatedChapters: 0, totalAnnotations: 0 });
+      render(<Provider store={storeNaming('bX', 'bB')}><DetectEmotionsButton /></Provider>);
+
+      expect(screen.getByTestId('detect-emotions-button')).not.toBeDisabled();
+      expect(screen.getByTestId('detect-emotions-menu-toggle')).not.toBeDisabled();
+      fireEvent.click(screen.getByTestId('detect-emotions-button'));
+      await waitFor(() => expect(detectEmotions).toHaveBeenCalledWith('bX', expect.anything()));
+    });
+
+    it.each([
+      ['the pair holds another book', 'bB'],
+      ['a reload left the pair empty', null],
+    ])('is disabled when %s, though the manuscript slice names the stage book (#3519)', (_name, pair) => {
+      render(<Provider store={storeNaming(pair, 'bX')}><DetectEmotionsButton /></Provider>);
+      expect(screen.getByTestId('detect-emotions-button')).toBeDisabled();
+      expect(screen.getByTestId('detect-emotions-menu-toggle')).toBeDisabled();
+    });
+
     it("does not run while the slices still hold another book (the stage's book has not loaded)", async () => {
       detectEmotions.mockImplementation((_id: string, opts?: any) => {
         if (!opts) return Promise.resolve({ annotatedChapters: 0, totalAnnotations: 0 });
@@ -589,6 +631,7 @@ describe('fs-33 — DetectEmotionsButton', () => {
         scriptReview: scriptReviewSlice.reducer,
       },
       preloadedState: {
+        loadedBook: loadedPair({ bookId: 'b1' }),
         manuscript: { ...manuscriptSlice.getInitialState(), bookId: 'b1', sentences: [
           { id: 1, chapterId: 1, characterId: 'wren', text: 'Get down!' } as never,
         ] },

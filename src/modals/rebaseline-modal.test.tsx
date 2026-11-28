@@ -20,6 +20,7 @@ import { notificationsSlice } from '../store/notifications-slice';
 import { rebaselineSlice } from '../store/rebaseline-slice';
 import { manuscriptSlice } from '../store/manuscript-slice';
 import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { chaptersSlice } from '../store/chapters-slice';
 import { accountSlice } from '../store/account-slice';
@@ -167,6 +168,7 @@ function makeStore(
       /* The book the cast/manuscript slices HOLD — independent of the stage (the
          global #/voices page loads a book in memory with none on screen). */
       manuscript: { ...manuscriptSlice.getInitialState(), bookId: loadedBookId },
+      loadedBook: loadedPair({ bookId: loadedBookId }),
     },
   });
   /* Plan 291 (#4031) - a latched analysis era makes the book's cast read-only. */

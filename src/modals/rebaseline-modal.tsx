@@ -45,6 +45,7 @@ import { designWillGeneratePersona } from '../lib/design-persona';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
+import { selectLoadedBook } from '../store/loaded-book-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import { rebaselineActions, includedProposals, type Proposal } from '../store/rebaseline-slice';
 import { selectPrincipalCast } from '../lib/principal-cast';
@@ -104,13 +105,13 @@ function RebaselineModal({ bookId }: { bookId: string }): JSX.Element {
   const playback = useSamplePlayback();
 
   const targetIsOpenBook = bookId === currentBookId;
-  /* The book the cast/manuscript slices HOLD — not the stage's: the global
+  /* The book the cast/manuscript slices HOLD (the loaded-book pair, #3519) — not the stage's: the global
      #/voices page keeps a book loaded in memory with none on screen, and its
      next whole-roster cast PUT would revert a rebaseline the slices never saw. */
   const store = useStore<RootState>();
   /* Read at the moment of each write, never captured: a book switch while a server
      call is in flight must not land this book's result on the new book's same-id row. */
-  const loadedBookNow = () => store.getState().manuscript.bookId;
+  const loadedBookNow = () => selectLoadedBook(store.getState()).loadedBookId;
 
   /* Anchor cast (the book the modal is keyed to). For the open book that's
      redux; for a foreign book (the per-series global-view buttons) we fetch

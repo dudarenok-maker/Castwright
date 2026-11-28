@@ -4,10 +4,12 @@
    (held / exclude), disable themselves from this selector and check it BEFORE
    their side writes, so a refused edit never resolves review ops, logs a
    `boundary_move`, or closes its modal as done. Tolerates a store without a
-   `ui` / `manuscript` slice (component tests build partial stores). */
+   `ui` / `manuscript` / `loadedBook` slice (component tests build partial
+   stores). */
 
 import type { RootState } from './index';
 import { notificationsActions } from './notifications-slice';
+import { selectHeldBookId } from './loaded-book-slice';
 import {
   CAST_READ_ONLY_DEDUPE_KEY,
   CAST_READ_ONLY_MESSAGE,
@@ -28,14 +30,14 @@ export const RESTRUCTURING_TOAST_KEY = 'restructuring-edit-refused';
 export const RESTRUCTURING_TOAST_MESSAGE =
   'The chapters are being restructured. Edits to this book are unavailable until it finishes.';
 
-/** True while the book in scope (the loaded manuscript's, or the open stage's)
-    is being restructured. */
+/** True while the book in scope (the held one, or the open stage's) is being
+    restructured. */
 export const selectEditsLocked = (s: RootState): boolean => {
   const r = s.ui?.restructuringBooks;
   if (!r) return false;
-  const manuscriptBook = s.manuscript?.bookId;
+  const heldBook = selectHeldBookId(s);
   const stageBook = (s.ui?.stage as { bookId?: string } | undefined)?.bookId;
-  return !!((manuscriptBook && r[manuscriptBook]) || (stageBook && r[stageBook]));
+  return !!((heldBook && r[heldBook]) || (stageBook && r[stageBook]));
 };
 
 /** True while `bookId` specifically is being restructured — for surfaces that

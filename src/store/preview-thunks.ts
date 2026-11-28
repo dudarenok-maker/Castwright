@@ -10,6 +10,7 @@ import { notificationsActions } from './notifications-slice';
 import { enqueueQueueEntries } from './queue-thunks';
 import { buildCharacterRegenEvent } from '../lib/change-log';
 import { REVISION_COPY, activeBookId } from './revisions-thunks';
+import { selectHoldsBook } from './open-book';
 
 const rand = () => Math.random().toString(36).slice(2, 8);
 
@@ -37,7 +38,7 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
        enough: between a switch and the new book's state read landing, the
        slices still hold the PREVIOUS book while the stage already names the
        new one, and appending then would overwrite its change-log.json with the
-       old book's history. manuscript.bookId is stamped by the same hydrate as
+       old book's history. The loaded-book pair moves in the same hydrate tick as
        the change log, so both must name preview.bookId. The fan-out below is
        keyed on preview.bookId and is still correct cross-book. */
     const state = getState();
@@ -50,7 +51,7 @@ export function approvePreviewSideEffects(preview: PreviewRegenCtx) {
       ? new Set(state.chapters.chapters.filter((c) => c.excluded).map((c) => c.id))
       : new Set<number>();
     const remainingChapterIds = preview.remainingChapterIds.filter((id) => !excludedIds.has(id));
-    const character = activeBookId(state) === preview.bookId && state.manuscript.bookId === preview.bookId
+    const character = activeBookId(state) === preview.bookId && selectHoldsBook(state, preview.bookId)
       ? state.cast.characters.find((c) => c.id === preview.characterId)
       : undefined;
     if (character) {

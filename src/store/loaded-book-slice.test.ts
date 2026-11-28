@@ -5,6 +5,7 @@ import {
   selectLoadedBook,
   selectLoadedBookMatchesStage,
   selectEditsGated,
+  selectHeldBookId,
 } from './loaded-book-slice';
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { castSlice, castActions } from './cast-slice';
@@ -192,5 +193,23 @@ describe('selectEditsGated', () => {
       loadedBook: { loadedBookId: 'b1', loadedManuscriptId: 'm1' },
     };
     expect(selectEditsGated(state)).toBe(false);
+  });
+});
+
+/* #3519 — after a reload redux-persist restores `manuscript.bookId` while the
+   pair is still empty. */
+describe('selectHeldBookId', () => {
+  it.each([
+    ['the pair, even when the manuscript slice names another book', 'A', 'B', 'A'],
+    ["the manuscript slice's restored id while the pair names none", null, 'B', 'B'],
+    ['no book when neither names one', null, null, null],
+  ])('answers %s', (_name, loadedBookId, bookId, expected) => {
+    expect(selectHeldBookId({ loadedBook: { loadedBookId }, manuscript: { bookId } })).toBe(
+      expected,
+    );
+  });
+
+  it('answers null for a partial store with neither slice', () => {
+    expect(selectHeldBookId({})).toBeNull();
   });
 });

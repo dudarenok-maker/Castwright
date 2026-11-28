@@ -19,6 +19,8 @@ import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { persistenceMiddleware } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import type { Character, LibraryBook } from '../lib/types';
@@ -58,7 +60,13 @@ function NavProbe() {
   return null;
 }
 
-function renderAt(view: string, sliceBookId: string | null, reply?: unknown, listedIds: string[] = []) {
+function renderAt(
+  view: string,
+  sliceBookId: string | null,
+  reply?: unknown,
+  listedIds: string[] = [],
+  pairBookId: string | null = sliceBookId,
+) {
   getBookStateMock.mockReset();
   if (reply === undefined) getBookStateMock.mockRejectedValue(new Error('proxy down'));
   else getBookStateMock.mockResolvedValue(reply);
@@ -74,12 +82,14 @@ function renderAt(view: string, sliceBookId: string | null, reply?: unknown, lis
       changeLog: changeLogSlice.reducer,
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       queue: queueSlice.reducer,
       settings: settingsSlice.reducer,
     },
     middleware: (gDM) =>
       gDM({ serializableCheck: false, immutableCheck: false }).concat(persistenceMiddleware),
     preloadedState: {
+      loadedBook: loadedPair({ bookId: pairBookId }),
       cast: {
         characters: [
           { id: 'm', name: 'Maerin from Legacy Book 1', voiceState: 'generated' } as Character,
@@ -174,5 +184,18 @@ describe('ReadyRoute — not-found edge cases', () => {
       store.dispatch(manuscriptActions.resetForBook('chain-b2'));
     });
     expect(screen.getByRole('alert')).toBeTruthy();
+  });
+});
+
+describe('ReadyRoute — the loaded-book pair says which book the slices hold (#3519)', () => {
+  it('shows a loading state while the pair names another book than the manuscript slice', async () => {
+    renderAt('cast', 'chain-b2', undefined, [], 'legacy-b1');
+    expect(await screen.findByRole('status')).toBeTruthy();
+    expect(screen.queryByText('Maerin from Legacy Book 1')).toBeNull();
+  });
+
+  it('renders the rows once the pair names this book, whatever the manuscript slice names', async () => {
+    renderAt('cast', 'legacy-b1', undefined, [], 'chain-b2');
+    expect(await screen.findByText('Maerin from Legacy Book 1')).toBeTruthy();
   });
 });

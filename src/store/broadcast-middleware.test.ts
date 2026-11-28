@@ -761,6 +761,7 @@ describe('broadcastMiddleware — another tab\'s analysis reaches the cast gate 
     const { bookBusySlice } = await import('./book-busy-slice');
     const { uiSlice, uiActions } = await import('./ui-slice');
     const { manuscriptSlice } = await import('./manuscript-slice');
+    const { loadedBookSlice } = await import('./loaded-book-slice');
     const { castGateMiddleware, selectCastReadOnly } = await import('./cast-gate');
     const mock = makeMockChannel();
     const store = configureStore({
@@ -768,6 +769,7 @@ describe('broadcastMiddleware — another tab\'s analysis reaches the cast gate 
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         analysis: analysisSlice.reducer,
         chapters: chaptersSlice.reducer,
         bookBusy: bookBusySlice.reducer,
@@ -822,6 +824,7 @@ describe('broadcastMiddleware — a mirrored run and the cast gate (plan 291, R3
     const { bookBusySlice } = await import('./book-busy-slice');
     const { uiSlice, uiActions } = await import('./ui-slice');
     const { manuscriptSlice } = await import('./manuscript-slice');
+    const { loadedBookSlice } = await import('./loaded-book-slice');
     const { castGateMiddleware } = await import('./cast-gate');
     const mock = makeMockChannel();
     const latches: unknown[] = [];
@@ -834,6 +837,7 @@ describe('broadcastMiddleware — a mirrored run and the cast gate (plan 291, R3
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         analysis: analysisSlice.reducer,
         chapters: chaptersSlice.reducer,
         bookBusy: bookBusySlice.reducer,

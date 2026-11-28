@@ -16,6 +16,8 @@ import { uiSlice, uiActions, type PreviewRegenCtx } from './ui-slice';
 import { castSlice } from './cast-slice';
 import { changeLogSlice } from './change-log-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import { queueSlice } from './queue-slice';
 import { analysisSlice } from './analysis-slice';
 import { chaptersSlice } from './chapters-slice';
@@ -36,7 +38,7 @@ afterEach(() => vi.unstubAllGlobals());
    switch and the new book's state read landing. */
 function storeWithBookOpen(active: string, slicesHold: string = active) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer },
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer, loadedBook: loadedBookSlice.reducer },
     middleware: (g) => g().concat(persistenceMiddleware),
   });
   const dispatch = store.dispatch as unknown as TestDispatch;
@@ -69,5 +71,33 @@ describe('approvePreviewSideEffects across books (#3400 review)', () => {
     await dispatch(flushBookPersistence('A'));
     expect(store.getState().changeLog.events.some((e) => e.type === 'regenerate')).toBe(false);
     expect(changeLogPuts('A')).toEqual([]);
+  });
+});
+
+/* #3519 — the pair and the manuscript slice name different books; the stage has
+   A open. */
+function storeNaming(pairBookId: string | null, sliceBookId: string) {
+  const store = configureStore({
+    reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer, loadedBook: loadedBookSlice.reducer },
+    preloadedState: {
+      loadedBook: loadedPair({ bookId: pairBookId }),
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: sliceBookId },
+    },
+  });
+  const dispatch = store.dispatch as unknown as TestDispatch;
+  void dispatch(uiActions.openBook({ id: 'A', status: 'complete' } as never));
+  void dispatch(castSlice.actions.hydrateCharacters([{ id: 'eliza', name: 'Eliza Carrick', role: '', color: 'narrator' } as never]));
+  return { store, dispatch };
+}
+
+describe('approvePreviewSideEffects asks the loaded-book pair (#3519)', () => {
+  it.each([
+    { name: 'the pair holds A and the manuscript slice B', pair: 'A', slice: 'B', logged: true },
+    { name: 'the pair holds B and the manuscript slice A', pair: 'B', slice: 'A', logged: false },
+    { name: 'a reload left the pair empty', pair: null, slice: 'A', logged: false },
+  ])('logs the regenerate only for the held book: $name', async ({ pair, slice, logged }) => {
+    const { store, dispatch } = storeNaming(pair, slice);
+    await dispatch(approvePreviewSideEffects(PREVIEW));
+    expect(store.getState().changeLog.events.some((e) => e.type === 'regenerate')).toBe(logged);
   });
 });

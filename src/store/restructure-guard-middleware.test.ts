@@ -14,15 +14,23 @@ import { restructureGuardMiddleware, REFUSED_WHILE_RESTRUCTURING } from './restr
 import { manuscriptSlice, manuscriptActions } from './manuscript-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
+import { selectEditsLocked } from './restructure-lock';
+import { loadedBookSlice } from './loaded-book-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 
 const sentences = [
   { id: 1, chapterId: 1, characterId: 'wren', text: 'One.' },
   { id: 2, chapterId: 1, characterId: 'wren', text: 'Two.' },
 ] as never[];
 
-function makeStore() {
+function makeStore({
+  pairBookId = null as string | null,
+  sliceBookId = 'b1',
+  stageBookId = 'b1' as string | null,
+} = {}) {
   return configureStore({
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       ui: uiSlice.reducer,
       notifications: notificationsSlice.reducer,
@@ -32,10 +40,13 @@ function makeStore() {
     },
     middleware: () => new Tuple(restructureGuardMiddleware, persistenceMiddleware),
     preloadedState: {
-      manuscript: { ...manuscriptSlice.getInitialState(), bookId: 'b1', sentences },
+      loadedBook: loadedPair({ bookId: pairBookId }),
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: sliceBookId, sentences },
       ui: {
         ...uiSlice.getInitialState(),
-        stage: { kind: 'ready', bookId: 'b1', view: 'manuscript', currentChapterId: 1 } as never,
+        stage: (stageBookId
+          ? { kind: 'ready', bookId: stageBookId, view: 'manuscript', currentChapterId: 1 }
+          : { kind: 'books' }) as never,
       },
     },
   });
@@ -120,6 +131,30 @@ describe('restructureGuardMiddleware', () => {
       .sort();
     expect(rest).toEqual([...LET_THROUGH].sort());
     expect(refused.length).toBeGreaterThan(10);
+  });
+});
+
+/* #3519 — the stage names no book here, so only the held one can lock. */
+describe('which book the restructure lock asks about (#3519)', () => {
+  it.each([
+    { name: 'the pair names the restructuring book, the manuscript slice another', pair: 'b1', slice: 'other', locked: true },
+    { name: 'the pair names another book, the manuscript slice the restructuring one', pair: 'other', slice: 'b1', locked: false },
+    { name: 'a reload left the pair empty and restored the restructuring book', pair: null, slice: 'b1', locked: true },
+  ])('selectEditsLocked: $name', ({ pair, slice, locked }) => {
+    const store = makeStore({ pairBookId: pair, sliceBookId: slice, stageBookId: null });
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    expect(selectEditsLocked(store.getState() as never)).toBe(locked);
+  });
+
+  it.each([
+    { name: 'the pair names the restructuring book, the manuscript slice another', pair: 'b1', slice: 'other', refused: true },
+    { name: 'the pair names another book, the manuscript slice the restructuring one', pair: 'other', slice: 'b1', refused: false },
+    { name: 'a reload left the pair empty and restored the restructuring book', pair: null, slice: 'b1', refused: true },
+  ])('the guard: $name', ({ pair, slice, refused }) => {
+    const store = makeStore({ pairBookId: pair, sliceBookId: slice, stageBookId: null });
+    store.dispatch(uiActions.setRestructuringBook('b1'));
+    store.dispatch(edit());
+    expect(store.getState().manuscript.sentences[0].characterId).toBe(refused ? 'wren' : 'halloran');
   });
 });
 

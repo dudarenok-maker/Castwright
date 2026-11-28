@@ -7,6 +7,8 @@ import { configureStore } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { render, screen } from '@testing-library/react';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { changeLogSlice } from '../store/change-log-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
 import { uiSlice, uiActions } from '../store/ui-slice';
@@ -49,6 +51,7 @@ const sentences: Sentence[] = [
 function renderView(restructuring: boolean) {
   const store = configureStore({
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
       scriptReview: scriptReviewSlice.reducer,
@@ -58,6 +61,7 @@ function renderView(restructuring: boolean) {
     },
     middleware: (g) => g().prepend(restructureGuardMiddleware),
     preloadedState: {
+      loadedBook: loadedPair({ bookId: 'bk-r' }),
       manuscript: { ...manuscriptSlice.getInitialState(), bookId: 'bk-r', sentences: sentences as never },
       ui: {
         ...uiSlice.getInitialState(),

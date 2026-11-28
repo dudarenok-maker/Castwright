@@ -4114,6 +4114,7 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
 describe('CastView — a rejected merge-suggestion accept re-reads the cast (plan 291, #4031)', () => {
   it('a rejected merge or accept re-hydrates the cast', async () => {
     const { manuscriptSlice } = await import('../store/manuscript-slice');
+    const { loadedBookSlice } = await import('../store/loaded-book-slice');
     const err = vi.spyOn(console, 'error').mockImplementation(() => {});
     vi.mocked(api.listMergeSuggestions).mockResolvedValueOnce([
       { sourceId: 'marrow', targetId: 'narrator', reason: 'alias' } as never,
@@ -4127,6 +4128,7 @@ describe('CastView — a rejected merge-suggestion accept re-reads the cast (pla
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         notifications: notificationsSlice.reducer,
       },
     });

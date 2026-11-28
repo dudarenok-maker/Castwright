@@ -194,7 +194,7 @@ export function RestructureView({ bookId }: Props) {
       const after = store.getState();
       const remapped =
         activeBookId(after) === bookId &&
-        after.manuscript.bookId === bookId &&
+        selectHoldsBook(after, bookId) &&
         (after.manuscript.hydrateSeq ?? 0) === hydrateSeqAtStart;
       /* #4227 — the route replayed an interrupted restructure's journal (in this request,
          or at server start), so the edits on disk moved away from this copy and the remap
@@ -210,7 +210,7 @@ export function RestructureView({ bookId }: Props) {
             sentenceRemap: res.sentenceRemap ?? [],
           }),
         );
-      } else if (adoptedFresh && fresh && activeBookId(after) === bookId && after.manuscript.bookId === bookId) {
+      } else if (adoptedFresh && fresh && activeBookId(after) === bookId && selectHoldsBook(after, bookId)) {
         /* #3967 — a hydrate landed mid-request, so the slice holds sentences keyed to the
            old chapters and the remap does not apply. The adopted re-read is a full
            book-state read: its sentences are the route's rewrite, so take them (as

@@ -18,6 +18,8 @@ import { voicesSlice } from '../store/voices-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { accountSlice } from '../store/account-slice';
 import { bookMetaSlice } from '../store/book-meta-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 import { persistenceMiddleware } from '../store/persistence-middleware';
 import { settingsSlice } from '../store/settings-slice';
 import type { Character } from '../lib/types';
@@ -51,7 +53,11 @@ vi.mock('../hooks/use-local-analyzer-guard', () => ({
 
 import { ConfirmRoute } from './index';
 
-function renderConfirm(sliceBookId: string | null, reply?: unknown) {
+function renderConfirm(
+  sliceBookId: string | null,
+  reply?: unknown,
+  pairBookId: string | null = sliceBookId,
+) {
   getBookStateMock.mockReset();
   if (reply === undefined) getBookStateMock.mockRejectedValue(new Error('proxy down'));
   else getBookStateMock.mockResolvedValue(reply);
@@ -67,11 +73,13 @@ function renderConfirm(sliceBookId: string | null, reply?: unknown) {
       changeLog: changeLogSlice.reducer,
       account: accountSlice.reducer,
       bookMeta: bookMetaSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       queue: queueSlice.reducer,
       settings: settingsSlice.reducer,
     },
     middleware: (gDM) => gDM().concat(persistenceMiddleware),
     preloadedState: {
+      loadedBook: loadedPair({ bookId: pairBookId }),
       cast: {
         characters: [
           { id: 'm', name: 'Maerin from Legacy Book 1', voiceState: 'generated' } as Character,
@@ -150,5 +158,18 @@ describe("ConfirmRoute — never shows another book's cast (F6)", () => {
     await waitFor(() => expect(getBookStateMock).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 50));
     expect(store.getState().chapters.analysisGapById).toBeUndefined();
+  });
+});
+
+describe('ConfirmRoute — the loaded-book pair says which book the slices hold (#3519)', () => {
+  it('shows a loading state while the pair names another book than the manuscript slice', () => {
+    renderConfirm('chain-b2', undefined, 'legacy-b1');
+    expect(screen.queryByText('Maerin from Legacy Book 1')).toBeNull();
+    expect(screen.getByRole('status')).toBeTruthy();
+  });
+
+  it('renders the rows once the pair names this book, whatever the manuscript slice names', () => {
+    renderConfirm('legacy-b1', undefined, 'chain-b2');
+    expect(screen.getByText('Maerin from Legacy Book 1')).toBeTruthy();
   });
 });

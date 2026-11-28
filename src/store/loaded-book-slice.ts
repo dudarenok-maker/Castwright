@@ -49,6 +49,22 @@ export const loadedBookSlice = createSlice({
 export const selectLoadedBook = (state: { loadedBook: LoadedBookState }): LoadedBookState =>
   state.loadedBook;
 
+/** The held book, still answered after a page reload: redux-persist restores
+    `manuscript.bookId` while the pair is empty until a read lands, so that id
+    is read when the pair names no book. The pair wins whenever it names one.
+
+    Only for a caller that must keep treating the restored book as held in that
+    window: a guard that refuses or drops a write, a reset of what the slices
+    remember of a book, and what a view renders from the restored fields. A
+    writer asks `selectHoldsBook` (store/open-book.ts), which says "not held"
+    there. Tolerates a partial store. */
+export function selectHeldBookId(state: {
+  loadedBook?: { loadedBookId: string | null };
+  manuscript?: { bookId?: string | null };
+}): string | null {
+  return state.loadedBook?.loadedBookId ?? state.manuscript?.bookId ?? null;
+}
+
 /** Do the slices hold the book the stage names? `null` when it names none. */
 export function selectLoadedBookMatchesStage(state: {
   ui: { stage: Parameters<typeof stageNamesBook>[0] };

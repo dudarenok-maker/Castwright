@@ -24,6 +24,7 @@ import { resetBookSlices } from '../store/reset-book-slices';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
 import { selectHoldsBook, selectIsOpenBook } from '../store/open-book';
+import { selectHeldBookId, selectLoadedBook } from '../store/loaded-book-slice';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
@@ -182,7 +183,7 @@ export function BooksRoute() {
            keeps both its ids, so its reopen would read only revisions and show
            (and write back) the deleted roster. Resetting them makes that reopen
            a full read. Read live; non-persisted actions only. */
-        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+        if (selectHeldBookId(reduxStore.getState()) === b.bookId) {
           resetBookSlices(dispatch, b.bookId);
         }
         const res = await api.getLibrary().catch(() => null);
@@ -231,7 +232,7 @@ export function BooksRoute() {
            means the next read adopts it as a different book, without depending
            on the `manuscriptActions.reset()` beside it forcing a full reload
            (OD31: and drop its preview — the new take stays live). */
-        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+        if (selectHeldBookId(reduxStore.getState()) === b.bookId) {
           dispatch(castActions.hydrateCharacters([]));
           dispatch(manuscriptActions.reset());
         }
@@ -282,12 +283,12 @@ export function BooksRoute() {
            circuit and leave the cleared slices unrefreshed when the user
            navigates back into the analysing stage.
 
-           Gated on the LIVE manuscript identity (not the render-time stage,
+           Gated on the LIVE held book (not the render-time stage,
            which is undefined here): the await above may have let the user open
            another book, and wiping the slices then would strand that book's
            Ready view with no identity to re-hydrate from. A different book's
            residue is not this re-parse's to clear; its own open re-reads it. */
-        if (reduxStore.getState().manuscript.bookId === b.bookId) {
+        if (selectHeldBookId(reduxStore.getState()) === b.bookId) {
           dispatch(castActions.hydrateCharacters([]));
           dispatch(manuscriptActions.reset());
         }
@@ -650,32 +651,36 @@ export function AnalysingRoute() {
   const library = useAppSelector((s) => s.library);
   const ui = useAppSelector((s) => s.ui);
   const activeBook = library.books.find((b) => b.bookId === bookId);
-  /* #3435 — title and word count come from the slice only while it names this
-     book; mid-switch it still holds the previous one. */
+  const heldBookId = useAppSelector(selectHeldBookId);
+  const { loadedBookId, loadedManuscriptId } = useAppSelector(selectLoadedBook);
+  /* #3435 — title and word count come from the slice only while it holds this
+     book; mid-switch it still holds the previous one. After a reload they are
+     the restored fields (#3519). */
   const ownManuscript =
-    manuscript.bookId === bookId ||
-    /* A fresh upload clears the slice's bookId (uploadComplete) until its read
-       lands; the stage names the upload's own book and manuscript id. */
-    (manuscript.bookId == null &&
+    heldBookId === bookId ||
+    /* A fresh upload names no book (uploadComplete) until its read lands; the
+       stage names the upload's own book and manuscript id. */
+    (heldBookId == null &&
       stage.kind === 'analysing' &&
       stage.bookId === bookId &&
       stage.manuscriptId != null &&
-      stage.manuscriptId === manuscript.manuscriptId);
+      stage.manuscriptId === loadedManuscriptId);
   /* Stage.manuscriptId is set when the user goes through Upload → Analyse, but
      it's null on page refresh, deep links, or confirm→reanalyse — none of
      those carry the id through ui.stage. Layout's book-state hydration always
-     repopulates manuscript.manuscriptId from disk, so prefer that (and fall
-     back to the library entry for the brief window before disk hydrate lands).
+     repopulates the held manuscript id from disk, so prefer that (and fall
+     back to the library entry until that read lands, a page reload included:
+     the restored id is not used, #3519).
      #3435 (PR #3505 review pass 4) — each source counts only when it names
      THIS route's book. On a direct A -> B switch the stage still names A for a
      render and the slices hold A until B's read lands; read unchecked, B's view
-     adopted A's running run and POSTed it. A fresh upload clears the slice's
-     bookId (uploadComplete), so the slice names no book until its read lands,
-     and the stage, which names the upload's own book, covers it. */
+     adopted A's running run and POSTed it. A fresh upload names no held book
+     until its read lands, and the stage, which names the upload's own book,
+     covers it. */
   const manuscriptId =
     stage.kind === 'analysing'
       ? ((stage.bookId === bookId ? stage.manuscriptId : null) ??
-        (manuscript.bookId === bookId ? manuscript.manuscriptId : null) ??
+        (loadedBookId === bookId ? loadedManuscriptId : null) ??
         activeBook?.manuscriptId ??
         null)
       : null;
@@ -789,6 +794,7 @@ export function ConfirmRoute() {
   const characters = useAppSelector((s) => s.cast.characters);
   const voices = useAppSelector((s) => s.voices.voices);
   const manuscript = useAppSelector((s) => s.manuscript);
+  const heldBookId = useAppSelector(selectHeldBookId);
   /* Plan 291 (#4031), item 12 — the book's cast gate, and the book whose entry
      read has run (so a gate that rises and drops again reads nothing twice). */
   const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
@@ -863,7 +869,7 @@ export function ConfirmRoute() {
                result can still carry a flagged chapter, decision B). */
             /* Both writes below are guarded by the slices holding THIS book:
                the gaps replace the chapters slice's map wholesale. */
-            if (res && routeStore.getState().manuscript.bookId === bookId) {
+            if (res && selectHoldsBook(routeStore.getState(), bookId)) {
               dispatch(
                 chaptersActions.setAnalysisGapsFromBookState({ chapters: res.state.chapters, analysis: res.analysis }),
               );
@@ -876,7 +882,7 @@ export function ConfirmRoute() {
             if (
               res?.cast?.characters &&
               res.cast.characters.length > 0 &&
-              routeStore.getState().manuscript.bookId === bookId
+              selectHoldsBook(routeStore.getState(), bookId)
             ) {
               if (
                 (dispatch(castWrittenSince(bookId, readSeq) as never) as unknown) === true ||
@@ -905,7 +911,9 @@ export function ConfirmRoute() {
     };
   }, [bookId, dispatch, castReadOnly, routeStore]);
 
-  if (manuscript.bookId !== bookId || notFound) return <BookNotLoaded notFound={notFound} listed={listed} />;
+  /* #3519 — after a reload the view renders from the restored fields, inert
+     under Layout's edit gate until the read lands. */
+  if (heldBookId !== bookId || notFound) return <BookNotLoaded notFound={notFound} listed={listed} />;
 
   return (
     <>
@@ -1016,11 +1024,12 @@ function ReadyViewSwitch({
   const changeLogEvents = useAppSelector((s) => s.changeLog.events);
 
   const activeBook = library.books.find((b) => b.bookId === bookId);
-  /* The slices hold ONE book (manuscript-slice bookId tracking): while they
-     still hold another the gate below shows a loading or not-found state, so by
-     the time a view renders `manuscript.title` is this book's. */
-  const manuscriptMatchesBook = manuscript.bookId === bookId;
-  const notFound = useBookNotFound(bookId, !manuscriptMatchesBook);
+  /* The slices hold ONE book (selectHeldBookId): while they still hold another
+     the gate below shows a loading or not-found state, so by the time a view
+     renders `manuscript.title` is this book's. After a reload the view renders
+     from the restored fields, inert under Layout's edit gate (#3519). */
+  const holdsRouteBook = useAppSelector(selectHeldBookId) === bookId;
+  const notFound = useBookNotFound(bookId, !holdsRouteBook);
   const projectTitle = manuscript.title || activeBook?.title || null;
 
   const setCharacters = (next: Character[] | ((prev: Character[]) => Character[])) =>
@@ -1030,7 +1039,7 @@ function ReadyViewSwitch({
   /* `notFound` sticks: Layout's own null branch stamps this book's identity on
      the slices (resetBookSlices), which would otherwise swap the alert for an
      empty view. The flag is keyed by id, so it dies with the book. */
-  if (!manuscriptMatchesBook || notFound) {
+  if (!holdsRouteBook || notFound) {
     return <BookNotLoaded notFound={notFound} listed={activeBook !== undefined} />;
   }
 

@@ -10,6 +10,12 @@
      (iii) slices hold A, stage names A (back from B), a late result for B
            lands nowhere.
 
+   Two more run each writer with the manuscript slice naming B while the
+   loaded-book pair names A, so only the pair gives the right answer:
+
+     (iv)  stage names B, a late result for B lands nowhere;
+     (v)   stage names A, a late result for A lands.
+
    Every fixture book shares its ids with the others (test/stage-slice-harness),
    so a write that ignores which book it was made for changes the held book.
 
@@ -1509,6 +1515,25 @@ const routeRows: Row[] = [
     },
     lands: (h) => expect(row(h, 'linnet')).toBeDefined(),
   },
+  {
+    writer: '[view] routes/index.tsx library deleteBook clears the book (cast + manuscript)',
+    start: async (h, book) => {
+      const answer = pend('deleteBook');
+      routed(h, '/books', '/books', createElement(BooksRoute), {
+        showInfo: () => {},
+        showError: () => {},
+        pushToast: () => {},
+      });
+      const view = await propsOf<{ onDeleteBook: (b: object) => unknown }>('BookLibraryView');
+      void view.onDeleteBook({ bookId: book, title: `Book ${book}` });
+      await called('deleteBook');
+      return () => answer();
+    },
+    lands: (h) => {
+      expect(h.store.getState().cast.characters).toEqual([]);
+      expect(h.store.getState().manuscript.manuscriptId).toBeNull();
+    },
+  },
   ...(['reparseBook', 'replaceManuscript'] as const).map(
     (method): Row => ({
       writer: `[view] routes/index.tsx library ${method} clears the book (cast + manuscript)`,
@@ -1647,7 +1672,48 @@ const routeRows: Row[] = [
         await flush();
       };
     },
-    lands: (h) => expect(chapter(h, 1).title).toBe('Restructured 1'),
+    lands: (h) => {
+      expect(chapter(h, 1).title).toBe('Restructured 1');
+      /* An empty remap names no line, so applying it empties the slice. */
+      expect(h.store.getState().manuscript.sentences).toEqual([]);
+    },
+    dropsOffStage: 'it adopts only while the stage names the book, else marks it for a full read',
+  },
+  {
+    writer: '[view] views/restructure.tsx take the re-read after a mid-request hydrate (manuscript)',
+    stage: (b) => ready(b, 'manuscript'),
+    start: async (h, book) => {
+      const answer = pend('refreshChapterTitles');
+      apiFn('getBookState').mockImplementation(() =>
+        Promise.resolve({
+          state: {
+            bookId: book,
+            manuscriptId: manuscriptIdOf(book),
+            title: `Re-read ${book}`,
+            chapters: bookChapters(book),
+          },
+          manuscriptEdits: {
+            sentences: [{ id: 9, chapterId: 1, characterId: 'wren', text: `Re-read ${book}.` }],
+          },
+        }),
+      );
+      apiFn('getLibrary').mockImplementation(() => Promise.resolve(null));
+      mount(h, createElement(RestructureView, { bookId: book }));
+      const panel = await propsOf<{ onRefreshTitles: () => Promise<void> }>(
+        'RestructureChaptersPanel',
+      );
+      act(() => void panel.onRefreshTitles());
+      await called('refreshChapterTitles');
+      /* The book's own read lands mid-request, so the remap no longer applies. */
+      act(() => h.holdBook(book));
+      return async () => {
+        await answer({ chapters: bookChapters(book), sentenceRemap: [] });
+        await called('getLibrary');
+        await flush();
+      };
+    },
+    lands: (h) =>
+      expect(h.store.getState().manuscript.sentences.map((s) => s.id)).toEqual([9]),
     dropsOffStage: 'it adopts only while the stage names the book, else marks it for a full read',
   },
 ];
@@ -1706,12 +1772,15 @@ function writerSuite(r: Row) {
   };
   /* Start the writer for `from`, then leave the slices holding A with the stage
      on `stageBook` before the late answer. */
-  async function lateResult(from: 'A' | 'B', stageBook: 'A' | 'B') {
+  async function lateResult(from: 'A' | 'B', stageBook: 'A' | 'B', manuscriptNames?: 'B') {
     const h = open();
     show(h, from);
     const late = await r.start(h, from);
     if (from !== 'A') show(h, 'A');
-    act(() => h.moveStage(stageOf(stageBook)));
+    act(() => {
+      h.moveStage(stageOf(stageBook));
+      if (manuscriptNames) h.nameInManuscript(manuscriptNames);
+    });
     await flush();
     const before = h.snapshot();
     await late();
@@ -1744,6 +1813,17 @@ function writerSuite(r: Row) {
   it('(iii) slices hold A, stage names A: a late result for B lands nowhere', async () => {
     const { h, before } = await lateResult('B', 'A');
     h.expectUnchanged(before);
+  });
+
+  it('(iv) the pair names A, the manuscript slice B: a late result for B lands nowhere', async () => {
+    const { h, before } = await lateResult('B', 'B', 'B');
+    h.expectUnchanged(before);
+  });
+
+  it('(v) the pair names A, the manuscript slice B: a late result for A lands', async () => {
+    const { h, before } = await lateResult('A', 'A', 'B');
+    r.lands(h);
+    expect(h.snapshot()).not.toEqual(before);
   });
 }
 

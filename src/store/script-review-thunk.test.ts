@@ -29,6 +29,7 @@ import type { ReviewScriptOpts } from '../lib/api';
 import { runReviewScript, hydrateScriptReview, attachToRunningReview, discardReview, retryReviewScript } from './script-review-thunk';
 import { scriptReviewActions, scriptReviewSlice } from './script-review-slice';
 import { notificationsActions } from './notifications-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 
 describe('runReviewScript', () => {
   beforeEach(() => vi.clearAllMocks());
@@ -334,6 +335,7 @@ describe('retryReviewScript (Task 9)', () => {
     const bookId = overrides.bookId === undefined ? 'book-1' : overrides.bookId;
     return () =>
       ({
+        loadedBook: loadedPair({ bookId, manuscriptId: overrides.manuscriptId }),
         manuscript: { bookId, manuscriptId: overrides.manuscriptId, sentences: overrides.sentences },
         cast: { characters: overrides.characters },
       }) as never;
@@ -365,6 +367,48 @@ describe('retryReviewScript (Task 9)', () => {
     );
   });
 
+  /* #3519 — the pair and the manuscript slice name different books. */
+  const naming = (pair: { bookId: string | null; manuscriptId: string | null }, sliceBookId: string) =>
+    () =>
+      ({
+        loadedBook: loadedPair(pair),
+        manuscript: {
+          bookId: sliceBookId,
+          manuscriptId: 'ms-slice',
+          sentences: [{ id: 1, chapterId: 3, text: 'Hi', characterId: 'c1' }],
+        },
+        cast: { characters: [{ id: 'c1' }] },
+      }) as never;
+
+  it.each([
+    { name: 'launches when the pair holds the book and the manuscript slice another', pair: 'book-1', slice: 'book-2', launches: true },
+    { name: 'does not launch when the pair holds another book', pair: 'book-2', slice: 'book-1', launches: false },
+    { name: 'does not launch after a reload, with the pair still empty', pair: null, slice: 'book-1', launches: false },
+  ])('$name (#3519)', async ({ pair, slice, launches }) => {
+    vi.mocked(api.reviewScript).mockResolvedValue({ reviewedChapters: 0, totalOps: 0 });
+    const getState = naming({ bookId: pair, manuscriptId: pair && 'ms-pair' }, slice);
+    const launched = await retryReviewScript('book-1', { wholeBook: true, model: 'gemma' })(vi.fn(), getState);
+    await new Promise((r) => setTimeout(r, 0));
+    expect(launched).toBe(launches);
+    expect(api.reviewScript).toHaveBeenCalledTimes(launches ? 1 : 0);
+  });
+
+  it("stamps a hydrated review with the pair's manuscript id, not the manuscript slice's (#3519)", async () => {
+    const dispatch = vi.fn();
+    vi.mocked(api.getScriptReviewState).mockResolvedValue({
+      kind: 'ledger',
+      entries: { '3': { manuscriptId: 'ms-pair', version: 1, ops: [{ id: 1, op: 'strip_tag', newText: 'H', rationale: 'r' }], selected: {}, completedAt: '2026-01-01' } },
+    });
+    await hydrateScriptReview('book-1', {
+      dispatch,
+      getState: naming({ bookId: 'book-1', manuscriptId: 'ms-pair' }, 'book-1'),
+      subscribe: () => () => {},
+    });
+    expect(dispatch).toHaveBeenCalledWith(
+      scriptReviewActions.hydrateBucket(expect.objectContaining({ manuscriptId: 'ms-pair' })),
+    );
+  });
+
   it('no-ops when the manuscript/cast for the book are not loaded, and reports it did not launch', async () => {
     const dispatch = vi.fn();
     const getState = fakeGetState({ manuscriptId: null, characters: [], sentences: [] });
@@ -392,6 +436,7 @@ function makeFakeStore(initial: {
 }) {
   const bookId = initial.bookId === undefined ? 'book-1' : initial.bookId;
   let state = {
+    loadedBook: loadedPair({ bookId, manuscriptId: initial.manuscriptId }),
     manuscript: { bookId, manuscriptId: initial.manuscriptId, sentences: initial.sentences },
     cast: { characters: initial.characters },
   };
@@ -400,7 +445,11 @@ function makeFakeStore(initial: {
     getState: () => state as never,
     subscribe: (fn: () => void) => { listeners.push(fn); return () => {}; },
     setManuscriptReady: (manuscriptId: string, sentences: unknown[], characters: Array<{ id: string }>, readyBookId = 'book-1') => {
-      state = { manuscript: { bookId: readyBookId, manuscriptId, sentences }, cast: { characters } };
+      state = {
+        loadedBook: loadedPair({ bookId: readyBookId, manuscriptId }),
+        manuscript: { bookId: readyBookId, manuscriptId, sentences },
+        cast: { characters },
+      };
       listeners.forEach((l) => l());
     },
   };

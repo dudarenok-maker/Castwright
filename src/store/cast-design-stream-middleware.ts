@@ -27,6 +27,7 @@ import type { Dispatch, Middleware } from '@reduxjs/toolkit';
 import { api, type CastDesignCallbacks } from '../lib/api';
 import { castDesignActions, type DesignAllRequestedPayload } from './cast-design-slice';
 import { castActions } from './cast-slice';
+import { selectHoldsBook } from './open-book';
 import { notificationsActions } from './notifications-slice';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
 
@@ -80,7 +81,7 @@ export function createCastDesignMiddleware(): Middleware {
        character ids, so a single-design result for a book that is not the open one
        must not be mirrored into it. The server already persisted it. */
     const holdsBook = (bookId: string): boolean =>
-      (store.getState() as { manuscript: { bookId: string | null } }).manuscript.bookId === bookId;
+      selectHoldsBook(store.getState() as Parameters<typeof selectHoldsBook>[0], bookId);
 
     /* #4067 — mirror the uuid a single design landed on. `separated` is the server
        saying it separated a declined row first (new uuid, qwen slot renamed to

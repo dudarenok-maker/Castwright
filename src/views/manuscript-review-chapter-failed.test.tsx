@@ -11,6 +11,7 @@ import { Provider } from 'react-redux';
 import { render, screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { scriptReviewSlice } from '../store/script-review-slice';
 import { uiSlice } from '../store/ui-slice';
@@ -40,6 +41,7 @@ const liveSentence: Sentence = { id: 1, chapterId: 2, characterId: 'narrator', t
 function makeStore() {
   return configureStore({
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
       scriptReview: scriptReviewSlice.reducer,

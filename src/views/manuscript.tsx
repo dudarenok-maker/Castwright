@@ -31,6 +31,7 @@ import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
 import { selectHoldsBook } from '../store/open-book';
+import { selectLoadedBook } from '../store/loaded-book-slice';
 import {
   ANALYSIS_RUNNING_REASON,
   RESTRUCTURING_REASON,
@@ -169,7 +170,7 @@ export function ManuscriptView({
      reducer entirely (they predate this view needing any `ui` state). */
   // eslint-disable-next-line @typescript-eslint/no-explicit-any
   const startGenerationPending = useAppSelector((s) => Boolean((s as any).ui?.startGenerationPending));
-  const manuscriptId = useAppSelector((s) => s.manuscript.manuscriptId);
+  const manuscriptId = useAppSelector((s) => selectLoadedBook(s).loadedManuscriptId);
   const [reviewLoading, setReviewLoading] = useState(false);
   const analysisBusy = useAppSelector((s) => (bookId ? selectAnalysisBusyForBook(s, bookId) : false));
   const analysisRunning = useAppSelector((s) => selectAnalysisRunningForBook(s, bookId));

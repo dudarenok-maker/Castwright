@@ -12,6 +12,7 @@
 import {
   combineReducers,
   configureStore,
+  createAction,
   type Middleware,
   type ThunkDispatch,
   type UnknownAction,
@@ -80,6 +81,19 @@ const reducer = combineReducers({
   prosody: prosodySlice.reducer,
   voiceLibrary: voiceLibrarySlice.reducer,
 });
+
+/* What redux-persist's restore can leave and no app action does: the manuscript
+   slice naming a book the loaded-book pair does not. */
+const nameManuscriptOnly = createAction<{ bookId: string; manuscriptId: string }>(
+  'test/nameManuscriptOnly',
+);
+
+const rootReducer = (state: Parameters<typeof reducer>[0], action: UnknownAction) => {
+  const next = reducer(state, action);
+  return nameManuscriptOnly.match(action)
+    ? { ...next, manuscript: { ...next.manuscript, ...action.payload } }
+    : next;
+};
 
 /** The fixture manuscript id of a book. */
 export const manuscriptIdOf = (bookId: string): string => `m-${bookId}`;
@@ -155,7 +169,7 @@ export function bookSentences(bookId: string): Sentence[] {
 
 export function createStageSliceHarness(opts: { middleware?: Middleware[] } = {}) {
   const base = configureStore({
-    reducer,
+    reducer: rootReducer,
     middleware: (getDefault) =>
       getDefault({ serializableCheck: false, immutableCheck: false }).concat(
         opts.middleware ?? [],
@@ -188,6 +202,12 @@ export function createStageSliceHarness(opts: { middleware?: Middleware[] } = {}
     store.dispatch(uiActions.hydrateFromUrl(stage));
   }
 
+  /** Make the manuscript slice's two ids name `bookId`, leaving the pair and
+      every other field as they are. */
+  function nameInManuscript(bookId: string): void {
+    store.dispatch(nameManuscriptOnly({ bookId, manuscriptId: manuscriptIdOf(bookId) }));
+  }
+
   /** The held book's content in the three slices. Left out: the maps keyed by
       their own book id (a background run's progress pill, an analysis latch),
       which a late result for another book may rightly move. */
@@ -202,7 +222,7 @@ export function createStageSliceHarness(opts: { middleware?: Middleware[] } = {}
     expect(snapshot()).toEqual(before);
   }
 
-  return { store, holdBook, moveStage, snapshot, expectUnchanged };
+  return { store, holdBook, moveStage, nameInManuscript, snapshot, expectUnchanged };
 }
 
 export type StageSliceHarness = ReturnType<typeof createStageSliceHarness>;

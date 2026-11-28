@@ -17,7 +17,7 @@
 import type { Middleware } from '@reduxjs/toolkit';
 import { castActions, type CastState } from './cast-slice';
 import type { ManuscriptState } from './manuscript-slice';
-import type { LoadedBookState } from './loaded-book-slice';
+import { selectHeldBookId, type LoadedBookState } from './loaded-book-slice';
 import type { UiState } from './ui-slice';
 import type { ChangeLogState } from './change-log-slice';
 import type { BookMetaState } from './book-meta-slice';
@@ -937,11 +937,10 @@ export const persistenceMiddleware: Middleware = (store) => {
        edit here would write B's content into A's files. The loaded-book pair
        records which book they hold (#3519): it moves with the manuscript
        slice's identity actions, and a book read hydrates cast and changeLog in
-       the same tick. The pair is not persisted, so after a reload it is empty
-       while redux-persist has restored `manuscript.bookId`; that id is read
-       when the pair names no book. Drop the write silently. With neither naming
-       one, nothing records another book, so it persists. */
-    const held = after.loadedBook?.loadedBookId ?? after.manuscript?.bookId ?? null;
+       the same tick. After a reload the restored id counts as held while the
+       pair is empty (selectHeldBookId). Drop the write silently. With neither
+       naming one, nothing records another book, so it persists. */
+    const held = selectHeldBookId(after);
     if (held !== null && held !== bookId && !BOOK_KEYED_RULES.has(type)) {
       console.warn(
         `[persist] dropped ${type}: slices hold book ${held}, stage is ${bookId} (#3624)`,

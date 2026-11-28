@@ -44,6 +44,7 @@ import { castSlice, castActions } from './cast-slice';
 import { bookBusySlice } from './book-busy-slice';
 import { analysisSlice, analysisActions, type AnalysisStreamSnapshot } from './analysis-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
 import { uiSlice, uiActions } from './ui-slice';
 import { notificationsSlice } from './notifications-slice';
 import { changeLogSlice } from './change-log-slice';
@@ -106,6 +107,7 @@ function makeStore() {
     reducer: {
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       chapters: chaptersSlice.reducer,
       analysis: analysisSlice.reducer,

@@ -9,6 +9,8 @@ import type { AppDispatch, RootState } from './index';
 import { api, ReviewScriptError, type LedgerEntryDTO } from '../lib/api';
 import { planApply, type ReviewOp } from '../lib/script-review-apply';
 import { scriptReviewActions, opKey, type ReviewOpWithChapter } from './script-review-slice';
+import { selectLoadedBook } from './loaded-book-slice';
+import { selectHoldsBook } from './open-book';
 import { notificationsActions } from './notifications-slice';
 import { emitLanguageGuard } from '../lib/language-guard-bus';
 
@@ -490,17 +492,16 @@ interface ManuscriptCastSnapshot {
 
 function snapshotIfReady(getState: () => RootState, bookId: string): ManuscriptCastSnapshot | null {
   const state = getState();
-  const manuscriptId = state.manuscript.manuscriptId;
+  const { loadedManuscriptId: manuscriptId } = selectLoadedBook(state);
   const characters = state.cast?.characters;
   if (!manuscriptId || !characters) return null;
   // Cross-book race guard (PR review round 4): manuscript/cast are global
   // slices, not book-scoped. If the caller's book was switched away from
   // while this hydration was waiting, state.manuscript could now belong to
-  // a DIFFERENT book entirely — mirror the same manuscript.bookId===bookId
-  // guard src/routes/index.tsx already uses for this identical race,
-  // rather than risk stamping this book's script-review bucket with
-  // another book's live sentences/cast.
-  if (state.manuscript.bookId !== bookId) return null;
+  // a DIFFERENT book entirely — ask the loaded-book pair (#3519), rather
+  // than risk stamping this book's script-review bucket with another book's
+  // live sentences/cast. After a reload this waits for the book's read.
+  if (!selectHoldsBook(state, bookId)) return null;
   return {
     manuscriptId,
     characterIds: new Set(characters.map((c) => c.id)),

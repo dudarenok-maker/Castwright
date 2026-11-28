@@ -23,6 +23,7 @@ import userEvent from '@testing-library/user-event';
 import { Provider } from 'react-redux';
 import { configureStore } from '@reduxjs/toolkit';
 import { manuscriptSlice } from '../store/manuscript-slice';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 import { changeLogSlice } from '../store/change-log-slice';
 import { ManuscriptView } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
@@ -60,6 +61,7 @@ const sentences: Sentence[] = [
 function makeStore(s: Sentence[]) {
   return configureStore({
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
     },

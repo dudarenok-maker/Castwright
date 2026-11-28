@@ -43,7 +43,7 @@ import {
   castEraClearedSince,
 } from '../store/persistence-middleware';
 import { selectHoldsBook, selectIsOpenBook, stageNamesBook } from '../store/open-book';
-import { selectEditsGated, selectLoadedBook } from '../store/loaded-book-slice';
+import { selectEditsGated, selectHeldBookId, selectLoadedBook } from '../store/loaded-book-slice';
 import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { CastEditsPausedStatus } from './cast-edits-paused-banner';
 import { chapterHoldsAudio } from '../store/chapter-holds-audio';
@@ -1028,11 +1028,9 @@ export function Layout() {
                  a null identity means an in-flight upload of THIS book, so
                  leave the slices on their in-memory defaults. Non-persisted
                  actions only: the reset itself must never PUT (#3376).
-                 #3519 — the loaded-book pair names the held book. After a
-                 reload it is empty while the restored manuscript id still
-                 names one, so that id is read when the pair names none. */
-              const now = store.getState();
-              const held = selectLoadedBook(now).loadedBookId ?? now.manuscript.bookId;
+                 #3519 — after a reload the restored id counts as held too
+                 (selectHeldBookId). */
+              const held = selectHeldBookId(store.getState());
               if (held !== null && held !== bookId) {
                 resetBookSlices(dispatch, bookId);
               }
@@ -1398,7 +1396,7 @@ export function Layout() {
      mutation (Phase 0a snapshots, applyVoiceMatches itself, profile
      edits). A match cancelled by its own cleanup before it answered (a
      character added or removed mid-match) re-arms the guard, so the re-run
-     matches the current roster. The `manuscript.bookId` check closes the same race one level
+     matches the current roster. The `holdsStageBook` check closes the same race one level
      up: until the per-book read lands, the slices can still hold ANOTHER
      book's cast (a skipped analysis result, a library open after viewing
      book B), and applyVoiceMatches is a persisted action — it would PUT
@@ -1414,6 +1412,7 @@ export function Layout() {
      it waits until the book's cast is editable. Skipped before the once-guard
      arms, it runs once after the gate's re-hydrate releases the cast. */
   const castReadOnly = useAppSelector((s) => (bookId ? selectCastReadOnly(s, bookId) : false));
+  const holdsStageBook = useAppSelector((s) => bookId != null && selectHoldsBook(s, bookId));
   useEffect(() => {
     if (stageKind !== 'confirm') {
       /* Clear the once-guard when leaving the confirm stage so a
@@ -1426,7 +1425,7 @@ export function Layout() {
     }
     if (!bookId) return;
     if (characters.length === 0) return;
-    if (manuscript.bookId !== bookId) return;
+    if (!holdsStageBook) return;
     if (castReadOnly) return;
     if (voiceMatchFiredFor.current === bookId) return;
     voiceMatchFiredFor.current = bookId;
@@ -1450,7 +1449,7 @@ export function Layout() {
       if (!settled && voiceMatchFiredFor.current === bookId) voiceMatchFiredFor.current = null;
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [stageKind, bookId, rosterKey, manuscript.bookId, castReadOnly]);
+  }, [stageKind, bookId, rosterKey, holdsStageBook, castReadOnly]);
 
   /* Revisions + drift poll — active book on a 30 s tick (existing behavior).
      Plan 83 layered a 120 s background fan-out across non-active books past

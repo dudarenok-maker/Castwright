@@ -14,6 +14,7 @@
 import type { Middleware } from '@reduxjs/toolkit';
 import type { RootState } from './index';
 import { notificationsActions } from './notifications-slice';
+import { selectHeldBookId } from './loaded-book-slice';
 import { RESTRUCTURING_TOAST_KEY, RESTRUCTURING_TOAST_MESSAGE } from './restructure-lock';
 
 export const REFUSED_WHILE_RESTRUCTURING: ReadonlySet<string> = new Set(
@@ -39,7 +40,7 @@ export const restructureGuardMiddleware: Middleware = (store) => (next) => (acti
   const type = (action as { type?: string } | null)?.type;
   if (type && REFUSED_WHILE_RESTRUCTURING.has(type)) {
     const s = store.getState() as RootState;
-    const bookId = s.manuscript?.bookId;
+    const bookId = selectHeldBookId(s);
     if (bookId && s.ui?.restructuringBooks?.[bookId]) {
       store.dispatch(
         notificationsActions.pushToast({

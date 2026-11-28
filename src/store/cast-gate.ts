@@ -35,6 +35,8 @@ import type { Middleware, ThunkAction, UnknownAction } from '@reduxjs/toolkit';
 import { api } from '../lib/api';
 import { castActions, type CastApplyMeta } from './cast-slice';
 import { manuscriptActions } from './manuscript-slice';
+import { selectHeldBookId } from './loaded-book-slice';
+import { selectHoldsBook } from './open-book';
 import { analysisActions, ANALYSIS_STREAM_LIVE_QUERY, type AnalysisStreamSnapshot } from './analysis-slice';
 import { beginFullRead, castWrittenSince, flushBookPersistence } from './persistence-middleware';
 import { notificationsActions } from './notifications-slice';
@@ -55,16 +57,13 @@ import {
 export { selectCastReadOnly, selectCastIdentityPaused, pollBookBusy } from './book-busy-slice';
 
 interface GateState extends BusyPollState {
+  loadedBook: { loadedBookId: string | null };
   manuscript?: { bookId?: string | null };
 }
 
 type GateThunk<R> = ThunkAction<R, GateState, unknown, UnknownAction>;
 
 const eraEpochOf = (s: GateState, bookId: string) => s.cast?.analysisEra?.[bookId]?.epoch;
-/* The slices hold `bookId` (the manuscript slice's identity, as the
-   persistence middleware's #3624 gate reads it). */
-const holdsBook = (s: GateState, bookId: string) => (s.manuscript?.bookId ?? null) === bookId;
-
 /* A cast save could post-date the read this many times in a row before the
    re-read gives up (the next state change re-issues it). */
 const MAX_OVERTAKEN_READS = 3;
@@ -112,7 +111,7 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
            was halted by the poll (R30); an unconfirmed one is a run that has
            not registered yet. */
         if (snapshotRunning(getState(), bookId)) return;
-        if (!holdsBook(getState(), bookId)) {
+        if (!selectHoldsBook(getState(), bookId)) {
           /* The stage names it but its own full read is still out: that read
              may predate the run's persist, so the era must outlive it. The
              gate re-issues this re-read once the slices hold the book. */
@@ -128,7 +127,7 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
           res = await api.getBookState(bookId);
         } catch (err) {
           console.warn('[cast-gate] cast re-read failed:', (err as Error)?.message);
-          if (!holdsBook(getState(), bookId)) return;
+          if (!selectHoldsBook(getState(), bookId)) return;
           await new Promise<void>((resolve) => setTimeout(resolve, busyPollDelay(failures++)));
           continue;
         }
@@ -137,7 +136,7 @@ export function rehydrateCastAfterAnalysis(bookId: string): GateThunk<Promise<vo
           if (++overtaken < MAX_OVERTAKEN_READS) continue;
           return;
         }
-        if (res && holdsBook(getState(), bookId)) {
+        if (res && selectHoldsBook(getState(), bookId)) {
           dispatch(castActions.hydrateCharacters(res.cast?.characters ?? []));
           dispatch(
             manuscriptActions.hydrateFromBookState({
@@ -213,7 +212,8 @@ export const castGateMiddleware: Middleware = (store) => {
       (a.type !== castActions.mergeCharacters.type || a.meta?.fromAnalysis === true)
     ) {
       const s = getState();
-      const held = s.manuscript?.bookId ?? null;
+      /* #3519 — a guard: the restored book counts as held after a reload. */
+      const held = selectHeldBookId(s);
       const target = a.meta?.bookId ?? s.analysis?.activeStream?.bookId ?? held ?? stageBookId(s);
       if (target) {
         store.dispatch(castActions.latchAnalysisEra({ bookId: target }));

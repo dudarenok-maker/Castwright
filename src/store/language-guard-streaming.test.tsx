@@ -19,6 +19,7 @@ import { castDesignSlice, castDesignActions } from './cast-design-slice';
 import { castSlice } from './cast-slice';
 import { notificationsSlice } from './notifications-slice';
 import { scriptReviewSlice } from './script-review-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import { useLanguageGuard } from '../hooks/use-language-guard';
 import { api, type CastDesignCallbacks } from '../lib/api';
 import type { LibraryBook } from '../lib/types';
@@ -187,7 +188,7 @@ describe('language-guard-streaming (batch shape, #2407 Task 9d)', () => {
 
     /* Hand-rolled getState/dispatch (per #2407's brief) rather than wiring
        the real manuscript/cast slices: retryReviewScript's snapshotIfReady
-       only ever reads state.manuscript.{bookId,manuscriptId,sentences} and
+       only ever reads state.loadedBook, state.manuscript.sentences and
        state.cast.characters (mirrors fakeGetState in
        script-review-thunk.test.ts), while useLanguageGuard needs a REAL
        library slice in a real store to resolve the book — so the two
@@ -196,6 +197,7 @@ describe('language-guard-streaming (batch shape, #2407 Task 9d)', () => {
     const getState = (): RootState =>
       ({
         ...store.getState(),
+        loadedBook: loadedPair({ bookId: 'b_marlow', manuscriptId: 'm_marlow' }),
         manuscript: { bookId: 'b_marlow', manuscriptId: 'm_marlow', sentences },
         cast: { characters: [{ id: 'c1' }] },
       }) as unknown as RootState;

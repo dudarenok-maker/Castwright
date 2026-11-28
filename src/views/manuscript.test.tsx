@@ -30,6 +30,7 @@ import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView, isExcludedSentenceId } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
 import { heldBook } from '../store/loaded-book-slice.test-helpers';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 
 /* fs-58 — api mock for reviewScript + createCharacter trigger tests.
    Task 10 — getScriptReviewState is stubbed too: ManuscriptView now hydrates
@@ -81,6 +82,7 @@ const sentences: Sentence[] = [
 function renderView(currentChapterId: number) {
   const store = configureStore({
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       changeLog: changeLogSlice.reducer,
     },
@@ -157,6 +159,7 @@ describe('ManuscriptView — chapter filter', () => {
   function renderFilterView(currentChapterId: number) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -243,6 +246,7 @@ describe('ManuscriptView — large book sidebar structure', () => {
     }));
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -332,6 +336,7 @@ describe('ManuscriptView — Detected list ordering', () => {
   function renderOrderingView(currentChapterId: number) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -427,6 +432,7 @@ describe('ManuscriptView — inspector with large cast', () => {
     };
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -506,6 +512,7 @@ describe('ManuscriptView — cross-chapter reassign isolation', () => {
     ];
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -603,6 +610,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
     };
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -667,6 +675,7 @@ describe('ManuscriptView — reassign picker (post-90 portal + dismissal polish)
     };
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -743,6 +752,7 @@ describe('ManuscriptView — responsive scaffolding (plan 81 wave 3)', () => {
   function renderResponsive(currentChapterId = 1) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -868,6 +878,7 @@ describe('ManuscriptView — virtualisation threshold (plan 92)', () => {
     }));
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -919,6 +930,7 @@ describe('ManuscriptView — guided-tour demonstrations (fe-38)', () => {
   function renderAtStep(stepId: string) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         tour: tourSlice.reducer,
@@ -1186,6 +1198,58 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
       /* The stale op must be in unappliable. */
       expect(review.unappliable.some((u) => u.op.id === 999)).toBe(true);
     });
+  });
+
+  it("stamps a new review with the pair's manuscript id, not the manuscript slice's (#3519)", async () => {
+    const user = userEvent.setup();
+    reviewScript.mockImplementation(async (_bookId: string, opts?: { onOps?: (arg: { chapterId: number; ops: object[] }) => void }) => {
+      opts?.onOps?.({
+        chapterId: 1,
+        ops: [{ id: 1, op: 'strip_tag', newText: 'Live line fixed.', rationale: 'tag' }],
+      });
+    });
+    const store = configureStore({
+      reducer: {
+        loadedBook: loadedBookSlice.reducer,
+        manuscript: manuscriptSlice.reducer,
+        changeLog: changeLogSlice.reducer,
+        scriptReview: scriptReviewSlice.reducer,
+        ui: uiSlice.reducer,
+        bookMeta: bookMetaSlice.reducer,
+        account: accountSlice.reducer,
+      },
+      preloadedState: {
+        loadedBook: { loadedBookId: 'bk-1', loadedManuscriptId: 'm-pair' },
+        manuscript: {
+          ...manuscriptSlice.getInitialState(),
+          bookId: 'bk-1',
+          manuscriptId: 'm-slice',
+          sentences: [liveSentence] as never,
+        },
+        ui: {
+          ...uiSlice.getInitialState(),
+          stage: { kind: 'ready', bookId: 'bk-1', view: 'manuscript', currentChapterId: 1, openProfileId: null } as never,
+        },
+      },
+    });
+
+    render(
+      <Provider store={store}>
+        <ManuscriptView
+          characters={characters}
+          chapters={[quarantineChapter]}
+          currentChapterId={1}
+          setCurrentChapterId={() => {}}
+          sentencesFromStore={[liveSentence]}
+        />
+      </Provider>,
+    );
+
+    await user.click(screen.getByTestId('review-script-chapter'));
+
+    await waitFor(() =>
+      expect(store.getState().scriptReview.byBook['bk-1']?.manuscriptId).toBe('m-pair'),
+    );
   });
 
   /* fs-58 Task 7 — the seed-path guard against the dead-feature window:
@@ -1527,6 +1591,7 @@ describe('ManuscriptView — excluded sentence UX (fs-58 Unit B)', () => {
   function renderExcludedView() {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -1579,6 +1644,7 @@ describe('ManuscriptView — excluded sentence UX (fs-58 Unit B)', () => {
     const user = userEvent.setup();
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -2407,6 +2473,7 @@ describe('ManuscriptView — hydration-failure toast + cross-book guard', () => 
   function makeStore(bookId: string) {
     return configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2880,6 +2947,7 @@ describe('ManuscriptView — checkbox multi-select → bulk reassign', () => {
   function renderManuscript() {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         cast: castSlice.reducer,
@@ -2990,6 +3058,7 @@ describe('ManuscriptView — scene divider (#1679)', () => {
   function renderScene(chapterSentences: Sentence[]) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
       },
@@ -3071,6 +3140,7 @@ describe('manuscript paragraph-merged caption (#2254)', () => {
   function renderCaptionView(currentChapterId: number, flaggedIds: number[]) {
     const store = configureStore({
       reducer: {
+        loadedBook: loadedBookSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         chapters: chaptersSlice.reducer,

@@ -8,6 +8,7 @@ import { uiSlice, uiActions, type PreviewRegenCtx } from './ui-slice';
 import { castSlice } from './cast-slice';
 import { changeLogSlice } from './change-log-slice';
 import { manuscriptSlice } from './manuscript-slice';
+import { loadedBookSlice } from './loaded-book-slice';
 import { queueSlice } from './queue-slice';
 import { analysisSlice } from './analysis-slice';
 import { chaptersSlice } from './chapters-slice';
@@ -41,7 +42,7 @@ function makeStore(active = 'A'): {
   };
   dispatch: TestDispatch;
 } {
-  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer } });
+  const store = configureStore({ reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, changeLog: changeLogSlice.reducer, queue: queueSlice.reducer, analysis: analysisSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, notifications: notificationsSlice.reducer, loadedBook: loadedBookSlice.reducer } });
   const typed = store as unknown as {
     getState: typeof store.getState;
     dispatch: TestDispatch;

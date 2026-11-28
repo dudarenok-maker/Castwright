@@ -31,6 +31,8 @@ import { changeLogSlice } from './change-log-slice';
 import { bookMetaSlice } from './book-meta-slice';
 import { chaptersSlice } from './chapters-slice';
 import { resetBookSlices } from './reset-book-slices';
+import { loadedBookSlice } from './loaded-book-slice';
+import { loadedPair } from './loaded-book-slice.test-helpers';
 import { createBookStateDisk, type BookStateDisk } from '../test/book-state-disk';
 import { ANALYSIS_STREAM_FAILED, ANALYSIS_STREAM_NO_RESULT } from '../lib/analysis-stream-codes';
 import type { Character, PutStateRequest } from '../lib/types';
@@ -49,9 +51,11 @@ const snap = (bookId: string, over: Partial<AnalysisStreamSnapshot> = {}): Analy
   ...over,
 });
 
-function makeStore() {
+function makeStore(preloaded?: object) {
   return configureStore({
+    ...(preloaded ? { preloadedState: preloaded as never } : {}),
     reducer: {
+      loadedBook: loadedBookSlice.reducer,
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
       manuscript: manuscriptSlice.reducer,
@@ -635,5 +639,22 @@ describe('gate-up flushes, never withholds (B3)', () => {
     expect(era(store, 'A')).toBeUndefined();
     expect(disk.books.get('A')!.cast).toEqual({ characters: [char('wren'), char('kestrel')] });
     expect(disk.log.filter((p) => p.slice === 'cast')).toHaveLength(1);
+  });
+});
+
+describe('an analysis apply is judged against the book the slices hold (#3519)', () => {
+  it.each([
+    { name: 'the pair names B and the manuscript slice A', pair: 'B', slice: 'A', lands: false },
+    { name: 'the pair names A and the manuscript slice B', pair: 'A', slice: 'B', lands: true },
+    { name: 'a reload left the pair empty and restored B', pair: null, slice: 'B', lands: false },
+  ])("A's roster, when $name", async ({ pair, slice, lands }) => {
+    const store = makeStore({
+      loadedBook: loadedPair({ bookId: pair }),
+      manuscript: { ...manuscriptSlice.getInitialState(), bookId: slice },
+    });
+    store.dispatch(castActions.mergeCharacters([char('heron')], { fromAnalysis: true, bookId: 'A' }));
+    expect(store.getState().cast.characters.some((c) => c.id === 'heron')).toBe(lands);
+    expect(era(store, 'A')).toBeDefined();
+    await settle();
   });
 });
