@@ -401,11 +401,6 @@ export function ProfileDrawer({
       (voice?.ttsVoice?.provider === 'qwen' ? voice.ttsVoice.name : null) ??
       null,
   );
-  /* Whether the qwen voice in play is a CLONE, read off the live cast slot
-     (`assignMyVoice` mirrors `provenance` into it). "Save to my voices" would
-     copy a clone into an unconsented `designed` entry that Revoke can't
-     reach, so the server refuses it (403) and the drawer must not offer it. */
-  const qwenVoiceIsClone = character.overrideTtsVoices?.qwen?.provenance === 'cloned';
   /* srv-43: voiceUuid of the just-designed or just-approved voice, seeded
      before the cast refetch so "Play 12s" can resolve the uuid-keyed cache
      entry immediately. Starts from the persisted value (if any). */
@@ -426,6 +421,21 @@ export function ProfileDrawer({
     (s) => (s as { voiceLibrary?: { entries: VoiceLibraryEntry[] } }).voiceLibrary?.entries,
   );
   const myVoices = myVoicesEntries ?? EMPTY_MY_VOICES;
+  /* Whether the qwen voice in play is a CLONE: the live cast slot says so
+     (`assignMyVoice` mirrors `provenance` into it), OR the My voices entry the
+     slot points at is cloned / consented / linked to a clone (the slot's copy
+     of `provenance` can lag a relabelled entry). "Save to my voices" would copy
+     a clone into an unconsented `designed` entry that Revoke can't reach, so
+     the server refuses it (403) and the drawer must not offer it. */
+  const qwenSlot = character.overrideTtsVoices?.qwen;
+  const qwenSlotEntry = qwenSlot?.libraryUuid
+    ? myVoices.find((e) => e.voiceUuid === qwenSlot.libraryUuid)
+    : undefined;
+  const qwenVoiceIsClone =
+    qwenSlot?.provenance === 'cloned' ||
+    qwenSlotEntry?.provenance === 'cloned' ||
+    !!qwenSlotEntry?.consent ||
+    !!(qwenSlotEntry as { clonedFrom?: unknown } | undefined)?.clonedFrom;
 
   /* Assigns a "My voices" entry to THIS character (fs-38 spec §2/§5's
      assign flow) — the server writes cast.json directly, so mirror the

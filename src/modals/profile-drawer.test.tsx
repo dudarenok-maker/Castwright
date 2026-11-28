@@ -2326,6 +2326,26 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
   });
 
+  it('hides "Save to my voices" when the slot says designed but its My-voices ENTRY is cloned', () => {
+    const relabelled: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'relab1',
+      provenance: 'cloned',
+    };
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab1', libraryUuid: 'relab1', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1', myVoices: [relabelled] },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
   it('still shows "Save to my voices" for a DESIGNED qwen slot when the coqui slot is a clone', () => {
     renderDrawer(
       {
