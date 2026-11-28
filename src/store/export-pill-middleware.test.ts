@@ -71,6 +71,18 @@ describe('exportPillMiddleware', () => {
     expect(store.getState().exports.linger['b1']).toBeUndefined();
   });
 
+  /* srv-96 — a cancelling job is still running until it reads `cancelled`. */
+  it('does not linger while a sibling job for the same book is cancelling', () => {
+    const store = makeStore();
+    const jobA = makeJob({ id: 'exp_a', status: 'in_progress' });
+    const jobB = makeJob({ id: 'exp_b', status: 'in_progress' });
+    store.dispatch(exportsActions.exportStarted(jobA));
+    store.dispatch(exportsActions.exportStarted(jobB));
+    store.dispatch(exportsActions.exportUpdated({ ...jobB, status: 'cancelling' }));
+    store.dispatch(exportsActions.exportUpdated({ ...jobA, status: 'done', progress: 1 }));
+    expect(store.getState().exports.linger['b1']).toBeUndefined();
+  });
+
   it('clears the linger after the configured duration', () => {
     const store = makeStore();
     const job = makeJob({ status: 'in_progress' });
