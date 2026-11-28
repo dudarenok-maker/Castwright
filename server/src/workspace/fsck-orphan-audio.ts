@@ -5,7 +5,7 @@
  * a regen clobbers the live render. The renames are sequential, not
  * atomic: a crash between them leaves a half-preserved state.
  *
- * Three recovery cases this fsck handles, run once on server startup:
+ * The shapes this fsck meets, run once on server startup:
  *
  *   (1) `<slug>.previous.{mp3,m4a,ogg}` exists, no live `<slug>.{mp3,m4a,ogg}` does.
  *       — Interpretation: the rename succeeded but the new render never
@@ -17,24 +17,27 @@
  *       of any extension does.
  *       — Interpretation: orphan segments file. The audio was either
  *         already promoted out (accept/reject path) or the audio rename
- *         failed first. Either way the segments file is dead state.
- *         Recovery: delete the orphan.
+ *         failed first.
+ *         Recovery: the take module's sweep moves it to `audio/.orphaned/`;
+ *         nothing here deletes it.
  *
  *   (3) `<slug>.previous.<ext>` exists alongside a live take of any
  *       supported extension (`<slug>.{mp3,m4a,ogg}`).
  *       — Interpretation: valid pending-revision state. Leave alone.
  *
- * Before cases 1 and 2, `fsckAllBooks` runs the take module's per-chapter
- * `reconcileSlug` (#4339) on every chapter slug of the book. THAT step can rename a wrong-named live file to its
- * real extension, demote or quarantine a duplicate live file to
- * `audio/.orphaned/`, and mint ids into the live segments and embeddings, so
- * the live audio is touched by the fsck as a whole, though the three cases
- * above still only rename / delete the `.previous.*` halves.
+ * Before case 1, `fsckAllBooks` runs the take module on the book:
+ * `reconcileBook` (book journals), then the per-chapter `reconcileSlug` (#4339)
+ * on every chapter slug, then `sweepSlug` for any other slug that left something
+ * behind. THAT step can replay a take journal, rename a wrong-named live file to
+ * its real extension, demote or quarantine a duplicate live file to
+ * `audio/.orphaned/`, mint ids into the live segments and embeddings, unlink
+ * temp files and abandoned staged parts, and quarantine other leftovers (case 2
+ * among them), so the live audio is touched by the fsck as a whole, though case 1
+ * itself only renames the `.previous.*` halves.
  *
  * Safe to run on every server start: every operation is idempotent. */
 
 import { existsSync, readdirSync, statSync } from 'node:fs';
-import { unlink } from 'node:fs/promises';
 import { join } from 'node:path';
 import { renameWithRetry } from './atomic-rename.js';
 import { withBookOpAtDir } from './book-op-lock.js';
@@ -42,10 +45,14 @@ import {
   CHAPTER_AUDIO_EXTS,
   findChapterAudio,
   findPreviousAudio,
+  listSweepSlugs,
+  listTakeJournals,
   liveAudioPath,
   livePartPath,
   previousPartPath,
+  reconcileBook,
   reconcileSlug,
+  sweepSlug,
 } from './chapter-take.js';
 import { BOOKS_ROOT, audioDir, bookDirByDisplay, stateJsonPath } from './paths.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
@@ -61,12 +68,10 @@ export interface FsckOrphanAudioResult {
   errors: Array<{ audioRoot: string; slug: string; action: FsckAction; message: string }>;
 }
 
-export type FsckAction =
-  | 'promoted-previous-to-live'
-  | 'dropped-orphan-segments';
+export type FsckAction = 'promoted-previous-to-live';
 
-/** Walk a single book's audio root and reconcile half-preserved
-    rollback pairs. Mutates the on-disk state; returns a report of
+/** Walk a single book's audio root and promote half-preserved
+    rollback pairs (case 1). Mutates the on-disk state; returns a report of
     actions taken plus any per-action errors that didn't halt the
     sweep. The function never throws — it is fire-and-forget safe. */
 export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudioResult> {
@@ -120,26 +125,6 @@ export async function fsckOrphanAudio(audioRoot: string): Promise<FsckOrphanAudi
         audioRoot,
         slug,
         action: 'promoted-previous-to-live',
-        message: (err as Error).message,
-      });
-    }
-  }
-
-  /* Case 2: orphan segments without a matching audio (live OR previous)
-     → drop. We re-check disk state because case 1 may have just
-     promoted the matching previous segments. */
-  for (const slug of prevSegmentsSlugs) {
-    if (findPreviousAudio(audioRoot, slug)) continue; // pair survived — leave alone
-    const orphan = previousPartPath(audioRoot, slug, 'segments');
-    if (!existsSync(orphan)) continue; // already cleaned
-    try {
-      await unlink(orphan);
-      recovered.push({ audioRoot, slug, action: 'dropped-orphan-segments' });
-    } catch (err) {
-      errors.push({
-        audioRoot,
-        slug,
-        action: 'dropped-orphan-segments',
         message: (err as Error).message,
       });
     }
@@ -213,8 +198,18 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
            review pass 3). */
         try {
           await withBookOpAtDir(walkedDir, async (handle) => {
-            /* §6.1: lazy migration for every chapter slug BEFORE cases 1 and 2.
-               A failure for one slug is logged and the sweep continues. */
+            /* One listing for the book's span (R7-8). Book journals first; a
+               failure is logged and the slugs still run. */
+            const listing = await listTakeJournals(handle);
+            try {
+              await reconcileBook(handle, listing, { touches: 'book-wide' });
+            } catch (err) {
+              console.warn('[fsck-orphan-audio] book journal reconcile failed; continuing', err);
+            }
+            /* Replay, sweep and lazy migration (§6.1) for every chapter slug
+               BEFORE case 1. A failure for one slug is logged and the walk
+               continues. A replay stamp that fails here is one of them: there is
+               nothing to fail into, and its journal stays. */
             let slugs: string[] = [];
             try {
               const st = await readStateJsonWithRecovery(stateJsonPath(handle.bookDir));
@@ -224,10 +219,14 @@ export async function fsckAllBooks(): Promise<FsckOrphanAudioResult> {
             }
             for (const slug of slugs) {
               try {
-                await reconcileSlug(handle, slug);
+                await reconcileSlug(handle, slug, { listing });
               } catch (err) {
                 console.warn(`[fsck-orphan-audio] reconcile failed for ${slug}; continuing`, err);
               }
+            }
+            /* Leftovers of a slug `state.json` no longer lists: sweep only. */
+            for (const slug of await listSweepSlugs(handle)) {
+              if (!slugs.includes(slug)) await sweepSlug(handle, slug, listing);
             }
             const result = await fsckOrphanAudio(audioDir(handle.bookDir));
             recovered.push(...result.recovered);

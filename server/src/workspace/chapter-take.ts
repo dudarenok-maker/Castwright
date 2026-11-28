@@ -51,6 +51,7 @@ import {
   CHAPTER_AUDIO_EXTS,
   TAKE_SIDECAR_SUFFIXES,
   TAKE_STATE_FIELDS,
+  TAKE_SUFFIXES,
   chapterAudioExists,
   deriveTakeFields,
   findChapterAudio,
@@ -62,6 +63,7 @@ import {
   livePartPath,
   mintJournalId,
   mintTakeId,
+  parseStagedName,
   parseTakeJournalName,
   previousAudioPath,
   previousPartPath,
@@ -983,7 +985,8 @@ export interface TakeJournalListing {
   relabelTemp: readonly string[];
 }
 
-const RELABEL_TEMP_NAME_RE = /\.relabel-[a-z2-7]{16}-\d+\./;
+/* A relabel temp name: its slug, then its book journal's id. */
+const RELABEL_TEMP_NAME_RE = /^(.+)\.relabel-([a-z2-7]{16})-\d+\./;
 
 /** List `audio/` under the caller's book-op. An absent `audio/` is an empty
     listing; any other `readdir` error propagates. */
@@ -1280,13 +1283,15 @@ async function segmentsDescribeLiveAudio(
 
 /** Bring one chapter slug's take up to the current model, under the caller's
     book-op (the handle is asserted first): `replaySlugJournals` first, then
-    `migrateSlugFiles` (steps 1-3), `ensureTakeIdentity` (step 4) and the
-    `state.json` re-stamp (step 5).
+    `sweepSlug`, `migrateSlugFiles` (steps 1-3), `ensureTakeIdentity` (step 4)
+    and the `state.json` re-stamp (step 5). The sweep runs before the migration,
+    so an orphan previous segments file is gone before a live file can be made
+    previous beside it.
 
-    The replay reads `listing` (the span's shared one), or lists `audio/` itself.
-    An error it parked is thrown, and nothing below runs: the journal's entry
-    point fails loud. `migrate: false` replays and stops there, for a slug whose
-    take is about to be replaced whole (R8-5).
+    The replay and the sweep read `listing` (the span's shared one), or one this
+    call lists itself. An error the replay parked is thrown, and nothing below
+    runs: the journal's entry point fails loud. `migrate: false` replays and
+    stops there, for a slug whose take is about to be replaced whole (R8-5).
 
     The re-stamp is decided from a read INSIDE the `updateStateAtDir` lock. A
     LEGACY REJECT (`state.json`'s `audioRenderedAt` differs from the live
@@ -1313,13 +1318,11 @@ export async function reconcileSlug(
   opts: { restamp?: boolean; migrate?: boolean; listing?: TakeJournalListing } = {},
 ): Promise<void> {
   assertHeld(handle, 'reconcileSlug');
-  const replayed = await replaySlugJournals(
-    handle,
-    slug,
-    opts.listing ?? (await listTakeJournals(handle)),
-  );
+  const listing = opts.listing ?? (await listTakeJournals(handle));
+  const replayed = await replaySlugJournals(handle, slug, listing);
   if (replayed.result === 'parked') throw replayed.error;
   if (opts.migrate === false) return;
+  await sweepSlug(handle, slug, listing);
   await migrateAndRestamp(handle, slug, opts.restamp !== false, ensureTakeIdentity);
 }
 
@@ -2784,6 +2787,251 @@ export async function quarantineConflictingJournals(
     `${isoDateUtc()}-${mintTakeId()}`,
     `${claiming.length} take journals claim ${slug}`,
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * The sweep (§5.A "Sweep (D4)"; owner scope addition of 2026-11-19)
+ *
+ * What a crash, or a hand outside the protocol, leaves in `audio/`. A temp file
+ * and a staged part are never the user's audio and are unlinked. Everything else
+ * moves to `.orphaned/` and is never unlinked.
+ * ------------------------------------------------------------------ */
+
+/* `*.tmp-<pid>-<ts>` (#4167), with `writeJsonAtomic`'s counter and random tail. */
+const TMP_LEFTOVER_RE = /\.tmp-\d+-\d+(?:-\d+-[0-9a-f]+)?$/;
+const DISCARD_NAME_RE = /^(.+)\.discard-[a-z2-7]{16}\./;
+/* Longest first, so `.previous.mp3` is not read as `.mp3` of `<slug>.previous`. */
+const SUFFIXES_LONGEST_FIRST = [...TAKE_SUFFIXES].sort((a, b) => b.length - a.length);
+
+/* The slug a leftover name belongs to, or `null` for a name no take writer
+   leaves. The whole slug is matched, so `ch-1` never claims `ch-10`'s files. */
+function leftoverSlug(name: string): string | null {
+  const tagged =
+    parseStagedName(name)?.slug ??
+    DISCARD_NAME_RE.exec(name)?.[1] ??
+    RELABEL_TEMP_NAME_RE.exec(name)?.[1];
+  if (tagged !== undefined) return tagged;
+  const base = name.replace(TMP_LEFTOVER_RE, '').replace(/\.stale$/, '');
+  const journal = parseTakeJournalName(base);
+  if (journal) return journal.slug;
+  const suffix = SUFFIXES_LONGEST_FIRST.find((s) => base.endsWith(`.${s}`));
+  return suffix ? base.slice(0, -(suffix.length + 1)) : null;
+}
+
+const isLiveStaged = (name: string): boolean => {
+  const staged = parseStagedName(name);
+  return staged !== null && liveStaging.has(staged.takeId);
+};
+
+const bookJournalName = (jid: JournalId): string => `.take-journal.relabel.${jid}.json`;
+
+/** Every slug that may have something to sweep in `audio/`, whether or not
+    `state.json` still lists it, under the caller's book-op. */
+export async function listSweepSlugs(handle: AnyBookHandle): Promise<string[]> {
+  assertHeld(handle, 'listSweepSlugs');
+  let names: string[];
+  try {
+    names = await readdir(audioDir(handle.bookDir));
+  } catch (err) {
+    if (!isMissing(err)) throw err;
+    return [];
+  }
+  const orphanSegments = `.previous.${TAKE_SIDECAR_SUFFIXES.segments}`;
+  const markers = ['.tmp-', '.next-', '.discard-', '.relabel-'];
+  const slugs = new Set<string>();
+  for (const name of names) {
+    const candidate =
+      name.endsWith('.stale') || name.endsWith(orphanSegments) || markers.some((m) => name.includes(m));
+    const slug = candidate ? leftoverSlug(name) : null;
+    if (slug) slugs.add(slug);
+  }
+  return [...slugs].sort();
+}
+
+/* The names the sweep unlinks for `slug`: temp files, and staged parts, except
+   those of a take this process is still staging or committing. */
+function unlinkableLeftovers(slug: string, listing: TakeJournalListing): string[] {
+  return [
+    ...listing.tmp.filter((n) => TMP_LEFTOVER_RE.test(n)),
+    ...listing.next.filter((n) => parseStagedName(n) !== null),
+  ].filter((n) => leftoverSlug(n) === slug && !isLiveStaged(n));
+}
+
+/* The paths the sweep quarantines for `slug`. A discard here has no journal (the
+   caller checked that none names the slug); a relabel temp name is replay's
+   while its book journal is present. An orphan previous segments file (no
+   previous audio of any extension) is probed on disk: only ENOENT is "absent",
+   so a held previous take is never taken for a missing one. */
+async function quarantinableLeftovers(
+  root: string,
+  slug: string,
+  listing: TakeJournalListing,
+): Promise<string[]> {
+  const paths = [...listing.discard.filter((n) => DISCARD_NAME_RE.test(n)), ...listing.stale]
+    .filter((n) => leftoverSlug(n) === slug)
+    .map((n) => join(root, n));
+  for (const name of listing.relabelTemp) {
+    const [, owner, jid] = RELABEL_TEMP_NAME_RE.exec(name) ?? [];
+    if (owner === slug && !(await isPresent(join(root, bookJournalName(jid))))) {
+      paths.push(join(root, name));
+    }
+  }
+  const segments = previousPartPath(root, slug, 'segments');
+  if (await isPresent(segments)) {
+    const audio = await Promise.all(
+      CHAPTER_AUDIO_EXTS.map((ext) => isPresent(previousAudioPath(root, slug, ext))),
+    );
+    if (!audio.includes(true)) paths.push(segments);
+  }
+  return paths;
+}
+
+/** Sweep one slug's leftovers (D4), under the caller's book-op, after its
+    replay.
+
+    NOTHING is touched while a journal names the slug: a journal whose replay has
+    not finished, or that cannot be read, still needs its parts. Otherwise:
+    - `*.tmp-<pid>-<ts>`: unlinked.
+    - `.next-<id>.*`: unlinked, unless `id` is in `liveStaging`.
+    - `.discard-<jid>.*` (journal-less by now): quarantined.
+    - a relabel temp name with no book journal: quarantined.
+    - `<name>.stale` (`discardStaleLiveAudio`): quarantined.
+    - `<slug>.previous.segments.json` with no previous audio: quarantined.
+
+    Names come from `listing`; one that has gone since is skipped. One event
+    folder per call. The sweep is housekeeping: a probe, unlink or move that
+    fails is logged and left for the next sweep, never thrown. */
+export async function sweepSlug(
+  handle: AnyBookHandle,
+  slug: string,
+  listing: TakeJournalListing,
+): Promise<void> {
+  assertHeld(handle, 'sweepSlug');
+  const root = audioDir(handle.bookDir);
+  const naming = [
+    ...(listing.journals.get(slug) ?? []).map((j) => j.path),
+    ...listing.otherJournals
+      .filter((n) => n.startsWith(`${slug}.take-journal.`))
+      .map((n) => join(root, n)),
+  ];
+  let quarantine: string[];
+  try {
+    /* On disk, not in the listing: the replay since may have removed it. */
+    for (const path of naming) if (await isPresent(path)) return;
+    quarantine = await quarantinableLeftovers(root, slug, listing);
+  } catch (err) {
+    console.warn(`[take] ${slug}: sweep skipped, a file could not be probed:`, err);
+    return;
+  }
+  for (const name of unlinkableLeftovers(slug, listing)) {
+    try {
+      await unlinkWithRetry(join(root, name));
+    } catch (err) {
+      console.warn(`[take] sweep could not remove ${name}; left for the next sweep:`, err);
+    }
+  }
+  const eventFolder = `${isoDateUtc()}-${mintTakeId()}`;
+  for (const path of quarantine) {
+    try {
+      if (!(await isPresent(path))) continue;
+      await quarantineToOrphaned(handle, [path], 'sweep: no journal names it', eventFolder);
+    } catch (err) {
+      console.warn(`[take] sweep could not move ${basename(path)}; left for the next sweep:`, err);
+    }
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * reconcileBook: the book journals (§5.A "Ownership", R5-3, R6-3)
+ * ------------------------------------------------------------------ */
+
+const BOOK_JOURNAL_NAME_RE = /^\.take-journal\.relabel\.([a-z2-7]{16})\.json$/;
+
+/** What an entry point touches: the slugs it names, or the whole book (a
+    restructure, backup restore, the bundle overwrite, a PUT that sends
+    `chapters`, the boot fsck). */
+export type BookTouches = readonly string[] | 'book-wide';
+
+/** R5-3: whether an entry point attempts a book journal that names `named`. */
+export function bookJournalInScope(named: readonly string[], touches: BookTouches): boolean {
+  return touches === 'book-wide' || named.some((slug) => touches.includes(slug));
+}
+
+interface BookJournal {
+  jid: JournalId;
+  /** Every slug it lists. */
+  slugs: readonly string[];
+}
+
+/* Why a book journal's bytes are no journal, or `null` when they are an object. */
+function bookJournalDamage(raw: string): string | null {
+  try {
+    return isObject(JSON.parse(raw.replace(/^\uFEFF/, ''))) ? null : 'not a JSON object';
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    return err.message;
+  }
+}
+
+/* The listing's book journals to replay. An unparseable one is quarantined here
+   with the temp names it was moving, whatever the entry point touches: it names
+   nothing and blocks nothing. A read that fails throws, and such a journal is
+   never quarantined. */
+async function readBookJournals(
+  handle: AnyBookHandle,
+  listing: TakeJournalListing,
+): Promise<BookJournal[]> {
+  const root = audioDir(handle.bookDir);
+  for (const name of listing.otherJournals) {
+    const jid = BOOK_JOURNAL_NAME_RE.exec(name)?.[1];
+    if (!jid) continue;
+    const path = join(root, name);
+    let raw: string;
+    try {
+      raw = await readFile(path, 'utf8');
+    } catch (err) {
+      if (!isMissing(err)) throw err;
+      continue;
+    }
+    const damage = bookJournalDamage(raw);
+    /* TODO(#4324): one that parses is Phase 4's relabel journal. Check its schema
+       (a failure is quarantined too) and return it. */
+    if (damage === null) continue;
+    const moving: string[] = [];
+    for (const temp of listing.relabelTemp) {
+      if (RELABEL_TEMP_NAME_RE.exec(temp)?.[2] !== jid) continue;
+      if (await isPresent(join(root, temp))) moving.push(join(root, temp));
+    }
+    await quarantineJournals(
+      handle,
+      `book journal ${jid}`,
+      [path],
+      moving,
+      `${isoDateUtc()}-${jid}`,
+      `reconcile: unparseable book journal (${damage})`,
+    );
+  }
+  /* Phase 2 writes no book journal. */
+  return [];
+}
+
+/** The book journals' step of an entry point, before any `reconcileSlug`, under
+    the caller's book-op (`listing` is the span's shared one). A journal is
+    attempted only when it is in scope (`bookJournalInScope`).
+
+    Throws a journal read's own error, and `TakeMoveStepError` when an
+    unparseable journal's files cannot be moved. */
+export async function reconcileBook(
+  handle: AnyBookHandle,
+  listing: TakeJournalListing,
+  opts: { touches: BookTouches },
+): Promise<void> {
+  assertHeld(handle, 'reconcileBook');
+  const attempted = (await readBookJournals(handle, listing)).filter((journal) =>
+    bookJournalInScope(journal.slugs, opts.touches),
+  );
+  /* TODO(#4324): replay each relabel journal here. */
+  for (const journal of attempted) console.warn(`[take] book journal ${journal.jid} has no replay yet`);
 }
 
 /* ------------------------------------------------------------------ *

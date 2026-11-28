@@ -5,7 +5,9 @@
  *   (1) `<slug>.previous.mp3` alone with no live `<slug>.mp3` →
  *       promote `.previous.*` back to live.
  *   (2) `<slug>.previous.segments.json` alone (no audio sibling) →
- *       drop the orphan.
+ *       left in place: the take module's sweep quarantines it, run by
+ *       `fsckAllBooks` before this function (`chapter-take.sweep.test.ts`).
+ *       This function never deletes it.
  *   (3) Live + previous both present → valid pending-revision; leave
  *       both files untouched.
  *   (4) Both previous halves present without a live → promote the
@@ -69,16 +71,16 @@ describe('fsckOrphanAudio', () => {
     expect(existsSync(join(audioRoot, '02-chapter-2.previous.segments.json'))).toBe(false);
   });
 
-  it('drops orphan <slug>.previous.segments.json when no preserved audio matches it', async () => {
+  it('never deletes an orphan <slug>.previous.segments.json: it is the sweep\'s to quarantine (#4320)', async () => {
     seedFile('03-chapter-3.previous.segments.json', '{"segments":[]}');
 
     const result = await fsckOrphanAudio(audioRoot);
 
     expect(result.errors).toEqual([]);
-    expect(result.recovered).toEqual([
-      { audioRoot, slug: '03-chapter-3', action: 'dropped-orphan-segments' },
-    ]);
-    expect(existsSync(join(audioRoot, '03-chapter-3.previous.segments.json'))).toBe(false);
+    expect(result.recovered).toEqual([]);
+    expect(readFileSync(join(audioRoot, '03-chapter-3.previous.segments.json'), 'utf8')).toBe(
+      '{"segments":[]}',
+    );
   });
 
   it('leaves a valid pending-revision pair (.mp3 + .previous.mp3 + .previous.segments.json) untouched', async () => {
@@ -146,13 +148,10 @@ describe('fsckOrphanAudio', () => {
 
     expect(result.errors).toEqual([]);
     const actions = result.recovered.map((r) => `${r.slug}:${r.action}`).sort();
-    expect(actions).toEqual([
-      '06-chapter-6:promoted-previous-to-live',
-      '07-chapter-7:dropped-orphan-segments',
-    ]);
-    /* Chapter 6 promoted, chapter 7 cleaned, chapter 8 untouched, chapter 9 pair preserved. */
+    expect(actions).toEqual(['06-chapter-6:promoted-previous-to-live']);
+    /* Chapter 6 promoted, chapter 7 left to the sweep, chapter 8 untouched, chapter 9 pair preserved. */
     expect(existsSync(join(audioRoot, '06-chapter-6.mp3'))).toBe(true);
-    expect(existsSync(join(audioRoot, '07-chapter-7.previous.segments.json'))).toBe(false);
+    expect(existsSync(join(audioRoot, '07-chapter-7.previous.segments.json'))).toBe(true);
     expect(existsSync(join(audioRoot, '09-chapter-9.mp3'))).toBe(true);
     expect(existsSync(join(audioRoot, '09-chapter-9.previous.mp3'))).toBe(true);
   });
@@ -223,7 +222,7 @@ describe('fsckOrphanAudio', () => {
     expect(existsSync(join(audioRoot, '15-chapter-15.m4a'))).toBe(false);
   });
 
-  it('F5: an orphan previous segments file beside .previous.ogg survives; with no previous audio of any extension it is dropped', async () => {
+  it('F5: a previous segments file survives this function, beside a .previous.ogg or with no previous audio at all', async () => {
     seedFile('16-chapter-16.mp3', 'live'); // live take, so case 1 does not promote
     seedFile('16-chapter-16.previous.ogg', 'prev ogg');
     seedFile('16-chapter-16.previous.segments.json', '{"segments":[]}');
@@ -233,11 +232,9 @@ describe('fsckOrphanAudio', () => {
     const result = await fsckOrphanAudio(audioRoot);
 
     expect(result.errors).toEqual([]);
-    expect(result.recovered).toEqual([
-      { audioRoot, slug: '17-chapter-17', action: 'dropped-orphan-segments' },
-    ]);
+    expect(result.recovered).toEqual([]);
     expect(existsSync(join(audioRoot, '16-chapter-16.previous.segments.json'))).toBe(true);
     expect(existsSync(join(audioRoot, '16-chapter-16.previous.ogg'))).toBe(true);
-    expect(existsSync(join(audioRoot, '17-chapter-17.previous.segments.json'))).toBe(false);
+    expect(existsSync(join(audioRoot, '17-chapter-17.previous.segments.json'))).toBe(true);
   });
 });

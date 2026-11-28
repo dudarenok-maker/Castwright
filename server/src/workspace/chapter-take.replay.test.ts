@@ -937,7 +937,9 @@ async function twoJournals(second: After, supersede: boolean) {
   const one = json<TakeJournal>(book, oneName);
   const two = json<TakeJournal>(book, twoName);
   if (supersede) {
-    two.supersedes = [{ jid: one.jid, discards: [], dropEntry: true }];
+    /* The discards J1 still owes, as step 0 records them: an unrecorded one would
+       be left with no journal, which the sweep quarantines. */
+    two.supersedes = [{ jid: one.jid, discards: names(book.audio, `.discard-${one.jid}.`), dropEntry: true }];
     writeFileSync(join(book.audio, twoName), JSON.stringify(two, null, 2));
   }
   return { book, first: first.staged, next: next.staged, one, two, oneName, twoName, afterOne };
