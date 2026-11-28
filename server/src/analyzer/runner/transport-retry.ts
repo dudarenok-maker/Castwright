@@ -16,7 +16,7 @@
    layer — the runner (finish.ts) maps those to errors. Only thrown errors
    (5xx, 429, idle, abort, unreachable) enter the retry loop. */
 import { AnalysisAbortedError } from '../errors.js';
-import { tryParseApiError } from '../api-error-envelope.js';
+import { readApiErrorDetails } from '../api-error-envelope.js';
 import {
   DailyQuotaExhaustedError,
   type GeminiRateLimiter,
@@ -97,7 +97,7 @@ export function parseRetryDelayMs(err: unknown): number | null {
   const raw = (err as Error)?.message ?? String(err);
   /* Same unwrap as the failure taxonomy: the SDK's wrapper puts Google's envelope (and its
      RetryInfo) inside `error.message`, so the outer object has no `details` of its own. */
-  const details = (tryParseApiError(raw)?.details ?? []) as Array<{ '@type'?: string; retryDelay?: string }>;
+  const details = readApiErrorDetails(raw) as Array<{ '@type'?: string; retryDelay?: string }>;
   for (const d of details) {
     const type = d['@type'] ?? '';
     const delay = d.retryDelay;

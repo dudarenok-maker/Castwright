@@ -13,6 +13,22 @@ export function tryParseApiError(raw: string): ApiErrorEnvelope | null {
   return readApiErrorEnvelope(outer.message) ?? outer;
 }
 
+/* The `details` (RetryInfo lives here) of an error envelope, whether SDK-wrapped (read through
+   `tryParseApiError`'s unwrap) or a bare `{"error":{"details":[...]}}` with no code/message, which
+   the classifier rejects but the retry helper still has to honour. */
+export function readApiErrorDetails(raw: string): unknown[] {
+  const unwrapped = tryParseApiError(raw)?.details;
+  if (unwrapped) return unwrapped;
+  const start = raw.indexOf('{');
+  if (start < 0) return [];
+  try {
+    const obj = JSON.parse(raw.slice(start)) as { error?: { details?: unknown } };
+    return Array.isArray(obj?.error?.details) ? obj.error.details : [];
+  } catch {
+    return [];
+  }
+}
+
 function readApiErrorEnvelope(raw: string): ApiErrorEnvelope | null {
   /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
      Find the first '{' and try to parse from there. */
