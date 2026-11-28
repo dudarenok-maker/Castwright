@@ -228,7 +228,7 @@ Prerequisites: a real Ollama daemon with `qwen3.5:4b` pulled; no TTS engine resi
 
 Run by / date / SHA: claude lane (#4704) / 2026-11-26 / fb95fffe (base; evidence commit on chore/ops-onbox-batch-2).
 
-## 5. Gemini `schema` mode — register row E112
+## 5. Gemini `schema` mode — register row E112 (discharged 2026-11-28 (#4728), removed from the register)
 
 Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
 
