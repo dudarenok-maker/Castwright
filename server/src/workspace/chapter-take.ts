@@ -19,8 +19,8 @@
    `withBookOp` and refuses a stale or hand-built one (`assertHeld`, as
    `moveBookFolder` does). The only locks taken here are `updateStateAtDir`'s
    `book` -> `state-json` pair, whose mutate callback takes no other lock, the
-   `book` lock around a journal unlink (R7-1), under which nothing else is
-   taken, and the `revisions` leaf lock the review record takes through
+   `book` lock around a journal unlink or quarantine (R7-1), under which nothing
+   else is taken, and the `revisions` leaf lock the review record takes through
    `revisions-store.ts`. */
 
 import { spawn } from 'node:child_process';
@@ -1211,7 +1211,7 @@ export async function discardStaged(staged: StagedTake): Promise<void> {
 }
 
 /* ------------------------------------------------------------------ *
- * reconcileSlug (§6.1 steps 1-5, lazy migration)
+ * reconcileSlug (journal replay, then §6.1 steps 1-5, lazy migration)
  * ------------------------------------------------------------------ */
 
 /** The identity of a live segments file: its `[synthesizedAt, durationSec]`.
@@ -1277,8 +1277,14 @@ async function segmentsDescribeLiveAudio(
 }
 
 /** Bring one chapter slug's take up to the current model, under the caller's
-    book-op (the handle is asserted first): `migrateSlugFiles` (steps 1-3),
-    `ensureTakeIdentity` (step 4), then the `state.json` re-stamp (step 5).
+    book-op (the handle is asserted first): `replaySlugJournals` first, then
+    `migrateSlugFiles` (steps 1-3), `ensureTakeIdentity` (step 4) and the
+    `state.json` re-stamp (step 5).
+
+    The replay reads `listing` (the span's shared one), or lists `audio/` itself.
+    An error it parked is thrown, and nothing below runs: the journal's entry
+    point fails loud. `migrate: false` replays and stops there, for a slug whose
+    take is about to be replaced whole (R8-5).
 
     The re-stamp is decided from a read INSIDE the `updateStateAtDir` lock. A
     LEGACY REJECT (`state.json`'s `audioRenderedAt` differs from the live
@@ -1296,16 +1302,22 @@ async function segmentsDescribeLiveAudio(
     `restoreTake` stamps the restored take), and a stamp from the take that
     request deletes would describe a take that is no longer there.
 
-    Phase 1 holds no journal replay; Phase 2 adds it before `migrateSlugFiles`.
     A failed step-5 `state.json` write is logged and swallowed (spec State-write
     table); every other error propagates: the route entry points curate them,
     the fsck logs them. */
 export async function reconcileSlug(
   handle: AnyBookHandle,
   slug: string,
-  opts: { restamp?: boolean } = {},
+  opts: { restamp?: boolean; migrate?: boolean; listing?: TakeJournalListing } = {},
 ): Promise<void> {
   assertHeld(handle, 'reconcileSlug');
+  const replayed = await replaySlugJournals(
+    handle,
+    slug,
+    opts.listing ?? (await listTakeJournals(handle)),
+  );
+  if (replayed.result === 'parked') throw replayed.error;
+  if (opts.migrate === false) return;
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
   const restamp = opts.restamp !== false;
@@ -1864,6 +1876,15 @@ async function carryForwardSidecars(
   if (rows.length > 0 || stagedVerdictPath) await writeStagedJson(root, staged, verdictSuffix, rows);
 }
 
+/* Where step 5 puts a part of the live take: its previous name, or a discard
+   name when the live take does not become previous. */
+function asidePath(root: string, journal: TakeJournal, ref: TakePartRef): string {
+  const { slug } = journal.chapter;
+  return journal.preserved
+    ? slugPartPath(root, slug, 'previous', ref)
+    : discardPath(root, slug, journal.jid, 'live', partSuffix(ref));
+}
+
 /* Step 5: the LIVE AUDIO MOVES FIRST (D4: it is the only file ffmpeg can hold,
    so a held file fails before anything else of the live take has moved), then
    each other live part. They become the previous take, or are discarded. */
@@ -1878,10 +1899,7 @@ async function moveLiveAside(
   await writeTakeJournal(handle, slug, journal);
   /* `parts.live` lists the audio first. */
   for (const ref of journal.parts.live) {
-    const to = journal.preserved
-      ? slugPartPath(root, slug, 'previous', ref)
-      : discardPath(root, slug, journal.jid, 'live', partSuffix(ref));
-    await moveOrNoteHeld(slugPartPath(root, slug, 'live', ref), to, moves);
+    await moveOrNoteHeld(slugPartPath(root, slug, 'live', ref), asidePath(root, journal, ref), moves);
   }
 }
 
@@ -1970,15 +1988,20 @@ async function recordInstalledTake(
   return { stamped: true, reviewOutcome };
 }
 
+/* The files in `audio/` whose names start with `prefix`, as full paths. */
+async function pathsStartingWith(root: string, prefix: string): Promise<string[]> {
+  return (await readdir(root)).filter((name) => name.startsWith(prefix)).map((name) => join(root, name));
+}
+
 /* Step 8. The journal goes LAST: only after a successful stamp, with its own
-   discards and every superseded journal gone. */
+   discards and every superseded journal gone. `true` when it is gone. */
 async function cleanUpCommit(
   handle: AnyBookHandle,
   journal: TakeJournal,
   journalPath: string,
   stamped: boolean,
   park: (err: unknown) => void,
-): Promise<void> {
+): Promise<boolean> {
   const root = audioDir(handle.bookDir);
   const { slug } = journal.chapter;
   /* A parked stamp leaves the journal at `installed`, so replay stamps again. */
@@ -1989,9 +2012,8 @@ async function cleanUpCommit(
 
   let discardsGone = false;
   try {
-    const prefix = discardPrefix(slug, journal.jid);
-    const own = (await readdir(root)).filter((name) => name.startsWith(prefix));
-    const failures = await unlinkEach(own.map((name) => join(root, name)));
+    const own = await pathsStartingWith(root, discardPrefix(slug, journal.jid));
+    const failures = await unlinkEach(own);
     failures.forEach(park);
     discardsGone = failures.length === 0;
   } catch (err) {
@@ -2013,7 +2035,32 @@ async function cleanUpCommit(
     }
   }
 
-  if (stamped && discardsGone && chainGone) await unlinkTakeJournal(handle, journalPath).catch(park);
+  if (!stamped || !discardsGone || !chainGone) return false;
+  try {
+    await unlinkTakeJournal(handle, journalPath);
+    return true;
+  } catch (err) {
+    park(err);
+    return false;
+  }
+}
+
+/* Steps 7 and 8 of a take that is committed (D2), for the commit and for a
+   replay from `installed` on: every step runs, and what failed is returned,
+   first first, for the caller to raise last. */
+async function finishInstalledTake(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  journalPath: string,
+): Promise<{ reviewOutcome?: ReviewOutcome; gone: boolean; parked: unknown[] }> {
+  const parked: unknown[] = [];
+  const park = (err: unknown): void => {
+    console.warn(`[take] ${journal.chapter.slug}: the take is committed; a later step failed:`, err);
+    parked.push(err);
+  };
+  const { stamped, reviewOutcome } = await recordInstalledTake(handle, journal, park);
+  const gone = await cleanUpCommit(handle, journal, journalPath, stamped, park);
+  return { reviewOutcome, gone, parked };
 }
 
 /* The exit of a commit that will not be retried and left no journal. */
@@ -2091,14 +2138,8 @@ export async function commitTake(
     throw err;
   }
 
-  const parked: unknown[] = [];
-  const park = (err: unknown): void => {
-    console.warn(`[take] ${slug}: the take is committed; a later step failed:`, err);
-    parked.push(err);
-  };
   try {
-    const { stamped, reviewOutcome } = await recordInstalledTake(handle, journal, park);
-    await cleanUpCommit(handle, journal, journalPath, stamped, park);
+    const { reviewOutcome, parked } = await finishInstalledTake(handle, journal, journalPath);
     /* Last of all, the parked error. */
     if (parked.length > 0) throw parked[0];
     const audioEngines = engineBreakdownFromSnapshots(staged.segments.characterSnapshots ?? {});
@@ -2117,6 +2158,10 @@ export async function commitTake(
   }
 }
 
+/* From the `installed` write on, a journal's take is committed (D2). */
+const isCommittedPhase = (phase: TakeJournalPhase): boolean =>
+  phase === 'installed' || phase === 'cleanup';
+
 /** Whether the take `newTakeId` is committed for `slug` (D2): the live segments
     carry its id, or a journal for it sits at `installed` or later. Never decided
     from `state.json`, whose stamp may be the step that failed. */
@@ -2132,11 +2177,7 @@ export async function takeCommitted(
   const { journals } = await listTakeJournals(handle);
   for (const { path } of journals.get(slug) ?? []) {
     const read = await readTakeJournal(path);
-    if (
-      read.kind === 'ok' &&
-      read.journal.newTakeId === newTakeId &&
-      (read.journal.phase === 'installed' || read.journal.phase === 'cleanup')
-    ) {
+    if (read.kind === 'ok' && read.journal.newTakeId === newTakeId && isCommittedPhase(read.journal.phase)) {
       return true;
     }
   }
@@ -2285,15 +2326,19 @@ interface PartRun {
   quarantined: string[];
 }
 
-/* Into the journal's event folder, or a numbered sibling of it when that already
-   holds the name (a slug name refilled twice), so an earlier quarantine never
-   blocks the part. */
+/* `eventFolder`, or a numbered sibling of it when that already holds one of the
+   names (a slug name refilled twice), so an earlier quarantine never blocks a
+   later one. */
+function freeEventFolder(root: string, eventFolder: string, files: readonly string[]): string {
+  const taken = (folder: string) => files.some((f) => existsSync(join(root, '.orphaned', folder, basename(f))));
+  let folder = eventFolder;
+  for (let n = 2; taken(folder); n++) folder = `${eventFolder}-${n}`;
+  return folder;
+}
+
+/* One copy into the journal's event folder. */
 async function quarantineCopy(run: PartRun, path: string, reason: string): Promise<void> {
-  const orphaned = join(audioDir(run.handle.bookDir), '.orphaned');
-  let folder = run.eventFolder;
-  for (let n = 2; existsSync(join(orphaned, folder, basename(path))); n++) {
-    folder = `${run.eventFolder}-${n}`;
-  }
+  const folder = freeEventFolder(audioDir(run.handle.bookDir), run.eventFolder, [path]);
   try {
     const dir = await quarantineToOrphaned(run.handle, [path], reason, folder);
     run.quarantined.push(join(dir, basename(path)));
@@ -2414,4 +2459,285 @@ export async function applyPartMoves(
   }
   for (const move of toRename) await renamePart(run, move);
   return { lost: run.lost, quarantined: run.quarantined };
+}
+
+/* ------------------------------------------------------------------ *
+ * Replay: a slug's journals (§5.A "Journal rules": direction, chains;
+ * Ownership's unparseable rule, R6-3)
+ *
+ * A commit or `replace` journal before `installed` rolls back; from
+ * `installed` on it rolls forward. No replay installs forward (R10-1).
+ * ------------------------------------------------------------------ */
+
+/** What one replay of a slug did. `gone`: no file of the journal that was in
+    charge is left in `audio/`. A superseding journal that rolled back leaves the
+    journals it named as leftovers: the next replay takes the one then in charge.
+    `parked`: the take is committed but a later step failed (`error`, the first);
+    the caller raises it. */
+export type ReplayOutcome =
+  | { result: 'none' | 'rolled-back' | 'rolled-forward'; gone: true }
+  | { result: 'parked'; gone: boolean; error: unknown };
+
+/** More than one journal claims a slug (E10), which book-op should make
+    impossible. No journal in charge was replayed;
+    `quarantineConflictingJournals` clears it. */
+export class TakeJournalConflictError extends Error {
+  readonly slug: string;
+
+  constructor(slug: string, count: number) {
+    super(`[take] ${slug}: ${count} take journals claim this chapter`);
+    this.name = 'TakeJournalConflictError';
+    this.slug = slug;
+  }
+}
+
+interface FoundJournal {
+  path: string;
+  journal: TakeJournal;
+}
+
+/* Read EVERY journal of a slug before any is acted on (R9-3): which one is in
+   charge depends on what the others name, so a read that fails throws here. */
+async function readSlugJournals(
+  refs: readonly TakeJournalRef[],
+): Promise<{ found: FoundJournal[]; unparseable: Array<TakeJournalRef & { reason: string }> }> {
+  const found: FoundJournal[] = [];
+  const unparseable: Array<TakeJournalRef & { reason: string }> = [];
+  for (const ref of refs) {
+    const read = await readTakeJournal(ref.path);
+    if (read.kind === 'ok') found.push({ path: ref.path, journal: read.journal });
+    else unparseable.push({ ...ref, reason: read.reason });
+  }
+  return { found, unparseable };
+}
+
+/* The journals no other one names. Journals that only name each other all claim
+   the slug. */
+function journalsInCharge(found: readonly FoundJournal[]): readonly FoundJournal[] {
+  const named = new Set(found.flatMap(({ journal }) => journal.supersedes.map((s) => s.jid)));
+  const free = found.filter(({ journal }) => !named.has(journal.jid));
+  return free.length > 0 ? free : found;
+}
+
+/* Move `files`, then the journals that name them, into one event folder. The
+   journals go LAST, so a refused move leaves them to be found again, and under
+   `book`, as every removal of a journal does (R7-1). */
+async function quarantineJournals(
+  handle: AnyBookHandle,
+  slug: string,
+  journalPaths: string[],
+  files: string[],
+  eventFolder: string,
+  reason: string,
+): Promise<string> {
+  const folder = freeEventFolder(audioDir(handle.bookDir), eventFolder, [...files, ...journalPaths]);
+  try {
+    if (files.length > 0) await quarantineToOrphaned(handle, files, reason, folder);
+    return await withBookLock(bookLockKeyFor(handle), () =>
+      quarantineToOrphaned(handle, journalPaths, reason, folder),
+    );
+  } catch (err) {
+    if (isMissing(err)) throw err;
+    throw new TakeMoveStepError(slug, err);
+  }
+}
+
+/* Whether the file at `path` is the copy the journal recorded as `part` of the
+   take `takeId`: by the id it carries, then by size (E15). A missing file is
+   not. */
+async function isRecordedCopy(path: string, part: TakeJournalPart, takeId: string | null): Promise<boolean> {
+  if (!(await isPresent(path))) return false;
+  if (takeId && (part.part === 'segments' || part.part === 'embeddings')) {
+    const carried = takeIdOf(await readJsonTolerant<{ takeId?: unknown }>(path));
+    if (carried !== null && carried !== takeId) return false;
+  }
+  return (await stat(path)).size === part.size;
+}
+
+/* The live parts that are back at their live names already: the commit's own
+   rollback, or an earlier replay, got that far before it stopped, and the
+   journal's phase does not say so. They must not be rolled back again: what now
+   sits at `.previous.*` is the old previous take, and the live copy is not an
+   install to undo.
+
+   A part is back when its live name holds the recorded copy and its aside name
+   is empty, or holds the old previous part again (that part's discard name is
+   empty). A copy that could also be the installed new part (its `.next-*` name
+   is empty and it matches the staged record too) does not count as back. */
+async function restoredLiveParts(root: string, journal: TakeJournal): Promise<Set<StagedSuffix>> {
+  const { slug } = journal.chapter;
+  const restored = new Set<StagedSuffix>();
+  for (const part of journal.parts.live) {
+    const suffix = partSuffix(part);
+    const live = slugPartPath(root, slug, 'live', part);
+    if (!(await isRecordedCopy(live, part, journal.liveTakeId))) continue;
+    const previousIsBack =
+      journal.preserved &&
+      journal.parts.previous.some((p) => partSuffix(p) === suffix) &&
+      !(await isPresent(discardPath(root, slug, journal.jid, 'prev', suffix)));
+    if (!previousIsBack && (await isPresent(asidePath(root, journal, part)))) continue;
+    const staged = journal.parts.staged.find((p) => partSuffix(p) === suffix);
+    const mayBeInstalled =
+      staged !== undefined &&
+      !(await isPresent(stagedPartPath(root, slug, journal.newTakeId, suffix))) &&
+      (await isRecordedCopy(live, staged, journal.newTakeId));
+    if (!mayBeInstalled) restored.add(suffix);
+  }
+  return restored;
+}
+
+/* The undo of step 6's leftover-audio move: back from `.discard-<jid>.stale.*`.
+   The journal lists no such part, so its size is the file's own. */
+async function staleAudioMoves(root: string, journal: TakeJournal): Promise<PartMove[]> {
+  const { slug } = journal.chapter;
+  const moves: PartMove[] = [];
+  for (const ext of CHAPTER_AUDIO_EXTS) {
+    const from = discardPath(root, slug, journal.jid, 'stale', ext);
+    if (!(await isPresent(from))) continue;
+    const part = await sizedPart({ part: 'audio', ext }, from);
+    const to = liveAudioPath(root, slug, ext);
+    moves.push({ ...part, take: 'live', takeId: journal.liveTakeId, from, to });
+  }
+  return moves;
+}
+
+/* One undo step, its lost parts recorded in the journal (R8-1), each once. */
+async function undoStep(handle: AnyBookHandle, journal: TakeJournal, moves: PartMove[]): Promise<void> {
+  const { lost } = await applyPartMoves(handle, journal, moves);
+  const key = (l: LostPart) => `${l.take}:${partSuffix(l)}`;
+  const known = new Set(journal.lost.map(key));
+  const fresh = lost.filter((l) => !known.has(key(l)));
+  if (fresh.length === 0) return;
+  journal.lost.push(...fresh);
+  await writeTakeJournal(handle, journal.chapter.slug, journal);
+}
+
+/* Before `installed`: undo the commit's steps in reverse (6: installed parts
+   back to `.next-*`; 5: the live take back to live; 4: the old previous take
+   back to previous), as far as the journal's phase says each may have started.
+   Then unlink the journal, under `book`, and sweep the staged set. */
+async function rollBackJournal(handle: AnyBookHandle, journalPath: string, journal: TakeJournal): Promise<void> {
+  const root = audioDir(handle.bookDir);
+  const { slug } = journal.chapter;
+  const { phase, parts, newTakeId } = journal;
+  const restored = phase === 'discard' ? new Set<StagedSuffix>() : await restoredLiveParts(root, journal);
+  const notRestored = (part: TakePartRef) => !restored.has(partSuffix(part));
+
+  if (phase === 'install') {
+    const uninstall = parts.staged.filter(notRestored).map(
+      (part): PartMove => ({
+        ...part,
+        take: 'staged',
+        takeId: newTakeId,
+        from: slugPartPath(root, slug, 'live', part),
+        to: stagedPartPath(root, slug, newTakeId, partSuffix(part)),
+      }),
+    );
+    await undoStep(handle, journal, [...(await staleAudioMoves(root, journal)), ...uninstall]);
+  }
+  if (phase !== 'discard') {
+    const bringBack = parts.live.filter(notRestored).map(
+      (part): PartMove => ({
+        ...part,
+        take: 'live',
+        takeId: journal.liveTakeId,
+        from: asidePath(root, journal, part),
+        to: slugPartPath(root, slug, 'live', part),
+      }),
+    );
+    await undoStep(handle, journal, bringBack);
+  }
+  if (!journal.keepPrevious) {
+    const takeBack = parts.previous.map(
+      (part): PartMove => ({
+        ...part,
+        take: 'previous',
+        takeId: journal.prevTakeId,
+        from: discardPath(root, slug, journal.jid, 'prev', partSuffix(part)),
+        to: slugPartPath(root, slug, 'previous', part),
+      }),
+    );
+    await undoStep(handle, journal, takeBack);
+  }
+  await unlinkTakeJournal(handle, journalPath);
+  /* No journal names the staged set now: what cannot be removed here is the
+     sweep's. */
+  try {
+    const left = await unlinkEach(await pathsStartingWith(root, `${slug}.next-${newTakeId}.`));
+    for (const failure of left) console.warn(`[take] staged part removal failed for ${slug}: ${failure.message}`);
+  } catch (err) {
+    console.warn(`[take] staged part removal failed for ${slug}:`, err);
+  }
+}
+
+/** Replay `slug`'s leftover journals from `listing`, under the caller's book-op.
+    Every journal is read first; an unparseable one is quarantined with its
+    discards and then counts as absent (R6-3). The one no other names is in
+    charge, and only it is replayed: rolled back before `installed`, forward
+    from it. Decodes nothing.
+
+    Throws, with the journal in charge kept: a journal read's own error;
+    `TakeJournalConflictError`; `TakeMoveStepError` for a rename the OS refused;
+    any other error of a rollback step. */
+export async function replaySlugJournals(
+  handle: AnyBookHandle,
+  slug: string,
+  listing: TakeJournalListing,
+): Promise<ReplayOutcome> {
+  assertHeld(handle, 'replaySlugJournals');
+  const root = audioDir(handle.bookDir);
+  const { found, unparseable } = await readSlugJournals(listing.journals.get(slug) ?? []);
+  for (const { jid, path, reason } of unparseable) {
+    /* Its `.next-*` set cannot be known from the file: the sweep's. */
+    await quarantineJournals(
+      handle,
+      slug,
+      [path],
+      await pathsStartingWith(root, discardPrefix(slug, jid)),
+      `${isoDateUtc()}-${jid}`,
+      `replay: unparseable take journal (${reason})`,
+    );
+  }
+  if (found.length === 0) return { result: 'none', gone: true };
+  const claiming = journalsInCharge(found);
+  if (claiming.length > 1) throw new TakeJournalConflictError(slug, claiming.length);
+  const [{ path, journal }] = claiming;
+  if (!isCommittedPhase(journal.phase)) {
+    await rollBackJournal(handle, path, journal);
+    return { result: 'rolled-back', gone: true };
+  }
+  const { gone, parked } = await finishInstalledTake(handle, journal, path);
+  if (parked.length > 0) return { result: 'parked', gone, error: parked[0] };
+  return { result: 'rolled-forward', gone: true };
+}
+
+/** The fsck's way out of a `TakeJournalConflictError`: move every journal that
+    claims `slug`, with the discards and staged parts it names, into ONE
+    `.orphaned/` event folder (no jid orders them, so none is preferred). The
+    live take stays where it is. Returns the folder, or `null` when fewer than
+    two journals claim the slug, and then nothing moves. */
+export async function quarantineConflictingJournals(
+  handle: AnyBookHandle,
+  slug: string,
+): Promise<string | null> {
+  assertHeld(handle, 'quarantineConflictingJournals');
+  const root = audioDir(handle.bookDir);
+  const { journals } = await listTakeJournals(handle);
+  const { found } = await readSlugJournals(journals.get(slug) ?? []);
+  const claiming = journalsInCharge(found);
+  if (claiming.length < 2) return null;
+  const files = new Set<string>();
+  for (const { journal } of claiming) {
+    for (const prefix of [discardPrefix(slug, journal.jid), `${slug}.next-${journal.newTakeId}.`]) {
+      for (const path of await pathsStartingWith(root, prefix)) files.add(path);
+    }
+  }
+  return quarantineJournals(
+    handle,
+    slug,
+    claiming.map((j) => j.path),
+    [...files],
+    `${isoDateUtc()}-${mintTakeId()}`,
+    `${claiming.length} take journals claim ${slug}`,
+  );
 }
