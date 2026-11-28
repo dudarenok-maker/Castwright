@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="160" data-publish-id="7ed0404a79d9"></div>
+  <div hidden data-published-as="161" data-publish-id="93cf9fb9979d"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">92</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">93</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">2</div><div class="l">Unconfirmed</div></div>
@@ -209,7 +209,7 @@
   <table class="glance">
     <thead><tr><th>Group</th><th>Setup</th><th>Rows</th></tr></thead>
     <tbody>
-      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->54<!-- END GENERATED:glance:A --></td></tr>
+      <tr><td><a href="#ga">A</a></td><td>The GPU box — single 8 GB for most, the 2-card boot for a few</td><td><!-- BEGIN GENERATED:glance:A -->55<!-- END GENERATED:glance:A --></td></tr>
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->10<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->3<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->1<!-- END GENERATED:glance:D --></td></tr>
@@ -225,7 +225,7 @@
   <!-- A -->
   <section class="group" id="ga">
     <header>
-      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">54 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">A</span> The GPU box <span class="gcount">55 rows</span></h3>
       <p class="setup">
         Most rows need only a <strong>single GPU with Qwen resident</strong>. A few need the
         <strong>2-card boot</strong> (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the eGPU is
@@ -1054,6 +1054,18 @@
         <li><strong>A design still frees for itself.</strong> With an idle 1.7B resident and nothing else live, start a single voice design. Observe: the "unloaded to free VRAM" notice appears and the design runs.</li>
         </ul>
         <p class="src">the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and Coqui &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4533">#4533</a> &#183; criteria in this row</p>
+      </div>
+    </details>
+    <details class="item">
+      <summary><span class="num">A135</span><span class="iname">A voice design gets a bounded wait before another book's Coqui phase evicts Qwen</span><span class="risk">single 8 GB card, real Qwen sidecar with VoiceDesign, and Coqui</span><span class="chev">&#8250;</span></summary>
+      <div class="body">
+        <p>The automated tests prove the order of calls with fakes, for both call sites (the pre-pass and the render phase): <code>/unload {engine:&#39;qwen&#39;}</code> is posted only after the design/mint wait resolves, a wait that times out still unloads and warns, and an abort during the wait posts no <code>/unload</code>. They cannot show that a real design on book B survives book A&#39;s mixed Qwen + Coqui chapter on a real 8 GB card, or what the timeout path does to a real design. The server&#39;s wait lines both start <code>[synthesise-chapter] qwen evict for coqui phase:</code>; the "waited" line is stdout (<code>logs/server.log</code>) and the timeout warning is stderr (<code>logs/server.err.log</code> under the prod launcher). The sidecar&#39;s own log is <code>logs/tts.err.log</code>: the design&#39;s completion is its <code>qwen voice design: voice=… total_ms=</code> line and the eviction is its <code>Qwen models unloaded</code> line, so compare those two in that one file. <code>logs/tts.log</code> is uvicorn&#39;s access log and carries no request body, so do not judge the order from it.</p>
+        <ul>
+        <li><strong>Setup.</strong> Two books with both Qwen weights, VoiceDesign and Coqui installed. Book A has a chapter whose lines after the first include both a Qwen speaker and a Coqui speaker. Leave <code>SIDECAR_CALL_TIMEOUT_MS</code> unset (default 600 s): the wait runs inside that ceiling.</li>
+        <li><strong>A design on book B survives book A&#39;s Coqui phase.</strong> Start a single voice design on book B (not "Design full cast"), then start the mixed chapter render on book A, so that it reaches its Coqui phase while the design is still running. Observe: the design completes and its audition plays, with no "VoiceDesign model was unloaded before this design could render" error; <code>logs/server.log</code> shows <code>qwen evict for coqui phase: waited &lt;n&gt;ms for an in-flight voice design/mint to finish</code>; and in <code>logs/tts.err.log</code> no <code>Qwen models unloaded</code> line appears between the chapter&#39;s start and the design&#39;s <code>qwen voice design:</code> line, the unload coming only after it. If there is no "waited" line and no timeout warning, the design was not in flight when the render reached the eviction (or the chapter never took the mixed path): that run proves nothing, so repeat it with different timing.</li>
+        <li><strong>A design held longer than 180 s is evicted anyway, and that is logged.</strong> Repeat with a design still in flight more than 180 s after the render starts waiting (record how it was held that long; the bound is not configurable). Observe: <code>logs/server.err.log</code> has <code>qwen evict for coqui phase: a voice design/mint was still in flight after the 180000ms bound; evicting Qwen anyway, so the in-flight design may fail</code>; <code>logs/tts.err.log</code> then has <code>Qwen models unloaded</code> (the unload takes the sidecar&#39;s <code>_synth_lock</code>, so while a design forward holds it the line appears only once that forward ends); book A&#39;s chapter carries on into its Coqui voices; and the design fails as it did before #4568. Record the design&#39;s outcome and any error text. Read from code, not run: whether it fails depends on where the unload lands (during the design&#39;s model load or just before a forward it fails; between the design forward and the audition forward it may reload the 0.6B and complete), so a design that survives is recorded with its log lines, not hidden.</li>
+        </ul>
+        <p class="src">the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, VoiceDesign, Coqui, and two books &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/4568">#4568</a> &#183; criteria in this row</p>
       </div>
     </details>
 

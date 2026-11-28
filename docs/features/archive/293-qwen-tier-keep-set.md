@@ -468,7 +468,9 @@ the tier this run is about to keep.
   book's tier. One reload per hit. D2 (accepted).
 - **An unstamped pending entry's tier is an estimate** (§2.6).
 - **Other books' score passes** are skipped around, never unioned.
-- **Third evictors are untouched** (§8).
+- **The third evictor, outside this design** (§8): the Coqui-phase Qwen
+  eviction now waits, bounded (180 s), for another op's design or mint, then
+  evicts anyway and logs it (#4568, owner decision 2026-11-28).
 
 ### 3.6 Multi-sidecar and per-device
 
@@ -784,15 +786,18 @@ stops being optional and still needs a design/mint skip.
 Both in `tts/synthesise-chapter.ts`'s mixed-engine path. Read from code; not
 reproduced.
 
-1. **`evictQwenForCoquiPhase` is a third, ungated Qwen evictor**, with two
+1. **`evictQwenForCoquiPhase` is a third Qwen evictor**, with two
    call sites: the pre-pass (`:1902-1904`) and the render phase (`:2931`).
-   Both post `/unload { engine: 'qwen' }` with no check of other work.
-   Neither #4497 nor this design covers them. By §3.0 each can break a live
-   design on any book.
+   Neither #4497 nor this design covers them. As found, both posted
+   `/unload { engine: 'qwen' }` with no check of other work, so by §3.0 each
+   could break a live design on any book. Since #4568 (owner decision
+   2026-11-28) the Coqui-phase Qwen eviction now waits, bounded (180 s), for
+   another op's design or mint, then evicts anyway and logs it.
 2. **That call does not unload the 1.7B base.** With no `model` it runs
    `QwenEngine.unload()` (`main.py:12214-12217`), which nulls `_base` and
    `_design` only (`:7658-7660`). A mixed Coqui + Qwen-1.7B chapter loads
-   XTTS next to a still-resident 1.7B base.
+   XTTS next to a still-resident 1.7B base. Still open: #4568 did not change
+   this.
 
 ## 9 · Decisions (all made by the owner, 2026-11-20)
 

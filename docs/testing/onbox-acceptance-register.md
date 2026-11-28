@@ -742,7 +742,7 @@ row this register still carries. Keep the table even when it is empty.
 
 | Group | Setup | Rows |
 |---|---|---|
-| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 54 |
+| **A** | The GPU box (single 8 GB for most; the 2-card boot for a few) | 55 |
 | **B** | Local Ollama analyzer only, no TTS sidecar | 10 |
 | **C** | One *Ночной дозор* re-analysis session | 3 |
 | **D** | Multi-language TTS render + ASR | 1 |
@@ -752,11 +752,13 @@ row this register still carries. Keep the table even when it is empty.
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 2 |
 
-**92 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
+**93 owed.** Oldest: **2026-06-01** (plan 161) — A14/A16 (plans 160/165, tied for oldest)
 were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is plan
 161's A/B audition check, now **A11**.
 
-> **Last change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
+> **Last change: 2026-11-28 (#4568), 92 → 93.** Row **A135** (the Coqui-phase Qwen eviction waits, bounded, for another book's voice design: the design survives a mixed Qwen + Coqui chapter reaching its Coqui phase, and the 180 s timeout path warns and evicts) added. Group A 54 → 55. `next-id` bumped A135 → A136 in the same change. Row is owed; not run here.
+>
+> **Previous change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
 >
 > **Previous change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
 >
@@ -1980,7 +1982,7 @@ were owner-confirmed and dropped in wave 7; the sole surviving 2026-06-01 row is
 
 ## Group A — the GPU box
 
-<!-- next-id: A135 -->
+<!-- next-id: A136 -->
 
 Most rows need only a **single GPU with Qwen resident**. A few specifically need
 the **2-card boot** (8 GB RTX 4070 + 16 GB RTX 5070 Ti over OcuLink) — and the
@@ -6886,6 +6888,16 @@ The automated tests prove the keep set `evictIdleQwenBase` hands the tier reconc
 - **A design still frees for itself.** With an idle 1.7B resident and nothing else live, start a single voice design. Observe: the "unloaded to free VRAM" notice appears and the design runs.
 
 *Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, and Coqui. *Criteria:* #4533 and this row. Clears when each bullet is recorded with the log line it produced.
+
+### A135 · A voice design gets a bounded wait before another book's Coqui phase evicts Qwen ([#4568](https://github.com/dudarenok-maker/Castwright/issues/4568)) · **single 8 GB card, real Qwen sidecar with VoiceDesign, and Coqui**
+
+The automated tests prove the order of calls with fakes, for both call sites (the pre-pass and the render phase): `/unload {engine:'qwen'}` is posted only after the design/mint wait resolves, a wait that times out still unloads and warns, and an abort during the wait posts no `/unload`. They cannot show that a real design on book B survives book A's mixed Qwen + Coqui chapter on a real 8 GB card, or what the timeout path does to a real design. The server's wait lines both start `[synthesise-chapter] qwen evict for coqui phase:`; the "waited" line is stdout (`logs/server.log`) and the timeout warning is stderr (`logs/server.err.log` under the prod launcher). The sidecar's own log is `logs/tts.err.log`: the design's completion is its `qwen voice design: voice=… total_ms=` line and the eviction is its `Qwen models unloaded` line, so compare those two in that one file. `logs/tts.log` is uvicorn's access log and carries no request body, so do not judge the order from it.
+
+- **Setup.** Two books with both Qwen weights, VoiceDesign and Coqui installed. Book A has a chapter whose lines after the first include both a Qwen speaker and a Coqui speaker. Leave `SIDECAR_CALL_TIMEOUT_MS` unset (default 600 s): the wait runs inside that ceiling.
+- **A design on book B survives book A's Coqui phase.** Start a single voice design on book B (not "Design full cast"), then start the mixed chapter render on book A, so that it reaches its Coqui phase while the design is still running. Observe: the design completes and its audition plays, with no "VoiceDesign model was unloaded before this design could render" error; `logs/server.log` shows `qwen evict for coqui phase: waited <n>ms for an in-flight voice design/mint to finish`; and in `logs/tts.err.log` no `Qwen models unloaded` line appears between the chapter's start and the design's `qwen voice design:` line, the unload coming only after it. If there is no "waited" line and no timeout warning, the design was not in flight when the render reached the eviction (or the chapter never took the mixed path): that run proves nothing, so repeat it with different timing.
+- **A design held longer than 180 s is evicted anyway, and that is logged.** Repeat with a design still in flight more than 180 s after the render starts waiting (record how it was held that long; the bound is not configurable). Observe: `logs/server.err.log` has `qwen evict for coqui phase: a voice design/mint was still in flight after the 180000ms bound; evicting Qwen anyway, so the in-flight design may fail`; `logs/tts.err.log` then has `Qwen models unloaded` (the unload takes the sidecar's `_synth_lock`, so while a design forward holds it the line appears only once that forward ends); book A's chapter carries on into its Coqui voices; and the design fails as it did before #4568. Record the design's outcome and any error text. Read from code, not run: whether it fails depends on where the unload lands (during the design's model load or just before a forward it fails; between the design forward and the audition forward it may reload the 0.6B and complete), so a design that survives is recorded with its log lines, not hidden.
+
+*Needs:* the single 8 GB GPU box with the real Qwen sidecar, both Qwen weights, VoiceDesign, Coqui, and two books. *Criteria:* #4568 and this row. Clears when each bullet is recorded with the log line it produced.
 
 ## Group B — local Ollama analyzer only
 
