@@ -269,6 +269,12 @@ _Full detail + acceptance:_ [#1783](https://github.com/dudarenok-maker/Castwrigh
 - _Benefit:_ _(no Benefit section found in #1798 — fix the issue body, see the parseability audit)_
 _Full detail + acceptance:_ [#1798](https://github.com/dudarenok-maker/Castwright/issues/1798).
 
+#### `fs-80` — Revisit Audio8-TTS-Realistic-Air as a synth engine for languages Qwen cannot speak ([#4876](https://github.com/dudarenok-maker/Castwright/issues/4876))
+
+- _What:_ preset voices, voice design from a text description, or any emotion / instruct / style control. It is clone-only (it can also generate with no reference, in an uncontrolled voice).
+- _Benefit:_ *Benefit (user):* books in up to 13 languages Castwright cannot voice today, without making users record a clip per character.
+_Full detail + acceptance:_ [#4876](https://github.com/dudarenok-maker/Castwright/issues/4876).
+
 ## Won't (this round) — explicitly parked
 
 - `side-4` — A/B Qwen `x_vector_only_mode=True` (speed vs. fidelity) ([#438](https://github.com/dudarenok-maker/Castwright/issues/438)).
