@@ -6997,7 +6997,7 @@ export interface components {
             filename: string;
             /** @description Final size once status === 'done'. */
             sizeBytes?: number | null;
-            /** @description 0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had; null when none was reported. */
+            /** @description 0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had (0 if none was reported). */
             progress?: number | null;
             /** @description Set once status === 'done' AND destination === 'download'. */
             downloadUrl?: string | null;

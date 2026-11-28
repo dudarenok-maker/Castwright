@@ -9898,7 +9898,7 @@ components:
             minimum: 0,
             maximum: 1,
             nullable: true,
-            description: "0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had; null when none was reported.",
+            description: "0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had (0 if none was reported).",
           }
         downloadUrl:
           {
