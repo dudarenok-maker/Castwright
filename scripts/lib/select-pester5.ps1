@@ -3,7 +3,7 @@
 # a module"), so the highest installed module is NOT the right pick.
 
 function Select-Pester5Module {
-    param([Parameter(Mandatory)][AllowEmptyCollection()][object[]]$Modules)
+    param([Parameter(Mandatory)][AllowNull()][AllowEmptyCollection()][object[]]$Modules)
     $Modules |
         Where-Object { $_.Version -ge [Version]'5.0.0' -and $_.Version -lt [Version]'6.0.0' } |
         Sort-Object Version -Descending |
