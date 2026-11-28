@@ -37,4 +37,9 @@ describe('help categories', () => {
     expect(topic?.body).not.toContain('Both voice engines');
     expect(topic?.body).toContain('Kokoro can’t');
   });
+  it('does not promise Revoke erases chapters already made with the clone', () => {
+    const topic = HELP_TOPICS.find((t) => t.id === 'clone-your-own-voice');
+    expect(topic?.body).not.toContain('everything made from it');
+    expect(topic?.body).toContain('stay in that voice until you re-cast');
+  });
 });

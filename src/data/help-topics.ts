@@ -155,7 +155,10 @@ export const HELP_TOPICS: HelpTopic[] = [
       'Kokoro can’t. The recording and ' +
       'the voice built from it stay on your machine — nothing is uploaded or shared. Revoke a voice ' +
       'from its card in My voices whenever you like, and Castwright erases the recording and ' +
-      'everything made from it.',
+      'the voice built from it. It does not touch chapters you have already made: they stay in ' +
+      'that voice until you re-cast those characters and generate the chapters again, and a ' +
+      'regenerated chapter keeps its previous take, in the old voice, for A/B review until you ' +
+      'accept the new one.',
   },
   {
     id: 'vocalizations',
