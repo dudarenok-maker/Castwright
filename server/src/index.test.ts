@@ -294,16 +294,21 @@ describe('server owner marker (#3264)', () => {
     return source.slice(start, end);
   };
 
-  it('listenerCallback publishes and remembers the port it was handed, before the slow boot work', () => {
-    const beforeSlowWork = between(
+  it('listenerCallback publishes and remembers the port it was handed, only after enforceSingleSidecarOwner could have exited and before the slow boot work', () => {
+    const publish = /publishServerOwnerMarker\(\{\s*runDir,\s*port: listenPort,\s*https: lanHttps,?\s*\}\)/;
+    const beforeEnforce = between(
       'const listenerCallback = (listenPort: number)',
-      'enumerateLanUrls(',
+      'enforceSingleSidecarOwner(',
+    );
+    const afterEnforce = between(
+      'enforceSingleSidecarOwner({ runDir });',
+      'sidecarSupervisor = createSidecarSupervisor(',
     );
 
-    expect(beforeSlowWork).toMatch(
-      /publishServerOwnerMarker\(\{\s*runDir,\s*port: listenPort,\s*https: lanHttps,?\s*\}\)/,
-    );
-    expect(beforeSlowWork).toContain('ownerMarkerPort = listenPort;');
+    // A marker published ahead of the exit would announce a server that is dying.
+    expect(beforeEnforce).not.toMatch(publish);
+    expect(afterEnforce).toMatch(publish);
+    expect(afterEnforce).toContain('ownerMarkerPort = listenPort;');
   });
 
   it('shutdown() releases the marker of the remembered port', () => {

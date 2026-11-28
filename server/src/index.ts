@@ -344,11 +344,6 @@ async function main(): Promise<void> {
     // advertise the real protocol/port, not the requested constant.
     setLanRuntime({ httpsActive: lanHttps, port: listenPort });
 
-    /* #3264 — ahead of the slow boot work, so the marker exists as soon as the
-       port answers. */
-    publishServerOwnerMarker({ runDir, port: listenPort, https: lanHttps });
-    ownerMarkerPort = listenPort;
-
     console.log(`[server] listening on ${protocol}://localhost:${listenPort}`);
 
     console.log(`[server] workspace root: ${WORKSPACE_ROOT}`);
@@ -430,6 +425,12 @@ async function main(): Promise<void> {
     if (getResolvedAutoStartSidecar()) {
       enforceSingleSidecarOwner({ runDir });
     }
+    /* #3264 — after enforceSingleSidecarOwner, which can process.exit(1): a marker
+       published first would announce a server that is already exiting. Same
+       synchronous tick as the listen callback's start, and still ahead of the slow
+       boot work, so it exists as soon as the port answers. */
+    publishServerOwnerMarker({ runDir, port: listenPort, https: lanHttps });
+    ownerMarkerPort = listenPort;
     /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
        OOM-kill / poison self-exit respawns instead of stalling generation
        forever. `buildOpts` re-reads settings on each respawn so a mid-session
