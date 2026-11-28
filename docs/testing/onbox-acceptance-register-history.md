@@ -1,6 +1,6 @@
 # On-box acceptance register: change history
 
-This is the register's change log up to 2026-11-28, moved out of [the register](onbox-acceptance-register.md) when it was cleaned up (#4883). It records how the owed count moved and what each discharge observed. Entries are verbatim and newest first. The full text of every row as it stood before the cleanup is in git: `git show e296a706:docs/testing/onbox-acceptance-register.md`.
+This is the register's change log up to 2026-11-28, moved out of [the register](onbox-acceptance-register.md) when it was cleaned up (#4883). It records how the owed count moved and what each discharge observed. Entries are newest first and verbatim, apart from the words "(since removed from the register)" added after some row IDs so the citation checker can tell they are history. The full text of every row as it stood before the cleanup is in git: `git show e296a706:docs/testing/onbox-acceptance-register.md`.
 
 New changes are not logged here. A discharge records its outcome in the run sheet, the results folder or the issue, and the pull request carries the rest.
 
@@ -95,7 +95,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 >
 > **Previous change: 2026-11-15 (#4102), 81 → 82.** Row **A125** (a mint, a design, a GPU ASR op and a GPU speaker op keep their own resident model through their own admission) added. Group A 46 → 47. `next-id` stays A127 (A125 was reserved for this row). Row is owed; not run here.
 >
-> **Previous change: 2026-11-13 (#4163), 80 → 81.** Row **A126** (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 45 → 46. `next-id` bumped A125 → A127 in the same change; A125 is reserved for #4102's row. Row is owed; not run here.
+> **Previous change: 2026-11-13 (#4163), 80 → 81.** Row **A126** (since removed from the register) (a cold model load learns its own weights, a warm op learns nothing: the per-op VRAM footprint fix) added. Group A 45 → 46. `next-id` bumped A125 → A127 in the same change; A125 is reserved for #4102's row. Row is owed; not run here.
 >
 > **Previous change: 2026-11-13 (#4054), 79 → 80.** Row **A124** (the next silent server death leaves its evidence: the boot line under each launcher, then the exit-code line, the server log tail and any diagnostic report posted on #4054) added. Group A 44 → 45. `next-id` bumped A124 → A125 in the same change. Row is owed; not run here.
 
@@ -235,14 +235,14 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > analyzer) added from plan 287's "On-box acceptance owed" item 3. Group B
 > 6 → 7. `next-id` bumped B106 → B107 in the same change. Owed; not run here.
 >
-> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105**
+> **Prior change: 2026-10-06 (#3084 wave 3b, PR 3b), 59 → 61 on this branch (57 → 59 on `main`).** Rows **B105** (since removed from the register)
 > (Ollama `format` modes on a real model: `json`, then `off`, against `schema`)
 > and **E112** (Gemini `schema` mode, `responseJsonSchema` accepted or rejected
 > on a real key) added from #3084 PR 3b's run sheet
 > (`3084-openai-analyzer-onbox-acceptance.md` §4–§5). Group B `next-id` marker
 > bumped by one, Group E by one. Both rows are owed; neither was run here.
 >
-> **Prior change: 2026-10-04 (#3435, plan 287), 57 → 59.** Rows **B103** (abort
+> **Prior change: 2026-10-04 (#3435, plan 287), 57 → 59.** Rows **B103** (since removed from the register) (abort
 > and drain on a local Ollama analyzer: a stopped main run releases the model
 > before a chapter Retry starts) and **B104** (a Resume on a cast-confirmed book
 > keeps every designed voice) added from plan 287's "On-box acceptance owed".
@@ -492,7 +492,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > the pre-existing finding-3(b) test go red while this new test stays green,
 > proving 1,572 kana chars doesn't lock in the regression it's presented as
 > locking. So H1 stays **narrowed, not discharged** — an initial pass on this
-> same PR incorrectly discharged it; corrected before merge. Row **H2** (Han
+> same PR incorrectly discharged it; corrected before merge. Row **H2** (since removed from the register) (Han
 > lexical-richness floor at book scale) NARROWED but stays owed — a larger
 > real Han fixture (13 Analects chapters, ~2.25x the prior largest real
 > sample) confirms the gate holds at that intermediate scale, but true
@@ -588,7 +588,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > stale-battery reaper's `classify()` and its census/kill-scoping/never-blocks-push
 > orchestration are unit- and mutation-tested in-PR, but `Win32_Process`
 > classification against real, running processes on a real box cannot be.
-> Row **E104** (renumbered from a same-`next-id` collision with #3051's own
+> Row **E104** (since removed from the register) (renumbered from a same-`next-id` collision with #3051's own
 > E103 allocation — the register's IDs allocate once, globally, so the
 > second PR to land moves; #3051 landed first). 47 → 48 owed, Group E
 > 6 → 7. `next-id` bumped E104 → E105 in the same change. This lands on
@@ -972,7 +972,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > (`fix/sidecar-2752-base17-evict-guard`) had added row **A105** (Qwen base17
 > eviction guard, #2752, PR #2790 — itself already reconciled once against
 > `main`'s A102/A104 IDs in an earlier merge, see the entries below); `origin/main`
-> had independently added row **E101** (#2641 — port-keyed TTS owner notes, PR
+> had independently added row **E101** (since removed from the register) (#2641 — port-keyed TTS owner notes, PR
 > #2754). The two rows sit in different groups and different id sequences, so
 > no rename was needed this time — just combining the counts. Combined: 63
 > (from `main`, including E101) + 1 (this branch's A105, base17 eviction guard)
@@ -981,7 +981,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > Group E bumped from E101 → E102 (main's own change).
 >
 > **Prior change: 2026-08-30, merging PR #2790's independent A103 addition.**
-> This branch (`fix/sidecar-2752-base17-evict-guard`) had added row **A103**
+> This branch (`fix/sidecar-2752-base17-evict-guard`) had added row **A103** (since removed from the register)
 > (Qwen base17 eviction guard, #2752, PR #2790), minted before `origin/main`'s
 > A102/A104 reconciliation below had landed — this branch's `next-id` still
 > read A103 at mint time. By the time this branch merged, `main` had already
@@ -992,7 +992,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > base17 eviction guard) = **63**. Group A: 39 (main's A102 + A104) + 1 (this
 > branch's A105) = 40. `next-id` bumped from A105 → A106 in this merge.
 >
-> **Prior change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101**
+> **Prior change: 2026-08-29 (PR #2754 review), 62 → 63**, adding row **E101** (since removed from the register)
 > (#2641 — port-keyed TTS owner notes) — documents the case where two server
 > instances on different ports SHARE ONE `.run/` directory, the mechanism #2641
 > fixes to prevent collision. E10 already mentions port keying but covers a
@@ -1001,7 +1001,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > case now locked down. `next-id: E101` bumped to `E102` in the same change.
 >
 > **Prior change: 2026-08-29, merging two independent A102 additions.**
-> This branch had added row **A102** (analyzer GPU-split warning + expected-device
+> This branch had added row **A102** (since removed from the register) (analyzer GPU-split warning + expected-device
 > mismatch, #2367, Castwright#2734); `origin/main` had independently added row
 > **A102** (CUDA fallback self-test #2582, PR #2719). Both started from the same
 > post-#2704 state. Reconciled: kept `main`'s CUDA A102; during the merge resolution
@@ -1012,7 +1012,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > + 1 (this branch's A104, analyzer GPU-split) = **62**. Group A: 38 (main's A102) + 1 (this
 > branch's A104) = 39. `next-id` bumped from A103 → A105 (skipping the permanent gap) in this merge.
 >
-> **Prior change: 2026-08-28 (Castwright#2734), 61 → 62**, adding row **A102**
+> **Prior change: 2026-08-28 (Castwright#2734), 61 → 62**, adding row **A102** (since removed from the register)
 > (analyzer GPU-split warning + expected-device mismatch, #2367) — mocked
 > `execFile`/nvidia-smi covers every automated test, so the real two-GPU
 > split, the once-per-signature server warning, the UI row, and the
@@ -1021,7 +1021,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > the same change.
 >
 > **Previous change: 2026-08-28, merging `origin/main` into `fix/sidecar-cuda-fallback-detection`.**
-> Two independent branch tips reconciled: this branch had added row **A102** (CUDA
+> Two independent branch tips reconciled: this branch had added row **A102** (since removed from the register) (CUDA
 > fallback self-test #2582, PR #2719, 61 → 62); `main` had since discharged row
 > **A101** (PR #2739, 61 → 60) — the two changes started from the same post-#2704
 > state and never saw each other. Combined: 60 (post-A101-discharge) + 1 (A102,
@@ -1030,7 +1030,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > are allocated once and never reused).
 > ([#2719](https://github.com/dudarenok-maker/Castwright/pull/2719))
 >
-> **Prior change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (CUDA
+> **Prior change: 2026-08-28, 61 → 62 via PR #2719**, adding row **A102** (since removed from the register) (CUDA
 > fallback self-test #2582) — minted from the next-id floor; an earlier commit on
 > this branch briefly mis-minted this as A38, a dangling ID reserved by
 > `onbox-sitting-plan.md`, corrected before merge.
@@ -1077,7 +1077,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > tighten the gate's power against a real regression, which a wider
 > tolerance alone would make worse, not better).
 >
-> **Prior change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (Qwen duration
+> **Prior change: 2026-08-27 (PR #2704), 60 → 61**, adding row **A101** (since removed from the register) (Qwen duration
 > golden baseline bless, #1994) — minted from the `next-id` floor per this
 > file's own allocate-once convention (above), NOT the old high-water+1 slot
 > (`A38`) this row was originally cut against before that convention shipped.
@@ -1106,7 +1106,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > allocation-floor checks, and Group A's inline caveat comment was removed —
 > every group's `next-id` marker allocates normally now.)**
 >
-> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (#2059's
+> **Prior change: 2026-08-27, 59 → 60 via PR #2688**, adding row **A37** (since removed from the register) (#2059's
 > audible effect, not yet run).
 >
 > **Prior change: 2026-08-27 (on-box wave 9c), 58 → 59.** One row split in two.
@@ -1118,7 +1118,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > `auditionCentroid()` to build a real centroid, so the run produced
 > `referenceKind: "too-short"` — the row's own named failure outcome, not its
 > pass condition. Criterion (1) stays discharged (below); criterion (2) is
-> **not** discharged — it is split out as new row **A36**, so the owed total
+> **not** discharged — it is split out as new row **A36** (since removed from the register), so the owed total
 > returns to 59 rather than silently dropping. See A36 for the still-owed
 > criteria and [#2700](https://github.com/dudarenok-maker/Castwright/issues/2700)
 > for the full acceptance text.
@@ -1226,7 +1226,7 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 > audition-reference row at all, still owed with a better test character.
 >
 > **Prior change: 2026-08-26 (#2656, successor to closed #1976/#1996), 68 → 69.**
-> New row **A46** added — the 2026-08-25 idle-gated VRAM measurement narrowed
+> New row **A46** (since removed from the register) added — the 2026-08-25 idle-gated VRAM measurement narrowed
 > the "stranded" pool to look like the Qwen Base 0.6B + Whisper resident-model
 > floor, but never captured `allocated` right after an explicit unload to
 > confirm that, so it can't rule out a genuine leak underneath. #1976 and
