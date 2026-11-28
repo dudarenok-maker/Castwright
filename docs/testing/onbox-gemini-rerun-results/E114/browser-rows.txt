@@ -1,0 +1,21 @@
+# Headless chromium against this worktree's Vite (port 5193) and real backend (port 8100). Attempt 2 of #4732.
+# Stale state: analyzerReasoningByEngine.gemini["gemini-3.8-flash"]="minimal" written into this run's isolated user-settings
+# file (USER_SETTINGS_FILE). PUT /api/user/settings with the same value is refused: "Gemini reasoning \"minimal\" is not
+# available for gemini-3.8-flash (offered: model-default, low, medium, high)." Restored file was byte-identical.
+
+# stale-minimal-row — 2026-11-28T03:45:42.004Z
+boot setup gate redirected to #/setup; navigating by hash to Advanced settings
+url=http://127.0.0.1:5193/#/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.8-flash
+gemini-3.8-flash: rowLabel="Gemini 3.8 Flash" selected value="minimal" shown="Minimal" options=[model-default="Model default (send nothing)", low="Low", medium="Medium", high="High", minimal="Minimal"]
+gemini-3.6-flash: rowLabel="Gemini 3.6 Flash" selected value="model-default" shown="Model default (send nothing)" options=[model-default="Model default (send nothing)", minimal="Minimal", low="Low", medium="Medium", high="High"]
+gemma-4-31b-it: rowLabel="Gemma 4 31B IT" selected value="model-default" shown="Model default (send nothing)" options=[model-default="Model default (send nothing)", off="Off", on="On"]
+screenshot=stale-minimal-row.png
+non-GET /api requests made by the page: none
+# restored-row — 2026-11-28T03:46:09.889Z
+boot setup gate redirected to #/setup; navigating by hash to Advanced settings
+url=http://127.0.0.1:5193/#/advanced?reasoningEngine=gemini&reasoningModel=gemini-3.8-flash
+gemini-3.8-flash: rowLabel="Gemini 3.8 Flash" selected value="model-default" shown="Model default (send nothing)" options=[model-default="Model default (send nothing)", low="Low", medium="Medium", high="High"]
+gemini-3.6-flash: rowLabel="Gemini 3.6 Flash" selected value="model-default" shown="Model default (send nothing)" options=[model-default="Model default (send nothing)", minimal="Minimal", low="Low", medium="Medium", high="High"]
+gemma-4-31b-it: rowLabel="Gemma 4 31B IT" selected value="model-default" shown="Model default (send nothing)" options=[model-default="Model default (send nothing)", off="Off", on="On"]
+screenshot=restored-row.png
+non-GET /api requests made by the page: none

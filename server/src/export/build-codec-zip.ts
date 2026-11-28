@@ -93,22 +93,16 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
        stream (nit (f): previously `ws` was never destroyed on ANY
        rejection, leaking the write fd for the process's lifetime — masked
        before this PR by the crash itself), and resolves only once the
-       write stream is genuinely closed. `signal?.throwIfAborted()` below
-       is what stops a cancelled build from registering any more chapters
-       — see the pipeline's own doc comment for why an earlier version's
-       attempt to also destroy the in-flight read stream on abort didn't
-       hold up and was removed. */
+       write stream is genuinely closed. On abort or failure it destroys the
+       one registered source stream and rejects after that stream closes. */
     const pipeline = createZipWritePipeline(outPath, zip, signal);
-
-    /* Every chapter read stream we hand yazl owns its file handle (closed on
-       stream end/error/destroy). Tracked so a failure — abort, rejectBuild,
-       a throw mid-loop — destroys the ones yazl never got to drain, which
-       closes their handles instead of leaking the fds. */
-    const opened: ReadStream[] = [];
 
     try {
       for (let i = 0; i < resolved.length; i++) {
         signal?.throwIfAborted();
+        /* One source stream registered at a time; waiting before the open
+           means a cancelled build never opens a later chapter. */
+        await pipeline.waitForSource();
         const { chapter, path } = resolved[i];
         const entryName = `${pad2(i + 1)} - ${sanitiseForZip(chapter.title)}.${meta.entryExt}`;
         /* Open first, then take the size from the SAME handle we stream from.
@@ -120,13 +114,17 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
         let size: number;
         try {
           size = (await handle.stat()).size;
+          /* An abort or failure may have landed during the open; a stream
+             created now would never be pumped or destroyed. */
+          pipeline.throwIfFailed();
+          /* The stream owns the handle: closed on end/error/destroy. */
           readStream = handle.createReadStream();
         } catch (e) {
           await handle.close().catch(() => {});
           throw e;
         }
-        opened.push(readStream);
         readStream.on('error', pipeline.rejectBuild);
+        pipeline.setSource(readStream);
         zip.addReadStream(readStream, entryName, {
           size,
           mtime: new Date(),
@@ -144,7 +142,8 @@ export async function buildCodecZip(opts: BuildCodecZipOptions): Promise<BuildCo
          `rejectBuild` already fired for some other reason (a ws/zip/
          readStream error). */
       pipeline.rejectBuild(e);
-      for (const rs of opened) rs.destroy();
+      /* Settle only once the in-flight source stream has closed. */
+      await pipeline.donePromise.catch(() => {});
       throw e;
     }
   } finally {

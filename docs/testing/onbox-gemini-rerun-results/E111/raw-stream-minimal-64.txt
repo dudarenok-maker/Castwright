@@ -1,0 +1,29 @@
+# attempt 1 at 2026-11-28 09:26:24 +11:00 HTTP 503
+# request body: {"contents":[{"role":"user","parts":[{"text":"Return a JSON array of 40 invented fantasy characters, each with id, name and role. Output JSON only."}]}],"generationConfig":{"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"MINIMAL"}}}
+{
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+# attempt 2 at 2026-11-28 09:26:45 +11:00 HTTP 503
+# request body: {"contents":[{"role":"user","parts":[{"text":"Return a JSON array of 40 invented fantasy characters, each with id, name and role. Output JSON only."}]}],"generationConfig":{"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"MINIMAL"}}}
+{
+  "error": {
+    "code": 503,
+    "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.",
+    "status": "UNAVAILABLE"
+  }
+}
+# attempt 3 at 2026-11-28 09:27:06 +11:00 HTTP 200
+# request body: {"contents":[{"role":"user","parts":[{"text":"Return a JSON array of 40 invented fantasy characters, each with id, name and role. Output JSON only."}]}],"generationConfig":{"maxOutputTokens":64,"thinkingConfig":{"thinkingLevel":"MINIMAL"}}}
+data: {"candidates": [{"content": {"parts": [{"text": "","thought": true}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 25,"totalTokenCount": 25,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 25}],"serviceTier": "standard"},"modelVersion": "gemma-4-31b-it","responseId": "ugMKa5X9G9ypz7sP2Y2HqQ4"}
+
+data: {"candidates": [{"content": {"parts": [{"text": "```json\n[\n  { \"id\": 1,"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 25,"candidatesTokenCount": 13,"totalTokenCount": 38,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 25}],"serviceTier": "standard"},"modelVersion": "gemma-4-31b-it","responseId": "ugMKa5X9G9ypz7sP2Y2HqQ4"}
+
+data: {"candidates": [{"content": {"parts": [{"text": " \"name\": \"Thalric Ironfoot\", \"role\": \"Mountain Guardian\" },\n  { \"id\":"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 25,"candidatesTokenCount": 37,"totalTokenCount": 62,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 25}],"serviceTier": "standard"},"modelVersion": "gemma-4-31b-it","responseId": "ugMKa5X9G9ypz7sP2Y2HqQ4"}
+
+data: {"candidates": [{"content": {"parts": [{"text": " 2, \"name\": \"Elara Moonwhisper\", \"role\": \"Astral Weaver\" },\n"}],"role": "model"},"index": 0}],"usageMetadata": {"promptTokenCount": 25,"candidatesTokenCount": 60,"totalTokenCount": 85,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 25}],"serviceTier": "standard"},"modelVersion": "gemma-4-31b-it","responseId": "ugMKa5X9G9ypz7sP2Y2HqQ4"}
+
+data: {"candidates": [{"content": {"parts": [{"text": ""}],"role": "model"},"finishReason": "MAX_TOKENS","index": 0}],"usageMetadata": {"promptTokenCount": 25,"candidatesTokenCount": 60,"totalTokenCount": 85,"promptTokensDetails": [{"modality": "TEXT","tokenCount": 25}],"serviceTier": "standard"},"modelVersion": "gemma-4-31b-it","responseId": "ugMKa5X9G9ypz7sP2Y2HqQ4"}

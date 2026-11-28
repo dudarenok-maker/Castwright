@@ -1,0 +1,23 @@
+# curl: HTTP 200 total=484.999051s
+# heartbeat events: total=106 phase0=17 phase1=89 (phase 1 receivedBytes is a chapter-wide high-water mark)
+# log / throttle / chapter-failed / error events
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 3,723 words, 19,928 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~2m 0s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via gemini-3.7-flash…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via gemini-3.7-flash…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with gemini-3.7-flash…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 13 characters in 1m 12s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Dropped 1 fabricated quote on wren (e.g. \"It's Wren, to everyone but him.\")."}
+data: {"kind":"log","phaseId":0,"message":"Quote-match tiers: verbatim=20, terminal-punct=0, segments=5."}
+data: {"kind":"log","phaseId":0,"message":"Detected 13 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Sela, Hart"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 1m 12s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 1m 12s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (19,928 chars, ~6m 2s) via gemini-3.7-flash…"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemini-3.7-flash","waitMs":1858,"reason":"retry-after"}
+data: {"kind":"chapter-failed","chapterId":1,"message":"gemini-3.7-flash sent no answer text and stayed silent longer than its thinking window, so the request was stopped after 120 s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.","code":"analyzer-timeout","remediation":"Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms, a …[trimmed]
+data: {"kind":"error","code":"analyzer-timeout","message":"gemini-3.7-flash sent no answer text and stayed silent longer than its thinking window, so the request was stopped after 120 s. Raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms), or pick a faster model, then retry.","remediation":"Retry the chapter. If it recurs: when a thinking Gemini model stayed silent before answering, raise 'Gemini thinking idle timeout' (analyzer.gemini.thinkingIdleTimeoutMs, GEMINI_THINKING_IDLE_MS; at most 290000 ms, a deliberate local ceili …[trimmed]

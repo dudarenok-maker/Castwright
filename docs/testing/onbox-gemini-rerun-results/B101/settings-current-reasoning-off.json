@@ -1,0 +1,36 @@
+{
+  "configOverrides": {},
+  "displayName": "Castwright",
+  "defaultAnalysisModel": "qwen3.5:4b",
+  "defaultTtsEngine": "local",
+  "defaultTtsModelKey": "kokoro-v1",
+  "defaultTtsModelKeyExplicit": false,
+  "sidecarUrl": "http://localhost:9000",
+  "analysisEngine": "local",
+  "allowCloudFallback": true,
+  "workspaceDirOverride": null,
+  "exportSyncFolder": null,
+  "minorCastMinLines": 3,
+  "coverPickerDefaultTab": "search",
+  "defaultThemePreference": "system",
+  "autoStartSidecar": true,
+  "dualModelEnabled": false,
+  "generationWorkers": 1,
+  "geminiApiKey": null,
+  "backupEnabled": true,
+  "backupCadence": "daily",
+  "backupRetention": 14,
+  "analyzerKeepAliveByModel": {},
+  "analyzerReasoningByEngine": {
+    "gemini": {
+      "gemma-4-26b-a4b-it": "off",
+      "gemma-4-31b-it": "off"
+    }
+  },
+  "analyzerExtraParamsByEngine": {},
+  "analyzerRateLimitsByModel": {},
+  "analyzerCapabilitiesByModel": {},
+  "analyzerEndpoints": [],
+  "analyzerEndpointKeys": {},
+  "lastSeenAppVersion": "1.15.0"
+}

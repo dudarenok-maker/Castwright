@@ -1,0 +1,4 @@
+start 14:41:25 +11:00
+{"serverUrl":"gemini","testedAt":"2026-11-28T03:41:25.176Z","control":{"ok":true},"structuredOutput":{"schema":{"model-default":"enforced"},"json":{"model-default":"accepted"},"off":{"model-default":"accepted"}},"reasoning":{"model-default":"accepted","off":"accepted","on":"accepted"},"verdictTestedAt":{"reasoning":{"model-default":"2026-11-28T03:41:25.176Z","off":"2026-11-28T03:41:25.176Z","on":"2026-11-28T03:41:25.176Z"},"structuredOutput":{"schema":{"model-default":"2026-11-28T03:41:25.176Z"},"json":{"model-default":"2026-11-28T03:41:25.176Z"},"off":{"model-default":"2026-11-28T03:41:25.176Z"}}}}
+HTTP 200
+end 14:44:57 +11:00

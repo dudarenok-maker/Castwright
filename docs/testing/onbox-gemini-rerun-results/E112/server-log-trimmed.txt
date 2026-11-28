@@ -1,0 +1,27 @@
+# stdout (logs/e112-server.out.log): server start and analysis lines
+2026-11-28 11:01:32.335 [server] listening on http://localhost:8100
+2026-11-28 11:01:32.335 [server] workspace root: C:\Claude\Projects\wt-onbox-gemini-rerun\castwright-workspace
+2026-11-28 12:02:20.580 [analysis-subset] request received manuscript="mns_C7-tTwCEkp" model="gemma-4-31b-it" chapters=1
+2026-11-28 12:02:20.654 [analysis-subset] start manuscript="mns_C7-tTwCEkp" engine=gemini model="gemma-4-31b-it"
+2026-11-28 12:02:20.712 [analysis-subset] mns=mns_C7-tTwCEkp phase=0 Re-analyzing 1 chapter via Gemma 4 31B.
+2026-11-28 12:02:20.727 [analysis-subset] mns=mns_C7-tTwCEkp phase=0 Chapter 2 — Chapter One — The Knock: detecting cast…
+2026-11-28 12:02:22.441 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 12:02:24.930 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 12:04:10.388 [gemini] stream-timing model=gemma-4-31b-it firstChunkMs=13923 firstAnswerMs=13923 thoughtPartsBeforeAnswer=0
+2026-11-28 12:04:10.442 [analysis-subset] mns=mns_C7-tTwCEkp phase=0 Chapter 2 cast — 6 characters detected.
+2026-11-28 12:04:10.450 [analysis-subset] mns=mns_C7-tTwCEkp phase=0 Cast finalisation deferred — 2 non-excluded chapters still need Phase 0a detection (1/3 covered). Existing stage1 left intact; run the main analysis to fill the gaps.
+
+# stderr (logs/e112-server.err.log): [gemini] lines, plus status/message of each failed attempt
+2026-11-28 12:02:20.749 [gemini] gemma-4-31b-it 1-ch2 schema adapter dropped: properties.characters.items.properties.color.minLength, properties.characters.items.properties.id.minLength, properties.characters.items.properties.name.minLength, properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength, properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength, properties.characters.items.properties.role.minLength
+2026-11-28 12:02:22.439 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+  message: '{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 503,\\n    \\"message\\": \\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\\",\\n    \\"status\\": \\"UNAVAILABLE\\"\\n  }\\n}\\n","code":503,"status":"Service Unavailable"}}',
+2026-11-28 12:02:22.441 [gemini] transient 503 unavailable — retrying in 1411ms (attempt 2/3)
+2026-11-28 12:02:24.929 [gemini] generate failed {
+  model: 'gemma-4-31b-it',
+  status: 503,
+  name: 'ApiError',
+  message: '{"error":{"message":"{\\n  \\"error\\": {\\n    \\"code\\": 503,\\n    \\"message\\": \\"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\\",\\n    \\"status\\": \\"UNAVAILABLE\\"\\n  }\\n}\\n","code":503,"status":"Service Unavailable"}}',
+2026-11-28 12:02:24.930 [gemini] transient 503 unavailable — retrying in 6939ms (attempt 3/3)

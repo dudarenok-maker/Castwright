@@ -242,7 +242,7 @@ up.
    fields here.
    - Result: _(filled in `sidecar-evict-latency-onbox-acceptance.md` §5, not here)_
 
-### A19 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9
+### A19 · Stranded VRAM pool reclaimed on the admission-failure path (#1976, PR #1993) — step 9 — removed from the register 2026-11-28 by owner ruling, #4883
 
 > **Criteria source:** [`onbox-acceptance-register.md`](onbox-acceptance-register.md) `:1321-1355`
 > (PR #1993's description + the C1/M3 review findings it quotes). Re-resolved:
@@ -309,7 +309,7 @@ up.
 > **Step 11 below is STALE** — it still describes the pre-fix expected behaviour
 > from #2070's original design and does not yet cover the new
 > `deviceKey`-qualification or caller-abort cases PR #2797 added. The register
-> row's own body (bullets 4–6) is the current source of truth for what to run
+> row's own Owed list is the current source of truth for what to run
 > next; re-derive this sitting pack's step 11 from there before using it again,
 > rather than following the text below as-is.
 

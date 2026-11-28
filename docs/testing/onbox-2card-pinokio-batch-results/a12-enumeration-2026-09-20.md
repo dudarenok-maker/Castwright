@@ -1,6 +1,6 @@
 # A12 — device-pin resolution across a GPU enumeration-order change (2026-09-20, #3296)
 
-Register row: `docs/testing/onbox-acceptance-register.md` §A12
+Register row: `docs/testing/onbox-acceptance-register.md` §A12 (discharged and removed from the register 2026-11-28, #4883)
 ([#1870](https://github.com/dudarenok-maker/Castwright/pull/1870),
 closes [#1857](https://github.com/dudarenok-maker/Castwright/issues/1857)).
 

@@ -6848,8 +6848,11 @@ async function runMainAnalyzerJobBody(
           /* Per-chapter failure (malformed JSON after retry, validation
              miss, model truncation, …) is NON-FATAL for the run. The
              chapter is dropped from cast detection; the rest of the
-             book still gets analysed. Surface the full error message in
+             book still gets analysed. Surface the classified user message in
              the SSE log so the user can see WHICH chapter failed and WHY
+             (a typed error such as AnalyzerInvalidOutputError leaves its
+             raw detail out of that line; the detail stays in the stage
+             error file)
              — historically one bad chapter aborted the entire pool with
              a generic toast and no way to diagnose. */
           castInFlight.delete(i);
@@ -6860,9 +6863,13 @@ async function runMainAnalyzerJobBody(
              failure's duration would skew the pace estimate (probably
              upward — the model burned all its budget then errored), so
              skip the duration save on failure. */
+          /* #4718 — log the classified (redacted, unwrapped) message, not the
+             raw one: a Gemini error the SDK wrapped in a second envelope would
+             print as doubly-escaped JSON here. */
+          const classified = classifyAnalysisFailure(chErr, analyzerLabel);
           log(
             0,
-            `❌ Chapter ${i + 1}/${totalCastChapters} cast FAILED — ${ch.title}: ${(chErr as Error).message}`,
+            `❌ Chapter ${i + 1}/${totalCastChapters} cast FAILED — ${ch.title}: ${classified.userMessage}`,
           );
           log(
             0,
@@ -6875,7 +6882,6 @@ async function runMainAnalyzerJobBody(
              skips it and the cache key is taken. */
           chapterCast[ch.id] = [];
           cache.chapterCast = chapterCast;
-          const classified = classifyAnalysisFailure(chErr, analyzerLabel);
           const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
           await patchCacheInFailureCatch(
             manuscriptId,
@@ -9921,7 +9927,8 @@ async function runSubsetAnalyzerJobBody(
         const classified = classifyAnalysisFailure(chErr, analyzerLabel);
         const castRecord = recordFailedChapter(cache, ch.id, classified, 'cast');
         await patchCacheInFailureCatch(manuscriptId, { fields: cacheFields(cache, SUBSET_PHASE0_FIELDS) }, ch.id);
-        log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${(chErr as Error).message}`);
+        /* #4718 — the classified message, as in the main route's catch. */
+        log(0, `❌ Chapter ${ch.id} cast FAILED — ${ch.title}: ${classified.userMessage}`);
         send({
           kind: 'chapter-failed',
           chapterId: ch.id,

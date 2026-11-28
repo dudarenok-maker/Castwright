@@ -45,7 +45,7 @@ const NEXT_LABEL_RE = new RegExp(`^\\*\\*(${KNOWN_LABELS})\\b[^*]*\\*\\*`, 'i');
 // heading or a standalone `**Label**` line), then join every non-empty line
 // after it up to the next heading / recognized bold-label line / `---` rule
 // / end of text into one paragraph.
-function extractBlock(text, labelLineRe) {
+function extractBlock(text, labelLineRe, label) {
   const lines = text.split(/\r?\n/);
   const idx = lines.findIndex((l) => labelLineRe.test(l.trim()));
   if (idx === -1) return null;
@@ -55,7 +55,10 @@ function extractBlock(text, labelLineRe) {
     if (/^#{1,6}\s/.test(line) || NEXT_LABEL_RE.test(line) || /^---\s*$/.test(line)) break;
     if (line) out.push(line.replace(/^[-*]\s+/, ''));
   }
-  const joined = out.join(' ').trim();
+  // Drop a leading repeat of the section's own label (`*Benefit (user):* ...`
+  // under `## Benefit`) so the rendered row doesn't show the label twice.
+  const repeat = new RegExp(`^(\\*\\*|\\*|_)${label}(?:\\s*\\([^)]*\\))?:\\1\\s*`, 'i');
+  const joined = out.join(' ').trim().replace(repeat, '');
   return joined || null;
 }
 
@@ -70,15 +73,15 @@ function extractBlock(text, labelLineRe) {
 export function parseWhatBenefit(body) {
   const text = String(body ?? '');
   const what =
-    extractInline(text, /^-\s*_What\b[^:]*:_\s*(.+)$/m) ??
-    extractInline(text, /^\*\*What\b[^*]*:\*\*\s*(.+)$/m) ??
-    extractBlock(text, /^#{1,6}\s*What\b/i) ??
-    extractBlock(text, /^\*\*What\*\*$/i);
+    extractInline(text, /^-\s*_What(?:\s*\([^)]*\))?:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*What(?:\s*\([^)]*\))?:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*What(?:\s*\([^)]*\))?:?$/i, 'What') ??
+    extractBlock(text, /^\*\*What\*\*$/i, 'What');
   const benefit =
-    extractInline(text, /^-\s*_Benefit\b[^:]*:_\s*(.+)$/m) ??
-    extractInline(text, /^\*\*Benefit\b[^*]*:\*\*\s*(.+)$/m) ??
-    extractBlock(text, /^#{1,6}\s*Benefit\b/i) ??
-    extractBlock(text, /^\*\*Benefit\*\*$/i);
+    extractInline(text, /^-\s*_Benefit(?:\s*\([^)]*\))?:_\s*(.+)$/m) ??
+    extractInline(text, /^\*\*Benefit(?:\s*\([^)]*\))?:\*\*\s*(.+)$/m) ??
+    extractBlock(text, /^#{1,6}\s*Benefit(?:\s*\([^)]*\))?:?$/i, 'Benefit') ??
+    extractBlock(text, /^\*\*Benefit\*\*$/i, 'Benefit');
   return { what, benefit };
 }
 

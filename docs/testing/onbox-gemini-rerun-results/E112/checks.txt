@@ -1,0 +1,29 @@
+# Environment
+code: chore/ops-onbox-gemini-rerun @ 68849e3a (merge-base with origin/main ddf1b3f0; branch diff is docs only)
+node: v24.22.3
+server: npm --prefix server run dev, port 8100, ANALYZER_GEMINI_STRUCTURED_OUTPUT=schema in the process environment
+saved settings before the run: analyzerReasoningByEngine={}, analyzerExtraParamsByEngine={}, no analyzer.gemini.* key in configOverrides
+book: server/src/__fixtures__/the-coalfall-commission.md imported fresh as "E112 Coalfall Schema" (mns_C7-tTwCEkp); chapter id 2 "Chapter One — The Knock" (652 words)
+
+# GET /api/analyzer/models, gemma-4-31b-it
+structuredOutput.mode=schema label=schema (partial)
+
+# Dropped-key list (stage1Chapter)
+logged (6): properties.characters.items.properties.color.minLength, properties.characters.items.properties.id.minLength, properties.characters.items.properties.name.minLength, properties.characters.items.properties.notLinkedTo.items.properties.bookId.minLength, properties.characters.items.properties.notLinkedTo.items.properties.characterId.minLength, properties.characters.items.properties.role.minLength
+committed snapshot "gemini / stage1Chapter 1" (6) identical, same order: true
+2026-11-26 gemma log line (cut short in that evidence file) is a prefix of this run's list: true
+
+# Attempts and retry-path lines, counted over both server logs
+stream-timing lines (one per request attempt): 3
+transport retries on 503: 2
+lines matching INVALID_ARGUMENT or "status: 400": 0
+lines matching "failed to parse" or "produced no usable response": 0
+(the Gemini retry policy has warnsOnRepair=false, so "required JSON cleanup" is never logged for Gemini and its absence proves nothing)
+
+# Handoff files for this manuscript (a failed first validation writes outbox/*-stage1-ch2.errors.json in every policy)
+server/handoff/inbox/mns_C7-tTwCEkp-stage1-ch2.md  9058 bytes
+server/handoff/outbox/mns_C7-tTwCEkp-stage1-ch2.json  4105 bytes
+
+# Raw reply
+plain JSON.parse of the persisted raw reply (no cleanup): ok; top-level keys: characters
+characters (6): narrator, oduvan, wren, id-unknown-male, maerin, coalfall
