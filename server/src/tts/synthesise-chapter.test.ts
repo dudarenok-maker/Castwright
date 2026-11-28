@@ -142,7 +142,7 @@ describe('synthesiseChapter voice routing', () => {
   });
 
   it('uses different voice buckets per speaker within the same chapter (multi-character regression)', async () => {
-    /* The exact bug scenario from Day One of the the Coalfall Commission: three
+    /* The exact bug scenario from Day One of the Coalfall Commission: three
        speakers, only the narrator gendered by id. Without the hint plumbing,
        Oduvan and Ro both collapsed onto the narrator-cool bucket. */
     const cast: CastCharacter[] = [
