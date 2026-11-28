@@ -269,16 +269,19 @@ async function main(): Promise<void> {
     })
     .catch((err) => console.warn('[changelog] migration skipped:', err));
 
-  /* #4952 — one-time auto-link of consent-free copies of a cloned voice (made
-     by "Save to my voices" before #4954) to their source clone, so the clone's
-     consent and revoke cover them. Nothing is deleted. Idempotent (a linked
-     copy carries `clonedFrom`), fire-and-forget like the migration above. */
+  /* #4952 — auto-link of consent-free copies of a cloned voice (made by "Save to
+     my voices" before #4954) to their source clone, so the clone's consent and
+     revoke cover them. Runs on every start but is cheap once done: a linked copy
+     carries `clonedFrom`, an ordinary saved designed voice costs one small
+     manifest read, and a linked-but-unpurged revoked copy is retried. A copy of
+     an already-revoked clone is linked revoked and its voice files erased; no
+     library entry is ever removed. Fire-and-forget like the migration above. */
   void autolinkCloneCopies()
     .then((r) => {
       if (r.unmatched > 0) {
         console.log(
-          `[clone-copy-autolink] ${r.unmatched} consent-free saved voice(s) matched no clone's ` +
-            'voice bytes and were left as designed voices.',
+          `[clone-copy-autolink] ${r.unmatched} saved voice(s) look like copies of a cloned voice ` +
+            'but could not be matched to one with certainty; left unchanged.',
         );
       }
     })

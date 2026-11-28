@@ -1,31 +1,43 @@
-/* #4952 — one-time auto-link of consent-free copies of a cloned voice.
+/* #4952 — auto-link of consent-free copies of a cloned voice.
 
    Before #4954, "Save to my voices" on a cloned voice copied the clone's
-   `qwen-<cloneUuid>.pt` to `qwen-<newUuid>.pt` and wrote a `designed` entry
-   with `promotedFrom` and NO `consent`. `purgeCloneArtifacts` is keyed on the
-   clone's own uuid, so a revoke never reached the copy.
+   `qwen-<cloneUuid>.pt` AND `.json` to `qwen-<newUuid>.*` and wrote a `designed`
+   entry with `promotedFrom` and NO `consent`. `purgeCloneArtifacts` is keyed on
+   the clone's own uuid, so a revoke never reached the copy.
 
    This re-labels each such copy as the clone it came from: provenance
    `cloned`, the clone's `consent` (incl. any `revokedAt`) and `clonedFrom`.
    `purgeCloneArtifacts` cascades from the clone to every entry carrying
-   `clonedFrom`, so revoke now covers the copy. NOTHING is deleted here (owner
-   decision, #4952) — a copy of an already-revoked clone is re-labelled revoked
-   and then purged by the same path a revoke uses.
+   `clonedFrom`, so revoke covers the copy. A copy of an already-revoked clone
+   is linked revoked and its voice files erased, exactly as a revoke would
+   (owner decisions, #4952); the entry itself is kept, never removed.
 
-   A copy is identified by evidence, never a guess: `designed` + `promotedFrom`
-   + no `consent` + `.pt` bytes identical to a cloned entry's. A revoke erases
-   the clone's own `.pt`, so a copy of a clone revoked BEFORE this ran is
-   linked by recorded origin instead (`originRevokedClone`); a copy that
-   neither path identifies is counted (`unmatched`) and left alone.
+   EVIDENCE, in order. A candidate is `designed` + `promotedFrom` + no `consent`.
+   1. Its OWN sidecar manifest `qwen-<uuid>.json` (the recorded origin). The
+      sidecar's `clone_voice` writes `clone: true` + `voiceUuid: <cloneUuid>`;
+      `/promote` copied that file and `stampKeyVoiceId` rewrites only `voiceId`,
+      so a real copy still names its clone — even after the clone's own bytes
+      were erased by a revoke or re-derived. A VoiceDesign voice's manifest has
+      `designModel`/`instruct` and no `clone`, so it can never match. The
+      writer has emitted both fields since the clone endpoint was added
+      (83bad1fc); a manifest lacking them is not evidence, and the copy falls
+      through to (2). A designed voice that self-healed (re-derived through
+      `clone_voice`, then its designed fields restored — clone-voice-resolver
+      C-1) carries `clone: true` too, but with `designModel`/`instruct` set
+      and/or its own uuid: neither is an origin.
+   2. No usable manifest: `.pt` sha256 identical to a cloned entry's.
+   When both exist and name different clones, nothing is linked.
+   The CURRENT cast slot is deliberately not evidence: `/assign` overwrites it.
 
    Idempotent without a marker file: a linked entry carries `clonedFrom` and is
-   no longer a candidate. Writes go through `updateEntry` (per-uuid entry lock);
-   the clone's entry is only read, never locked, so no lock nests. */
+   no longer a candidate; a linked, revoked copy whose files survived (failed
+   purge, crash between link and purge) is purged again on the next run.
+   Writes go through `updateEntry` (per-uuid entry lock); the clone entry is
+   only read, so no lock nests. */
 
 import { createHash } from 'node:crypto';
 import { createReadStream, existsSync } from 'node:fs';
-import { castJsonPath, qwenVoicePtPath } from './paths.js';
-import { BOOK_GONE, withBookOp } from './book-op-lock.js';
+import { qwenVoicePtPath, qwenVoiceSidecarPath } from './paths.js';
 import { readJson } from './state-io.js';
 import { listEntries, readEntry, updateEntry, type VoiceLibraryEntry } from './voice-library.js';
 import { purgeCloneArtifacts } from './purge-clone-artifacts.js';
@@ -44,92 +56,130 @@ async function sha256File(path: string): Promise<string | null> {
 const ptHash = (voiceUuid: string): Promise<string | null> =>
   sha256File(qwenVoicePtPath(`qwen-${voiceUuid}`));
 
-/* Link by RECORDED ORIGIN (owner decision, #4952) for a copy whose clone was
-   revoked before this ran: revoke erased the clone's `.pt`, so bytes cannot be
-   compared. `/promote` copied from the qwen slot's `libraryUuid` of the
-   character named by the copy's own `promotedFrom` and never modified that
-   cast.json, so that slot still names the source clone unless the character was
-   reassigned since. Returns the clone's uuid only when every record agrees:
-   the character's qwen slot is `cloned`, names a library entry that is a
-   `cloned`, revoked clone with no `.pt` left on disk, created before the copy.
-   Anything else (book/character gone, slot reassigned or not cloned, clone not
-   revoked, or its bytes still present — then the hash compare already decided)
-   returns undefined and the copy stays designed. */
-async function originRevokedClone(
-  cand: VoiceLibraryEntry,
-  entries: VoiceLibraryEntry[],
-): Promise<string | undefined> {
-  const { bookId, characterId } = cand.promotedFrom ?? {};
-  if (!bookId || !characterId) return undefined;
-  let cast: { characters?: { id?: string; overrideTtsVoices?: Record<string, unknown> }[] } | null;
-  try {
-    const r = await withBookOp(bookId, ({ bookDir }) => readJson<typeof cast>(castJsonPath(bookDir)));
-    cast = r === BOOK_GONE ? null : r;
-  } catch {
-    return undefined;
+async function purgeLinkedCopy(copyUuid: string): Promise<void> {
+  const { failed } = await purgeCloneArtifacts(copyUuid, {});
+  if (failed.length > 0) {
+    console.warn(
+      `[clone-copy-autolink] ${failed.length} artifact(s) of revoked copy "${copyUuid}" ` +
+        'could not be erased; the next start retries:',
+      failed,
+    );
   }
-  const slot = cast?.characters?.find((c) => c.id === characterId)?.overrideTtsVoices?.qwen as
-    | { provenance?: unknown; libraryUuid?: unknown }
-    | undefined;
-  if (slot?.provenance !== 'cloned' || typeof slot.libraryUuid !== 'string') return undefined;
-  const clone = entries.find((e) => e.voiceUuid === slot.libraryUuid);
-  if (clone?.provenance !== 'cloned' || !clone.consent?.revokedAt || clone.clonedFrom) return undefined;
-  if (cand.createdAt < clone.createdAt) return undefined;
-  if ((await ptHash(clone.voiceUuid)) !== null) return undefined;
-  return clone.voiceUuid;
+}
+
+/** Result of reading a candidate's own sidecar manifest. */
+type Origin =
+  | { kind: 'clone'; cloneUuid: string }
+  | { kind: 'not-a-copy' } // a manifest that says this is a designed voice
+  | { kind: 'none' }; // absent / unreadable / carries no origin fields
+
+async function originFromManifest(cand: VoiceLibraryEntry): Promise<Origin> {
+  const m = await readJson<Record<string, unknown>>(qwenVoiceSidecarPath(`qwen-${cand.voiceUuid}`)).catch(
+    () => null,
+  );
+  if (!m || typeof m !== 'object') return { kind: 'none' };
+  if (m.clone !== true || m.designModel != null || m.instruct != null) return { kind: 'not-a-copy' };
+  if (typeof m.voiceUuid !== 'string' || !m.voiceUuid || m.voiceUuid === cand.voiceUuid) {
+    return { kind: 'none' };
+  }
+  return { kind: 'clone', cloneUuid: m.voiceUuid };
 }
 
 export async function autolinkCloneCopies(): Promise<{ linked: string[]; unmatched: number }> {
   const entries = await listEntries();
+
+  // A linked, revoked copy whose voice files survived is purged again.
+  for (const e of entries) {
+    if (e.clonedFrom && e.consent?.revokedAt && existsSync(qwenVoicePtPath(`qwen-${e.voiceUuid}`))) {
+      await purgeLinkedCopy(e.voiceUuid);
+    }
+  }
+
   const candidates = entries.filter(
     (e) => e.provenance === 'designed' && e.promotedFrom && !e.consent && !e.clonedFrom,
   );
   if (candidates.length === 0) return { linked: [], unmatched: 0 };
 
-  // Earliest-created clone wins a (pathological) hash collision between clones.
-  const clones = entries
-    .filter((e) => e.provenance === 'cloned' && e.consent && !e.clonedFrom)
-    .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
-  const cloneByHash = new Map<string, string>();
-  for (const c of clones) {
-    const h = await ptHash(c.voiceUuid);
-    if (h && !cloneByHash.has(h)) cloneByHash.set(h, c.voiceUuid);
-  }
+  const byUuid = new Map(entries.map((e) => [e.voiceUuid, e]));
+  // Built lazily: ordinary designed voices never need a hash.
+  let cloneByHash: Map<string, string> | null = null;
+  const hashIndex = async (): Promise<Map<string, string>> => {
+    if (cloneByHash) return cloneByHash;
+    cloneByHash = new Map();
+    // Earliest-created clone wins a (pathological) hash collision between clones.
+    const clones = entries
+      .filter((e) => e.provenance === 'cloned' && e.consent && !e.clonedFrom)
+      .sort((a, b) => a.createdAt.localeCompare(b.createdAt));
+    for (const c of clones) {
+      const h = await ptHash(c.voiceUuid);
+      if (h && !cloneByHash.has(h)) cloneByHash.set(h, c.voiceUuid);
+    }
+    return cloneByHash;
+  };
+  const usableClone = (cand: VoiceLibraryEntry, uuid: string): boolean => {
+    const c = byUuid.get(uuid);
+    return Boolean(
+      c && c.provenance === 'cloned' && c.consent && !c.clonedFrom && cand.createdAt >= c.createdAt,
+    );
+  };
 
   const linked: string[] = [];
   let unmatched = 0;
   for (const cand of candidates) {
-    const h = await ptHash(cand.voiceUuid);
-    const cloneUuid = (h ? cloneByHash.get(h) : undefined) ?? (await originRevokedClone(cand, entries));
-    if (!cloneUuid) {
-      unmatched++;
-      continue;
+    const origin = await originFromManifest(cand);
+    if (origin.kind === 'not-a-copy') continue;
+
+    let cloneUuid: string | undefined;
+    if (origin.kind === 'clone') {
+      // Corroboration: surviving bytes that match a DIFFERENT clone are a conflict.
+      const h = await ptHash(cand.voiceUuid);
+      const byBytes = h ? (await hashIndex()).get(h) : undefined;
+      if (!usableClone(cand, origin.cloneUuid) || (byBytes && byBytes !== origin.cloneUuid)) {
+        unmatched++;
+        continue;
+      }
+      cloneUuid = origin.cloneUuid;
+    } else {
+      const h = await ptHash(cand.voiceUuid);
+      const byBytes = h ? (await hashIndex()).get(h) : undefined;
+      if (!byBytes) continue; // an ordinary designed voice
+      if (!usableClone(cand, byBytes)) {
+        unmatched++;
+        continue;
+      }
+      cloneUuid = byBytes;
     }
-    const updated = await updateEntry(cand.voiceUuid, async (fresh) => {
+
+    const linkedTo = cloneUuid;
+    let updated = await updateEntry(cand.voiceUuid, async (fresh) => {
       // Re-check under the lock: another writer may have changed it since the scan.
       if (!fresh || fresh.provenance !== 'designed' || fresh.consent || fresh.clonedFrom) return null;
-      const clone = await readEntry(cloneUuid);
+      const clone = await readEntry(linkedTo);
       if (!clone?.consent) return null;
-      return { ...fresh, provenance: 'cloned', consent: { ...clone.consent }, clonedFrom: cloneUuid };
+      return { ...fresh, provenance: 'cloned', consent: { ...clone.consent }, clonedFrom: linkedTo };
     });
-    if (updated?.clonedFrom !== cloneUuid) continue;
+    if (updated?.clonedFrom !== linkedTo) continue;
+
+    // A revoke may have landed between the clone read above and this write; its
+    // cascade would then have missed this copy. Re-read and mirror it.
+    if (!updated.consent?.revokedAt && (await readEntry(linkedTo))?.consent?.revokedAt) {
+      updated =
+        (await updateEntry(cand.voiceUuid, (fresh) =>
+          fresh?.consent && !fresh.consent.revokedAt
+            ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
+            : null,
+        )) ?? updated;
+    }
+
     linked.push(cand.voiceUuid);
+    const revoked = Boolean(updated.consent?.revokedAt);
     console.log(
-      `[clone-copy-autolink] linked voice "${cand.voiceUuid}" to its source clone "${cloneUuid}"` +
-        (updated.consent?.revokedAt ? ' (revoked — erasing its artifacts)' : ''),
+      `[clone-copy-autolink] linked voice "${cand.voiceUuid}" to its source clone "${linkedTo}"` +
+        (revoked ? ' (revoked — erasing its voice files)' : ''),
     );
     // Outside the entry lock: purge takes its own. A revoked source means this
     // copy must not survive as a usable voice.
-    if (updated.consent?.revokedAt) {
-      const { failed } = await purgeCloneArtifacts(cand.voiceUuid, {});
-      if (failed.length > 0) {
-        console.warn(
-          `[clone-copy-autolink] ${failed.length} artifact(s) of revoked copy "${cand.voiceUuid}" ` +
-            'could not be erased; a later revoke/delete retries:',
-          failed,
-        );
-      }
-    }
+    if (revoked) await purgeLinkedCopy(cand.voiceUuid);
   }
   return { linked, unmatched };
 }

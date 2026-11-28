@@ -29,7 +29,7 @@ import {
   xttsVoicesDir,
   WORKSPACE_ROOT,
 } from './paths.js';
-import { entryDir, listEntries, removeEntryDir, updateEntry } from './voice-library.js';
+import { entryDir, listEntries, removeEntryDir, updateEntry, type VoiceLibraryEntry } from './voice-library.js';
 import { djb2, purgeVoiceSamples } from '../tts/voice-sample-cache.js';
 import { CLONE_ENGINE_LIST, cloneStorageKey } from '../tts/clone-engines.js';
 import { getResolvedSidecarUrl } from './user-settings.js';
@@ -51,7 +51,7 @@ export function toClientPurgePaths(failed: readonly string[]): string[] {
     return basename(p);
   };
   return failed.map((entry) => {
-    if (entry.startsWith('sidecar:')) return entry;
+    if (entry.startsWith('sidecar:') || entry.startsWith('cascade:')) return entry;
     if (entry.startsWith('sweep:')) return `sweep:${toRelative(entry.slice('sweep:'.length))}`;
     return toRelative(entry);
   });
@@ -485,13 +485,31 @@ export async function purgeCloneArtifacts(
      the C3 manifest-removal decision below so a copy that could not be erased
      keeps the clone's manifest, and its consent record, on disk. Copies are a
      different uuid from the one a caller may already hold the entry lock for. */
-  for (const copy of (await listEntries()).filter((e) => e.clonedFrom === voiceUuid)) {
-    await updateEntry(copy.voiceUuid, (fresh) =>
-      fresh?.consent && !fresh.consent.revokedAt
-        ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
-        : null,
-    );
-    failed.push(...(await purgeCloneArtifacts(copy.voiceUuid, {})).failed);
+  /* This function never throws: a listing or per-copy failure is recorded into
+     `failed` (as `cascade:<uuid>`, a marker not a path) and the loop moves on,
+     so the clone's own purge outcome still reaches the revoke route. */
+  let copies: VoiceLibraryEntry[] = [];
+  try {
+    copies = (await listEntries()).filter((e) => e.clonedFrom === voiceUuid);
+  } catch (err) {
+    failed.push(`cascade:${voiceUuid}`);
+    console.warn(`[purge-clone-artifacts] could not list copies of clone "${voiceUuid}":`, err);
+  }
+  for (const copy of copies) {
+    try {
+      await updateEntry(copy.voiceUuid, (fresh) =>
+        fresh?.consent && !fresh.consent.revokedAt
+          ? { ...fresh, consent: { ...fresh.consent, revokedAt: new Date().toISOString() } }
+          : null,
+      );
+      failed.push(...(await purgeCloneArtifacts(copy.voiceUuid, {})).failed);
+    } catch (err) {
+      failed.push(`cascade:${copy.voiceUuid}`);
+      console.warn(
+        `[purge-clone-artifacts] could not revoke/erase copy "${copy.voiceUuid}" of clone "${voiceUuid}":`,
+        err,
+      );
+    }
   }
   /* GATE 1 fix (C3) — the manifest dir comes off LAST, and ONLY when every
      other step came back clean. Repo-owner ruling, settled; do not
