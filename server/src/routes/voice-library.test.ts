@@ -4574,6 +4574,47 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
   });
 
+  it('promotes a DESIGNED qwen slot even when the coqui slot is a clone (copy reads qwen bytes only)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-desM'), 'DESIGNED-BYTES');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-mixA', [
+      {
+        id: 'char-mixA',
+        name: 'MixA',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-desM', libraryUuid: 'desM', provenance: 'designed' },
+          coqui: { name: 'xtts-cloneM', libraryUuid: 'cloneM', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-mixA', characterId: 'char-mixA', name: 'Mixed' });
+    expect(res.status).toBe(201);
+    expect(readFileSync(qwenVoice.qwenVoicePtPath(`qwen-${res.body.voiceUuid}`), 'utf8')).toBe(
+      'DESIGNED-BYTES',
+    );
+  });
+
+  it('refuses (403) a CLONED qwen slot even when the coqui slot is designed', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-cloneN'), 'CLONE-BYTES');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-mixB', [
+      {
+        id: 'char-mixB',
+        name: 'MixB',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneN', libraryUuid: 'cloneN', provenance: 'cloned' },
+          coqui: { name: 'xtts-desN', libraryUuid: 'desN', provenance: 'designed' },
+        },
+      },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-mixB', characterId: 'char-mixB', name: 'Mixed' });
+    expect(res.status).toBe(403);
+  });
+
   it('missing source .pt → entry created with stale status, no throw (still 201)', async () => {
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-5', [
       { id: 'char-c', name: 'C', voiceStyle: 'a bright, chipper voice' },

@@ -34,7 +34,7 @@ import { currentQwenBaseModel } from '../tts/model-paths.js';
 import { getLastKnownCoquiVersion } from '../tts/coqui-version-state.js';
 import {
   CLONE_ENGINE_LIST,
-  characterHasClonedSlot,
+  hasClonedProvenance,
   cloneStorageKey,
   isArtifactVersionStale,
   isCloneEngine,
@@ -1084,9 +1084,11 @@ voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
        CLONED source that launders the recording into a voice that
        `purgeCloneArtifacts` (keyed on the clone's own uuid) can never reach, so
        Revoke would leave a playable copy behind. Fails CLOSED like
-       `clonedRedesignRefusal`, via the fail-safe slot predicate (any
-       clone-capable engine; `/assign` stamps the slot from the entry). */
-    if (characterHasClonedSlot(character)) {
+       `clonedRedesignRefusal`, via the fail-safe single-engine predicate on the
+       QWEN slot only — the slot the copy below reads (`sourceKey`); a cloned
+       coqui slot says nothing about those bytes. `/assign` stamps the slot
+       from the entry. */
+    if (hasClonedProvenance(character, 'qwen')) {
       return res.status(403).json({
         error:
           'This voice was cloned from a recording, so it cannot be saved to My voices as a ' +
