@@ -91,6 +91,16 @@ export const SCENES: Scene[] = [
     waitFor: '[data-testid="book-cover-hollow-tide-1"]',
   },
   {
+    /* Wiki Library-Management "cards view" shot: the "Voice engines loaded"
+       ribbon + stats + filters push the card grid below a 720px fold, so the
+       plain library-shelf frame shows no cards. Scroll the grid into frame. */
+    id: 'library-covers',
+    hash: '#/',
+    viewports: ['desktop'],
+    waitFor: '[data-testid="book-cover-hollow-tide-1"]',
+    scrollTo: '[data-testid="book-cover-hollow-tide-1"]',
+  },
+  {
     id: 'analysing',
     hash: '#/books/hollow-tide-3/analysing',
     viewports: ['desktop', 'phone', 'tablet'],
