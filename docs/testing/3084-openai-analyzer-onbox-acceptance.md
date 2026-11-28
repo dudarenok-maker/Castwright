@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A113 (§6), A116 (§9), E110 (§1), E111 (§2), E112 (§5), A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
+> Register rows: A113 (§6), A116 (§9), E110 (§1), E111 (§2), E112 (§5), A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (discharged 2026-11-28 (#4738), removed from the register; §15, Gemini config payload).
 
 ---
 
@@ -518,7 +518,7 @@ Overflow wording and fixes, `max_tokens` 64 / null: ___ / ___ Result:
 
 Run by / date / SHA:
 
-## 15. Gemini config payload — register row E115
+## 15. Gemini config payload — register row E115 (discharged 2026-11-28 (#4738), removed from the register)
 
 **Hardware:** any machine with a Gemini API key; no GPU.
 
@@ -546,8 +546,8 @@ topK chapter: 3 chapters, 14 characters, no error Result: PASS
 
 Label with `maxOutputTokens`: "+ custom params", "max output set by custom params" Result: PASS
 
-Rejected safetySettings, screen / `server.log`: value [redacted], code unknown / value [redacted] Result: FAIL (code is unknown, not analyzer-request-rejected; #4718)
+Rejected safetySettings, screen / `server.log`: value [redacted], code analyzer-request-rejected / value [redacted], 0 probe-value hits Result: PASS (2026-11-28, #4738; the 2026-11-26 run was FAIL with code unknown, #4718)
 
 `httpOptions` refusal: 400 naming config.httpOptions Result: PASS
 
-Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main)
+Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main); rejected-value step re-run by claude / 2026-11-28 / f36e7873 (fix/server-4718-gemini-400-classify)

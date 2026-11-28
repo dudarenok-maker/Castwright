@@ -59,13 +59,13 @@ A row another lane published to the live view has to be carried by every later p
 | **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
 | **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 0 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 19 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 18 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 0 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 0 |
 
-**77 owed.** Oldest: **2026-06-01** (plan 161, row A11).
+**76 owed.** Oldest: **2026-06-01** (plan 161, row A11).
 
 ---
 ## Group A — the GPU box
@@ -1270,20 +1270,6 @@ Gemini levels are offered per model id and sent as `thinkingLevel`, with `includ
 **Setup:** A Gemini API key, no GPU. `gemini-3.6-flash` allows 20 requests a day and E110 and E111 also use it, so run this on a different day. On 2026-11-26 the Gemini API was overloaded: Test on `gemini-3.8-flash` and `gemma-4-31b-it` failed on all 5 attempts each (503 or a 120 s thinking-window stop), and a single-chapter run on `gemini-3.6-flash` at `model-default` got no answer inside 120 s. Re-run when the API is not returning 503 for these models.
 
 **Criteria:** [`3084-openai-analyzer-onbox-acceptance.md` §13](3084-openai-analyzer-onbox-acceptance.md). Issue [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084).
-
-### E115 · Gemini config payload ([#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), wave 5b) · **no GPU needed; a Gemini API key**
-
-The automated tests pin the Gemini `config` merge, the allowlist and the redaction. Only the live API shows that a rejected value comes back as `analyzer-request-rejected`.
-
-**Owed:**
-
-- **Rejected value.** Set `{"config": {"safetySettings": [{"category": "castwright-onbox-probe-value", "threshold": "BLOCK_NONE"}]}}` and analyse a chapter. The failure is classified `analyzer-request-rejected`, with the probe value redacted on screen and in `logs/server.log`. Open the failure in the browser as well, because the on-screen view has not been checked.
-
-**Proven so far:** On 2026-11-26 (batch 2, #4699, `gemini-3.5-flash-lite`, Coalfall fixture, 3 chapters) these passed: `{"config":{"topK":40}}` completes a chapter; `{"config":{"maxOutputTokens":2048}}` gives the label "max output set by custom params" (read from `GET /api/analyzer/models`, not the browser); saving `config.httpOptions` is refused with a 400 naming `config.httpOptions`; and the probe value is `[redacted]` in every SSE failure message and server log line. Evidence: [`onbox-batch-2-results/E115/`](onbox-batch-2-results/E115/).
-
-**Setup:** A Gemini API key, no GPU. The rejected-value check failed on 2026-11-26: Gemini answered `400 INVALID_ARGUMENT`, but all three chapters were classified `unknown` instead of `analyzer-request-rejected`, and the run ended `cast_incomplete`. Bug [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718) is open, and pull request [#4850](https://github.com/dudarenok-maker/Castwright/pull/4850) (fix: classify a Gemini 400 `INVALID_ARGUMENT` chapter failure as `analyzer-request-rejected`) is open and not merged. Re-run this bullet after it merges. Clear the saved probe payload afterwards, since a stale one makes later Gemini runs fail with a 400.
-
-**Criteria:** [`3084-openai-analyzer-onbox-acceptance.md` §15](3084-openai-analyzer-onbox-acceptance.md). Issues [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084), [#4718](https://github.com/dudarenok-maker/Castwright/issues/4718).
 
 ### E116 · Duplicate-bookId startup sweep on a real library ([#3713](https://github.com/dudarenok-maker/Castwright/issues/3713), PR #4004) · **no GPU needed; a real workspace with two book folders sharing one bookId**
 

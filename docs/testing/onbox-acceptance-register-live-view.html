@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="161" data-publish-id="6bed71e46ce7"></div>
+  <div hidden data-published-as="162" data-publish-id="978fea39aa01"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -196,7 +196,7 @@
 
   <div class="strip">
     <!-- BEGIN GENERATED:strip -->
-    <div class="stat"><div class="n owed">77</div><div class="l">Owed</div></div>
+    <div class="stat"><div class="n owed">76</div><div class="l">Owed</div></div>
     <div class="stat"><div class="n">7</div><div class="l">Groups</div></div>
     <div class="stat"><div class="n blk">6</div><div class="l">Blocked</div></div>
     <div class="stat"><div class="n">0</div><div class="l">Unconfirmed</div></div>
@@ -213,7 +213,7 @@
       <tr><td><a href="#gb">B</a></td><td>Local Ollama analyzer only, no TTS sidecar</td><td><!-- BEGIN GENERATED:glance:B -->8<!-- END GENERATED:glance:B --></td></tr>
       <tr><td><a href="#gc">C</a></td><td>One <span lang="ru">Ночной дозор</span> re-analysis session</td><td><!-- BEGIN GENERATED:glance:C -->2<!-- END GENERATED:glance:C --></td></tr>
       <tr><td><a href="#gd">D</a></td><td>Multi-language TTS render + ASR</td><td><!-- BEGIN GENERATED:glance:D -->0<!-- END GENERATED:glance:D --></td></tr>
-      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->19<!-- END GENERATED:glance:E --></td></tr>
+      <tr><td><a href="#ge">E</a></td><td>Not the GPU box — a phone, a Mac, a browser</td><td><!-- BEGIN GENERATED:glance:E -->18<!-- END GENERATED:glance:E --></td></tr>
       <tr><td><a href="#gg">G</a></td><td>GitHub Actions itself — the runner IS the prerequisite</td><td><!-- BEGIN GENERATED:glance:G -->0<!-- END GENERATED:glance:G --></td></tr>
       <tr><td><a href="#gh">H</a></td><td>No hardware — needs a real full-length all-kana ja manuscript this corpus lacks</td><td><!-- BEGIN GENERATED:glance:H -->1<!-- END GENERATED:glance:H --></td></tr>
     </tbody>
@@ -1146,7 +1146,7 @@
   <!-- E -->
   <section class="group" id="ge">
     <header>
-      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">19 rows</span></h3>
+      <h3 class="gtitle"><span class="gtag">E</span> Not the GPU box <span class="gcount">18 rows</span></h3>
       <p class="setup">A phone, a Mac, a browser, a Gemini key, or only the real workspace. Independent of the GPU sessions.</p>
     </header>
     <details class="item">
@@ -1317,17 +1317,6 @@
         </ul>
         <div class="flag"><p><b>Proven so far.</b> 2026-11-26 (batch 2, <a href="https://github.com/dudarenok-maker/Castwright/issues/4699">#4699</a>): Test on <code>gemini-3.6-flash</code> recorded all five levels <code>accepted</code>; the stale-<code>minimal</code> refusal holds over the API (<code>analyzer-request-rejected</code> before any chapter work); the catalog offers <code>gemini-3.8-flash</code> exactly <code>model-default, low, medium, high</code>. Evidence <code>docs/testing/onbox-batch-2-results/E114/</code>.</p><p><b>Not run.</b> The Gemini API was overloaded: Test on <code>gemini-3.8-flash</code> and <code>gemma-4-31b-it</code> failed on all 5 attempts each (503 or a 120 s thinking-window stop). Re-run when it is not returning 503.</p></div>
         <p class="src">a Gemini API key; no GPU; run on a different day from E110 and E111 (<code>gemini-3.6-flash</code> allows 20 requests a day) &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;13</p>
-      </div>
-    </details>
-    <details class="item">
-      <summary><span class="num">E115</span><span class="iname">Gemini config payload</span><span class="risk">no GPU; a Gemini API key</span><span class="chev">›</span></summary>
-      <div class="body">
-        <p>The automated tests pin the Gemini <code>config</code> merge, the allowlist and the redaction. Only the live API shows that a rejected value comes back as <code>analyzer-request-rejected</code>.</p>
-        <ul>
-        <li><strong>Rejected value.</strong> A <code>safetySettings</code> entry with category <code>castwright-onbox-probe-value</code> (a value Gemini rejects) returns <code>analyzer-request-rejected</code>, with the value redacted on screen and in <code>logs/server.log</code>. The on-screen view has not been checked.</li>
-        </ul>
-        <div class="flag"><p><b>Proven so far.</b> 2026-11-26 (batch 2, <a href="https://github.com/dudarenok-maker/Castwright/issues/4699">#4699</a>): <code>topK</code> 40 completes a chapter; a payload <code>maxOutputTokens</code> gives the label &#8220;max output set by custom params&#8221;; saving <code>config.httpOptions</code> is refused; the probe value is <code>[redacted]</code> in every SSE failure message and server log line. Evidence <code>docs/testing/onbox-batch-2-results/E115/</code>.</p><p><b>Failed.</b> The rejected-value check: Gemini answered 400 <code>INVALID_ARGUMENT</code> but the chapters were classified <code>unknown</code>, not <code>analyzer-request-rejected</code> (bug <a href="https://github.com/dudarenok-maker/Castwright/issues/4718">#4718</a>, open; fix <a href="https://github.com/dudarenok-maker/Castwright/pull/4850">#4850</a> open, not merged). Re-run after it merges.</p></div>
-        <p class="src">a Gemini API key; no GPU &#183; <a href="https://github.com/dudarenok-maker/Castwright/issues/3084">#3084</a> &#183; run sheet <code>docs/testing/3084-openai-analyzer-onbox-acceptance.md</code> &#167;15</p>
       </div>
     </details>
     <details class="item">

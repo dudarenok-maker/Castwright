@@ -1902,7 +1902,7 @@ export function Layout() {
   /* GPU semaphore badge — prefixes the TTS pill cluster with
      "GPU busy · N waiting ·" when this session is waiting behind another
      session's sidecar call for GPU capacity. Worded to NOT collide with the
-     generation queue (the "Queue · N" chip / queue modal) — this is GPU
+     generation queue (the queue chip / queue modal) — this is GPU
      resource contention, a different thing. Hidden when depth is 0 or
      undefined (older server that doesn't expose /api/gpu/queue). The
      depth comes from the sidecar client's no-capacity poll-wait counter
@@ -2196,7 +2196,13 @@ export function Layout() {
     const nonTerminalJobs: Array<{ bookId: string; job: BookExportJob }> = [];
     for (const [bookId, jobs] of Object.entries(exportsByBookId)) {
       for (const job of jobs) {
-        if (job.status === 'queued' || job.status === 'in_progress') {
+        /* cancelling is non-terminal (the work is still stopping), so it keeps
+           the pill up; only in_progress jobs feed the average and stall below. */
+        if (
+          job.status === 'queued' ||
+          job.status === 'in_progress' ||
+          job.status === 'cancelling'
+        ) {
           nonTerminalJobs.push({ bookId, job });
         }
       }

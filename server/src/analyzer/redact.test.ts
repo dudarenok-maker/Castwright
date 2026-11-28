@@ -20,6 +20,19 @@ describe('redactKnownSecrets (#3084 PR 3b)', () => {
       expect(out).toBe(JSON.stringify({ message: `invalid key ${REDACTED} supplied` }));
     }
   });
+  it('also redacts the twice-escaped spelling a wrapped (JSON-in-JSON) error body carries', () => {
+    for (const key of ['my-"quoted"-value-xyz', 'my-back\\slash-value-xyz', 'my-new\nline-value-xyz']) {
+      const inner = JSON.stringify({ error: { message: `bad value ${key} here` } });
+      const wrapped = JSON.stringify({ error: { message: inner, status: 'Bad Request' } });
+      const out = redactKnownSecrets(wrapped, [key]);
+      expect(out).not.toContain('value-xyz');
+      expect(out).toBe(
+        JSON.stringify({
+          error: { message: JSON.stringify({ error: { message: `bad value ${REDACTED} here` } }), status: 'Bad Request' },
+        }),
+      );
+    }
+  });
   it('leaves text byte-identical when no secret is present', () => {
     expect(redactKnownSecrets('{"a":"x\\"y"}', ['sk-abc"defgh12345'])).toBe('{"a":"x\\"y"}');
   });

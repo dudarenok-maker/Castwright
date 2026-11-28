@@ -336,10 +336,9 @@ describeIfFfmpeg('POST /api/books/:bookId/exports + GET status + download', () =
        `finally` before looking at what it left on disk. */
     await awaitInFlightJobs();
 
-    /* Subsequent GET reports cancelled. Allow a couple of poll ticks in
-       case runExportJob's finally hasn't flushed yet — the DELETE
-       handler synchronously flips the status, so the first GET should
-       already see it. */
+    /* Subsequent GET reports cancelled: DELETE only answers `cancelling`, and
+       the drain above waited for the job's own `finally`, which publishes the
+       terminal status. */
     let final: Record<string, unknown> | null = null;
     for (let i = 0; i < 20; i++) {
       const res = await request(app).get(`/api/books/${bookId}/exports/${exportId}`);

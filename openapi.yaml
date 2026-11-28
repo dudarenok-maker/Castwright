@@ -9887,7 +9887,8 @@ components:
         destination: { type: string, enum: [download, sync-folder] }
         status:
           type: string
-          enum: [queued, in_progress, done, failed, cancelled]
+          enum: [queued, in_progress, cancelling, done, failed, cancelled]
+          description: "'cancelling' is not terminal: the job was asked to stop and is still stopping; 'cancelled' is reported only once the work has stopped."
         filename: { type: string, description: "e.g. 'The Northern Star.zip'" }
         sizeBytes:
           { type: integer, nullable: true, description: "Final size once status === 'done'." }
@@ -9897,7 +9898,7 @@ components:
             minimum: 0,
             maximum: 1,
             nullable: true,
-            description: '0..1 while in_progress; null otherwise.',
+            description: "0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had (0 if none was reported).",
           }
         downloadUrl:
           {
@@ -9915,7 +9916,7 @@ components:
           {
             type: boolean,
             nullable: true,
-            description: "True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A cancelled job can still gain a syncPath until this clears, so a client that cancelled keeps following the job until it is false or absent.",
+            description: "True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A job cancelled during the copy reads 'cancelling' and can still gain a syncPath until the copy ends; 'cancelled' is final, so a 'cancelled' job never gains one.",
           }
         errorReason:
           {

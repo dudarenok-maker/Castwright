@@ -31,7 +31,7 @@ For D2, the native-ear listen to the zh and ja voices stays tracked on issue #16
 
 ## Rows waived by the owner on 2026-11-28 (#4883)
 
-The owner reviewed these 13 entries during the cleanup and ruled each one not worth carrying. None has a complete recorded pass. They are listed so the ruling can be revisited: the full text of each row is in git at the commit named at the top of this file. With these removed the owed count went from 88 to 77.
+The owner reviewed these 13 entries during the cleanup and ruled each one not worth carrying. None has a complete recorded pass. They are listed so the ruling can be revisited: the full text of each row is in git at the commit named at the top of this file. With these removed the owed count went from 88 to 77. Row E115 was discharged separately on the same day (#4738, entry below), which makes 76.
 
 **The main checks passed and what is left cannot be produced**
 
@@ -59,7 +59,9 @@ The owner reviewed these 13 entries during the cleanup and ruled each one not wo
 - **E109, `npm run stop:prod` on a real POSIX box (PR #3404).** Never run. Needs a Mac or Linux machine; the failure path is covered by a stub-process unit test.
 ## Change log
 
-> **Last change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
+> **Previous change: 2026-11-28 (#4738), 92 → 91.** Row **E115** (Gemini config payload, #3084 wave 5b) DISCHARGED and removed; it owed only the rejected-value bullet (#4718). **2026-11-28 — #4718 fix on-box (`fix/server-4718-gemini-400-classify`), claude/claude:** Rejected value re-run — **PASS** on `f36e7873`, real Gemini key, `gemini-3.5-flash-lite`, the Coalfall fixture (3 chapters). This worktree's dev server on port 8130 (the worktree's own 8090 was held by another process), a throwaway `USER_SETTINGS_FILE`, TTS sidecar auto-start off; stdout was redirected to `logs/server.log`. Gemini answered the 400 on the first attempt. All three `chapter-failed` frames read `"code":"analyzer-request-rejected"` with the value `"[redacted]"`. `Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value'` counts 0 (also 0 in `logs/server.err.log`; each file has 6 `[redacted]` lines). On screen, the three Analysing failure cards end `"[redacted]"` and the probe value is not in the page HTML (the first-run Setup wizard opened first, so the route was opened by hash). Evidence: `docs/testing/onbox-4718-results/E115/`. The other three bullets passed on 2026-11-26 on `main` at `035ff80a` (#4700, `docs/testing/onbox-batch-2-results/E115/`; the output-cap label was read from the catalog API, not the browser) and were not re-run. **Row verdict: DISCHARGE** Group E 21 → 20. `next-id` markers untouched (allocate-once).
+>
+> **Previous change: 2026-11-28 (#898, PR B), 91 → 92.** Row **E120** (companion token scope end to end on a real phone: the nine allowed endpoints, the legacy no-scope record reaching the pairing screen, one re-pair, and the browser-pairing negative control) added. Group E 20 → 21. `next-id` bumped E120 → E121 in the same change (`origin/main`'s `next-id` for group E was E120; the row was minted as E119 and renumbered at merge because #4650 took E119). Row is owed; not run here.
 >
 > **Previous change: 2026-11-27 (#4650), 90 → 91.** Row **E119** (the companion's idle save never wins a resume sync, and a save after an out-of-band stop such as a headset unplug is stamped with the time audio stopped) added. Group E 19 → 20. `next-id` bumped E119 → E120 in the same change. Row is owed; not run here.
 >
