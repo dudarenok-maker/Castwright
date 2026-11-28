@@ -78,6 +78,14 @@ describe('clone-your-own-voice topic quotes live UI labels', () => {
     expect(screen.getByRole('button', { name: 'Save' })).toBeInTheDocument();
   });
 
+  it('the wizard language hint names only the clone-capable engines, like the topic', () => {
+    render(wrap(<CloneVoiceWizard onClose={() => {}} />));
+    const hint = screen.getByTestId('clone-voice-wizard-language-hint').textContent ?? '';
+    expect(hint.replace(/\s+/g, ' ')).toContain('any book whose voice engine can perform a clone (Qwen3-TTS or Coqui XTTS, not Kokoro)');
+    expect(body).toContain('Qwen3-TTS and Coqui XTTS');
+    expect(body).toContain('Kokoro can’t');
+  });
+
   it('Revoke matches the cloned voice card', () => {
     render(
       wrap(
