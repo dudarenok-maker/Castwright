@@ -8,6 +8,9 @@
    needs an MP3 on disk. */
 
 import { spawnSync } from 'node:child_process';
+import { randomBytes } from 'node:crypto';
+import { getEventListeners } from 'node:events';
+import { Readable } from 'node:stream';
 import {
   existsSync,
   mkdtempSync,
@@ -39,6 +42,17 @@ import type { BookStateJson } from '../workspace/scan.js';
    mock above) captures it without changing behavior for any other test in
    this file. */
 let lastWriteStream: WriteStream | null = null;
+/* Source-read meter for the cancel test (bottom of the `buildMp3Zip` tests):
+   every staged chapter the builder opens a read stream on, and the cumulative
+   bytes those streams emit. It counts by wrapping `emit`, so unlike a 'data'
+   listener it never starts a stream flowing on its own. */
+interface SourceMeter {
+  opened: string[];
+  streams: Array<{ closed: boolean }>;
+  bytes: number;
+  onBytes?: () => void;
+}
+let sourceMeter: SourceMeter | null = null;
 vi.mock('node:fs', async (importOriginal) => {
   const real = await importOriginal<typeof import('node:fs')>();
   return {
@@ -47,6 +61,23 @@ vi.mock('node:fs', async (importOriginal) => {
       const ws = real.createWriteStream(...args);
       lastWriteStream = ws;
       return ws;
+    },
+    createReadStream: (...args: Parameters<typeof real.createReadStream>) => {
+      const rs = real.createReadStream(...args);
+      const meter = sourceMeter;
+      if (meter && String(args[0]).includes('.staging-')) {
+        meter.opened.push(String(args[0]));
+        meter.streams.push(rs);
+        const emit = rs.emit.bind(rs);
+        rs.emit = ((event: string | symbol, ...rest: unknown[]) => {
+          if (event === 'data') {
+            meter.bytes += (rest[0] as Buffer).length;
+            meter.onBytes?.();
+          }
+          return emit(event, ...rest);
+        }) as typeof rs.emit;
+      }
+      return rs;
     },
   };
 });
@@ -507,7 +538,158 @@ describeIfFfmpeg('buildMp3Zip', () => {
   }, 10_000);
 });
 
+/* Cancel stops at the chapter boundary (#2303) — the smaller sibling of
+   build-codec-zip.test.ts's cancel tests, through the real ffmpeg tagging step.
+   Noise (not silence) so each chapter is over 1 MB and the pump is still inside
+   chapter 1 when the abort lands. */
+describeIfFfmpeg('buildMp3Zip — cancel stops the source reads', () => {
+  const chapterCount = 6;
+  let tmpRoot: string;
+  let bookDir: string;
+  let sourceBytes: number;
+  const state: BookStateJson = {
+    ...makeState(),
+    chapters: Array.from({ length: chapterCount }, (_, i) => ({
+      id: i + 1,
+      title: `Chapter ${i + 1}`,
+      slug: `0${i + 1}-chapter-${i + 1}`,
+      duration: '0:00',
+    })),
+  };
+
+  beforeAll(async () => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'build-mp3-zip-cancel-'));
+    bookDir = join(tmpRoot, 'book');
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    const mp3 = await encodePcmToAudio(randomBytes(24_000 * 2 * 180), 24_000, { quality: 0 });
+    sourceBytes = mp3.length;
+    for (const c of state.chapters) {
+      writeFileSync(join(bookDir, 'audio', `${c.slug}.mp3`), mp3);
+    }
+  }, 60_000);
+
+  afterAll(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  it('opens no later chapter and reads nothing after the promise settles', async () => {
+    expect(sourceBytes).toBeGreaterThan(1024 * 1024);
+    const localOutPath = join(tmpRoot, 'cancel.zip');
+    const controller = new AbortController();
+    const meter: SourceMeter = { opened: [], streams: [], bytes: 0 };
+    let abortScheduled = false;
+    meter.onBytes = () => {
+      if (abortScheduled || meter.bytes < sourceBytes / 2) return;
+      abortScheduled = true;
+      setImmediate(() => controller.abort());
+    };
+    const escaped: unknown[] = [];
+    const onEscape = (err: unknown) => {
+      escaped.push(err);
+    };
+    process.on('uncaughtException', onEscape);
+    process.on('unhandledRejection', onEscape);
+    sourceMeter = meter;
+    try {
+      const rejection = await buildMp3Zip({
+        bookDir,
+        state,
+        outPath: localOutPath,
+        signal: controller.signal,
+      }).then(
+        () => null,
+        (e: unknown) => e,
+      );
+      const bytesAtSettle = meter.bytes;
+      const closedAtSettle = meter.streams.map((rs) => rs.closed);
+      const stagingAtSettle = readdirSync(tmpRoot).filter((n) =>
+        n.startsWith(`${basename(localOutPath)}.staging-`),
+      );
+      await new Promise((r) => setTimeout(r, 1500));
+
+      expect((rejection as Error | null)?.name).toBe('AbortError');
+      expect(meter.opened).toHaveLength(1);
+      expect(meter.bytes - bytesAtSettle).toBe(0);
+      expect(bytesAtSettle).toBeGreaterThanOrEqual(sourceBytes / 2);
+      // A tagged chapter is at least about as long as its source: stopping
+      // short of the source size means the stream was cut, not drained.
+      expect(bytesAtSettle).toBeLessThan(sourceBytes);
+      expect(closedAtSettle).toEqual([true]);
+      expect(stagingAtSettle).toEqual([]);
+      expect(escaped).toEqual([]);
+    } finally {
+      sourceMeter = null;
+      process.off('uncaughtException', onEscape);
+      process.off('unhandledRejection', onEscape);
+    }
+  }, 30_000);
+
+  it('control: an uncancelled build opens every chapter and reads all of it', async () => {
+    const controller = new AbortController();
+    const meter: SourceMeter = { opened: [], streams: [], bytes: 0 };
+    sourceMeter = meter;
+    const localOutPath = join(tmpRoot, 'control.zip');
+    try {
+      await buildMp3Zip({
+        bookDir,
+        state,
+        outPath: localOutPath,
+        signal: controller.signal,
+      });
+    } finally {
+      sourceMeter = null;
+    }
+    const entries = readZipEntries(readFileSync(localOutPath));
+    expect(meter.opened).toHaveLength(chapterCount);
+    expect(meter.bytes).toBe(entries.reduce((sum, e) => sum + e.data.length, 0));
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+  }, 30_000);
+});
+
 describe('createZipWritePipeline', () => {
+  /* "The promise settled" has to mean "the pump is idle": a rejection waits for
+     the in-flight source stream's 'close', which this test holds back by hand.
+     The late ZipFile error is what yazl raises for a stream cut mid-entry; it
+     must stay a no-op rather than become an uncaught exception. */
+  it('rejects only after the current source stream has closed', async () => {
+    const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-source-'));
+    try {
+      const zip = new ZipFile();
+      const pipeline = createZipWritePipeline(join(dir, 'out.zip'), zip);
+      let finishDestroy: (() => void) | null = null;
+      const source = new Readable({
+        read() {},
+        destroy(error, callback) {
+          finishDestroy = () => callback(error);
+        },
+      });
+      pipeline.setSource(source);
+      let settled = false;
+      const outcome = pipeline.donePromise.then(
+        () => null,
+        (e: unknown) => {
+          settled = true;
+          return e;
+        },
+      );
+      const reason = new Error('cancelled');
+
+      pipeline.rejectBuild(reason);
+      await new Promise((r) => setTimeout(r, 50));
+      expect(source.destroyed).toBe(true);
+      expect(settled).toBe(false);
+
+      finishDestroy!();
+      expect(await outcome).toBe(reason);
+      expect(source.closed).toBe(true);
+      expect(() =>
+        zip.emit('error', new Error('file data stream has unexpected number of bytes')),
+      ).not.toThrow();
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+
   /* Nit (f) (independent review): on ANY rejection of the write pipeline,
      `ws` (the output write stream) was never destroyed, leaking the write
      fd for the process's lifetime. Previously masked by the crash itself.
@@ -518,13 +700,10 @@ describe('createZipWritePipeline', () => {
      fix): the original version of this test named itself "destroys the
      write stream and the tracked read stream" but only ever asserted on a
      fake READ stream's `.destroyed` flag — deleting `ws.destroy()` from
-     `rejectBuild` left this test green. `trackReadStream` (the mechanism
-     the fake read stream exercised) has since been removed entirely — see
-     `createZipWritePipeline`'s own doc comment for why — so this test now
-     asserts on the one thing `rejectBuild` actually still tears down:
-     `ws` itself, captured via the `createWriteStream` wrapper at the top
-     of this file (the pipeline doesn't expose `ws` on its own public
-     API). */
+     `rejectBuild` left this test green. This test asserts on the write
+     side: `ws` itself, captured via the `createWriteStream` wrapper at the
+     top of this file (the pipeline doesn't expose `ws` on its own public
+     API). The source-stream teardown has its own test above. */
   it('destroys the write stream when rejectBuild fires on a plain error (nit (f))', () => {
     const dir = mkdtempSync(join(tmpdir(), 'zip-pipeline-'));
     try {

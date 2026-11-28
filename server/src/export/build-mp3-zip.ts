@@ -19,6 +19,7 @@
 import { createReadStream, createWriteStream, existsSync } from 'node:fs';
 import { mkdir, stat, rm } from 'node:fs/promises';
 import { join } from 'node:path';
+import type { Readable } from 'node:stream';
 import { ZipFile } from 'yazl';
 import { audioDir, coverImagePath } from '../workspace/paths.js';
 import { findChapterAudio, type ChapterAudioExt } from '../workspace/chapter-take.js';
@@ -37,10 +38,10 @@ export interface BuildMp3ZipOptions {
   /** Optional progress callback — fires once per chapter packed, with a
       0..1 ratio. The route uses this to update the job's `progress`. */
   onProgress?: (ratio: number) => void;
-  /** Optional cancellation signal. Checked between chapters; when aborted
-      mid-build the WRITE stream is destroyed (the zip/read side is NOT —
-      see this file's class docstring above) and an AbortError is thrown.
-      The route's cancel handler is the only producer today. */
+  /** Optional cancellation signal. When aborted, no further chapter is
+      started, the in-flight source stream and the write stream are
+      destroyed, and an AbortError is thrown once the source stream has
+      closed. The route's cancel handler is the only producer today. */
   signal?: AbortSignal;
 }
 
@@ -84,41 +85,36 @@ export class ExportIncompleteError extends Error {
    stream's `close` event fires (fd genuinely released), not merely
    `finish` (bytes flushed to the OS, but the fd can still be open).
 
-   What this does NOT do (a later revision of this fix tried, and a third
-   review pass found it didn't work): stop bytes already read from a
-   chapter's source file from continuing to flow through yazl's internal
-   pump after rejection. An earlier version tracked "the most recently
-   added read stream" and destroyed it on abort, on the theory that it was
-   the one currently being pumped. Measured false: the per-chapter loop
-   registers entries far faster than yazl's pump consumes them, so by the
-   time a caller aborts, the tracked stream is typically one yazl hasn't
-   even started, while the pump is still on an earlier chapter — destroying
-   it was a no-op for whatever was actually in flight. Unpiping + destroying
-   the WRITE stream still does its job (bytes stop landing on disk — the
-   file's size goes flat), it's the SOURCE-side read cost (CPU, disk reads)
-   that keeps running for a bit after this promise settles. That gap is
-   accepted rather than chased further: the per-chapter loop's own
-   `signal?.throwIfAborted()` check still stops the loop from registering
-   any MORE chapters once a signal trips, which bounds the residual cost to
-   whatever chapter was already in flight.
+   Source side: a builder that streams files registers ONE at a time. It
+   awaits `waitForSource` before handing yazl the next stream and names that
+   stream with `setSource`, so the tracked stream is the one yazl's pump is
+   reading. `rejectBuild` destroys it, and `donePromise` rejects only after
+   its `close`: a rejected build has stopped reading its source files.
 
-   An optional `signal` passed to createZipWritePipeline covers the span the
-   loop's check cannot: once every chapter is registered (buildCodecZip
-   registers all of them in milliseconds, then only awaits `donePromise`)
-   nothing else observes an abort. The signal's `abort` event calls
-   `rejectBuild`, so `donePromise` rejects, the write stream is torn down
-   and the build fails as cancelled instead of resolving and being reported
-   `done`. Source-side reads already in flight still run on, as above. */
+   An optional `signal` passed to createZipWritePipeline covers the spans a
+   builder's own `throwIfAborted()` cannot (mid-chapter, and after the last
+   registration). Its `abort` event calls `rejectBuild`, so the build fails
+   as cancelled instead of resolving and being reported `done`. */
 export interface ZipWritePipeline {
-  /** Reject the pipeline (idempotent — a second call is a no-op) and tear
-      down the write stream so nothing keeps writing once this returns. */
+  /** Reject the pipeline (idempotent — a second call is a no-op), tear down
+      the write stream and destroy the current source stream. */
   rejectBuild: (reason?: unknown) => void;
   /** Resolves with the total byte count once the write stream is fully
-      closed. Rejects with whatever `rejectBuild` was called with. Marked
-      handled immediately (see comment inline) so a rejection that lands
-      before the caller awaits this isn't flagged as an unhandled
-      rejection — the caller's own `await` still observes it. */
+      closed. Rejects with whatever `rejectBuild` was called with, after the
+      current source stream has closed. Marked handled immediately (see
+      comment inline) so a rejection that lands before the caller awaits
+      this isn't flagged as an unhandled rejection — the caller's own
+      `await` still observes it. */
   donePromise: Promise<number>;
+  /** Name the source stream about to be registered with yazl. Replaces the
+      previous one, so call `waitForSource` first. */
+  setSource: (source: Readable) => void;
+  /** Resolves once the current source stream (if any) has closed, or the
+      signal has aborted (a failure destroys the stream, which closes it).
+      Rejects with the pipeline's failure reason if it has been rejected. */
+  waitForSource: () => Promise<void>;
+  /** Throws the failure reason if the pipeline has been rejected. */
+  throwIfFailed: () => void;
 }
 
 export function createZipWritePipeline(
@@ -136,6 +132,8 @@ export function createZipWritePipeline(
     rejectDone = reject;
   });
   donePromise.catch(() => {});
+  let currentSource: Readable | null = null;
+  let failure: { reason: unknown } | null = null;
 
   const onData = (chunk: Buffer): void => {
     bytes += chunk.length;
@@ -146,23 +144,51 @@ export function createZipWritePipeline(
   const rejectBuild = (reason?: unknown): void => {
     if (settled) return;
     settled = true;
+    const error = reason ?? new Error('zip write failed');
+    failure = { reason: error };
     signal?.removeEventListener('abort', onAbort);
-    rejectDone(reason ?? new Error('zip write failed'));
     /* Stop the WRITE side doing any further I/O now that we've decided to
-       fail — this does NOT stop source-side reads already in flight; see
-       this file's class docstring above for why that gap is accepted
-       rather than chased further. Three things: detach the byte-counting
-       'data' listener (N3, independent review — previously left attached,
-       so after rejectBuild the unpiped outputStream stayed in flowing mode
-       with a live consumer, letting yazl's pump run at full speed with no
-       backpressure through every already-registered chapter, into a
-       counter nobody would ever read — mirrors build-portable-book.ts's
-       onData teardown); unpipe so no already-buffered zip bytes reach the
-       write stream; and destroy the write stream to release its fd and
-       cut off any write still in flight. */
+       fail. Three things: detach the byte-counting 'data' listener (N3,
+       independent review — previously left attached, so after rejectBuild
+       the unpiped outputStream stayed in flowing mode with a live consumer,
+       into a counter nobody would ever read — mirrors
+       build-portable-book.ts's onData teardown); unpipe so no
+       already-buffered zip bytes reach the write stream; and destroy the
+       write stream to release its fd and cut off any write still in
+       flight. */
     zip.outputStream.off('data', onData);
     zip.outputStream.unpipe(ws);
     ws.destroy();
+    /* Then the READ side: reject only once the source stream has closed. */
+    const source = currentSource;
+    if (!source || source.closed) {
+      rejectDone(error);
+      return;
+    }
+    source.once('close', () => rejectDone(error));
+    source.destroy();
+  };
+
+  const throwIfFailed = (): void => {
+    if (failure) throw failure.reason;
+  };
+
+  const waitForSource = async (): Promise<void> => {
+    const source = currentSource;
+    if (source && !source.closed && !signal?.aborted) {
+      await new Promise<void>((resolve) => {
+        /* Whichever fires first detaches both, so nothing accumulates on the
+           caller's signal from one chapter to the next. */
+        const done = (): void => {
+          source.off('close', done);
+          signal?.removeEventListener('abort', done);
+          resolve();
+        };
+        source.once('close', done);
+        signal?.addEventListener('abort', done, { once: true });
+      });
+    }
+    throwIfFailed();
   };
 
   ws.on('error', rejectBuild);
@@ -188,6 +214,11 @@ export function createZipWritePipeline(
   return {
     rejectBuild,
     donePromise,
+    setSource: (source) => {
+      currentSource = source;
+    },
+    waitForSource,
+    throwIfFailed,
   };
 }
 
@@ -247,10 +278,8 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
     const zip = new ZipFile();
     /* createZipWritePipeline (above) resolves only once the write stream
        is genuinely closed, and forwards every yazl/write-stream error
-       into one rejection that also tears down the write stream (nit (f)),
-       so a caller can trust nothing is still writing to disk once it
-       settles. `signal?.throwIfAborted()` below is what actually stops a
-       cancelled build from registering any more chapters. */
+       into one rejection that also tears down the write stream (nit (f))
+       and the in-flight source stream. */
     const pipeline = createZipWritePipeline(outPath, zip, signal);
 
     try {
@@ -282,6 +311,10 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
            compressed, so deflate would burn CPU for ~0-1% gain. Stored
            entries also stay byte-readable from the zip without inflate,
            which keeps the test harness simple. */
+        /* One source stream registered at a time. Waiting here, after the
+           tagging above, lets this chapter's tagging overlap with yazl
+           pumping the previous one. */
+        await pipeline.waitForSource();
         const chapterReadStream = createReadStream(taggedPath);
         /* Production stability (macOS cross-os.yml crash, run 31588267496):
            yazl's `addFile` attaches its own `readStream.on('error', ...)`
@@ -297,6 +330,7 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
            export. Forward it into the same rejection as every other build
            failure. */
         chapterReadStream.on('error', pipeline.rejectBuild);
+        pipeline.setSource(chapterReadStream);
         zip.addReadStream(chapterReadStream, entryName, {
           size: taggedStat.size,
           mtime: new Date(),
@@ -316,6 +350,8 @@ export async function buildMp3Zip(opts: BuildMp3ZipOptions): Promise<BuildMp3Zip
          an 'error' event. Idempotent: a no-op if `rejectBuild` already
          fired for some other reason. */
       pipeline.rejectBuild(e);
+      /* Settle only once the in-flight source stream has closed. */
+      await pipeline.donePromise.catch(() => {});
       throw e;
     }
   } finally {

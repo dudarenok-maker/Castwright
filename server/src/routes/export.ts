@@ -1212,20 +1212,10 @@ export function _resetExportJobs(): void {
     job created or registered one.
 
     WAITS ONLY — it does not abort in-flight jobs. An earlier version
-    called `controller.abort()` on every job first, on the theory that a
-    slow/stuck build could otherwise hang the drain forever. That theory
-    didn't survive a third review pass: the zip builders' abort path
-    (createZipWritePipeline in build-mp3-zip.ts) tracked "the most
-    recently added read stream" and destroyed it on abort, but the
-    per-chapter loop registers entries far faster than yazl's pump
-    consumes them — by the time abort landed, the tracked stream was
-    typically one yazl hadn't even started, while the pump was still on an
-    earlier chapter. Destroying it was a no-op for whatever was actually
-    in flight. Measured on a real buildCodecZip: the promise settled as
-    AbortError in 137ms, then burned another 250ms user / 47ms sys CPU
-    with `outputStreamCursor` still climbing — an abort that stopped
-    nothing. Calling `controller.abort()` here bought the appearance of a
-    bounded drain, not the fact of one, so it's gone.
+    called `controller.abort()` on every job first; it was removed because
+    the zip builders' abort path then settled while yazl was still reading.
+    Today an aborted zip build settles only after its source reads have
+    stopped (createZipWritePipeline in build-mp3-zip.ts).
 
     The actual guarantee this function makes: it waits for in-flight jobs
     to finish writing before teardown touches the workspace. The actual
