@@ -84,6 +84,7 @@ import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 import { isTransient } from '../tts/retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { purgeCloneArtifacts, toClientPurgePaths } from '../workspace/purge-clone-artifacts.js';
+import { awaitAutolinkBootPass } from '../workspace/clone-copy-autolink.js';
 import { httpStatusForSidecarError } from './sidecar-error-status.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 
@@ -1042,6 +1043,15 @@ interface PromoteBody {
    cast.json is NEVER modified. */
 voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
   try {
+    /* #4952 — wait for the boot auto-link pass: a copy minted while it runs could be
+       scanned past and, if its clone is revoked before the next start, never linked.
+       Bounded; a fixed, path-free, retryable answer if it has not finished. */
+    if (!(await awaitAutolinkBootPass())) {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({
+        error: 'Castwright is still checking your saved voices at start-up. Try again in a few seconds.',
+      });
+    }
     const body = (req.body ?? {}) as PromoteBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
     const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;

@@ -4721,6 +4721,40 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     expect((await vl.listEntries()).length).toBe(libBefore);
   });
 
+  describe('waits for the boot auto-link pass (#4952)', () => {
+    it('holds the request until the pass settles, then answers normally', async () => {
+      const { runAutolinkAtBoot } = await import('../workspace/clone-copy-autolink.js');
+      let release!: () => void;
+      void runAutolinkAtBoot(
+        () => new Promise((resolve) => (release = () => resolve({ linked: [], unmatched: 0 }))),
+      );
+      let settled = false;
+      const pending = request(app)
+        .post('/api/voice-library/promote')
+        .send({ bookId: 'no-such-book', characterId: 'c', name: 'X' })
+        .then((r) => {
+          settled = true;
+          return r;
+        });
+      await new Promise((r) => setTimeout(r, 150));
+      expect(settled).toBe(false);
+      release();
+      expect((await pending).status).toBe(404);
+    });
+
+    it('answers a curated retryable 503 when the pass does not finish in time', async () => {
+      const mod = await import('../workspace/clone-copy-autolink.js');
+      mod.autolinkGate.waitMs = 50;
+      void mod.runAutolinkAtBoot(() => new Promise(() => {}));
+      const res = await request(app)
+        .post('/api/voice-library/promote')
+        .send({ bookId: 'no-such-book', characterId: 'c', name: 'X' });
+      expect(res.status).toBe(503);
+      expect(res.headers['retry-after']).toBe('5');
+      expect(res.body.error).not.toContain('/');
+    });
+  });
+
   it('promotes a DESIGNED qwen slot even when the coqui slot is a clone (copy reads qwen bytes only)', async () => {
     mkdirSync(paths.qwenVoicesDir(), { recursive: true });
     writeFileSync(qwenVoice.qwenVoicePtPath('qwen-desM'), 'DESIGNED-BYTES');

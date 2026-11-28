@@ -51,7 +51,7 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
-import { autolinkCloneCopies } from './workspace/clone-copy-autolink.js';
+import { runAutolinkAtBoot } from './workspace/clone-copy-autolink.js';
 import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
@@ -275,8 +275,9 @@ async function main(): Promise<void> {
      carries `clonedFrom`, an ordinary saved designed voice costs one small
      manifest read, and a linked-but-unpurged revoked copy is retried. A copy of
      an already-revoked clone is linked revoked and its voice files erased; no
-     library entry is ever removed. Fire-and-forget like the migration above. */
-  void autolinkCloneCopies()
+     library entry is ever removed. Fire-and-forget like the migration above, except that `/promote`
+     waits for it to settle (a Save pressed mid-pass could mint a copy it never sees). */
+  void runAutolinkAtBoot()
     .then((r) => {
       if (r.unmatched > 0) {
         console.log(

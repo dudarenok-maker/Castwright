@@ -183,3 +183,37 @@ export async function autolinkCloneCopies(): Promise<{ linked: string[]; unmatch
   }
   return { linked, unmatched };
 }
+
+/* The boot pass runs un-awaited so it never delays listen, but a "Save to my
+   voices" pressed while it runs could mint a copy the pass has already scanned
+   past; revoke the clone before the next start and that copy is never linked.
+   `/promote` therefore waits on this gate (bounded; a curated retryable 503 if
+   it does not finish). Taking the entry lock in /promote would not close it:
+   the copy's entry does not exist yet when the pass lists the library. */
+let bootPass: Promise<void> | null = null;
+export const autolinkGate = { waitMs: 30_000 };
+
+export function runAutolinkAtBoot(
+  run: () => ReturnType<typeof autolinkCloneCopies> = autolinkCloneCopies,
+): ReturnType<typeof autolinkCloneCopies> {
+  const p = run();
+  bootPass = p.then(
+    () => undefined,
+    () => undefined,
+  );
+  return p;
+}
+
+/** True once the boot pass has settled (or never ran); false if it is still running after `ms`. */
+export async function awaitAutolinkBootPass(ms: number = autolinkGate.waitMs): Promise<boolean> {
+  if (!bootPass) return true;
+  let timer: NodeJS.Timeout | undefined;
+  const timedOut = new Promise<false>((resolve) => {
+    timer = setTimeout(() => resolve(false), ms);
+  });
+  try {
+    return await Promise.race([bootPass.then(() => true as const), timedOut]);
+  } finally {
+    clearTimeout(timer);
+  }
+}
