@@ -44,7 +44,9 @@ export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
     /* queued → in_progress (the rail shows them the same); cancelled →
        failed visually, with errorReason='Cancelled by user.' carried
        through. The modal dismisses cancelled jobs synchronously so the
-       mapping mostly matters for any other surface that polls them. */
+       mapping mostly matters for any other surface that polls them.
+       cancelling (still stopping, not terminal) passes through: the row
+       has its own state for it. */
     status:
       job.status === 'queued' ? 'in_progress' : job.status === 'cancelled' ? 'failed' : job.status,
     timestamp: relativeTime(job.completedAt ?? job.createdAt),

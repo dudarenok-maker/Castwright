@@ -6988,8 +6988,11 @@ export interface components {
             captionScope?: "whole-book" | "per-chapter" | null;
             /** @enum {string} */
             destination: "download" | "sync-folder";
-            /** @enum {string} */
-            status: "queued" | "in_progress" | "done" | "failed" | "cancelled";
+            /**
+             * @description 'cancelling' is not terminal: the job was asked to stop and is still stopping; 'cancelled' is reported only once the work has stopped.
+             * @enum {string}
+             */
+            status: "queued" | "in_progress" | "cancelling" | "done" | "failed" | "cancelled";
             /** @description e.g. 'The Northern Star.zip' */
             filename: string;
             /** @description Final size once status === 'done'. */

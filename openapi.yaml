@@ -9887,7 +9887,8 @@ components:
         destination: { type: string, enum: [download, sync-folder] }
         status:
           type: string
-          enum: [queued, in_progress, done, failed, cancelled]
+          enum: [queued, in_progress, cancelling, done, failed, cancelled]
+          description: "'cancelling' is not terminal: the job was asked to stop and is still stopping; 'cancelled' is reported only once the work has stopped."
         filename: { type: string, description: "e.g. 'The Northern Star.zip'" }
         sizeBytes:
           { type: integer, nullable: true, description: "Final size once status === 'done'." }
