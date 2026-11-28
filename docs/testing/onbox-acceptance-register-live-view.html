@@ -165,7 +165,7 @@
   <!-- Publish token. NEVER hand-edit: run `npm run stamp:publish-token`.
        The counter orders publishes; the id proves which branch produced one.
        Attributes, not a comment: checkLiveView removes comments before reading. -->
-  <div hidden data-published-as="160" data-publish-id="7ed0404a79d9"></div>
+  <div hidden data-published-as="161" data-publish-id="60476c3230cf"></div>
 
   <p class="lede">
     Shipped behaviour that only real hardware can prove — a live GPU, a real sidecar, a real
@@ -612,6 +612,7 @@
           <li>Confirm the marker is deleted before the overlay install and rewritten only after the swap steps succeed; confirm <code>pip check</code> is clean afterward.</li>
           <li>If practical, force a swap-step failure and confirm the marker is deleted rather than left lying about a runtime that was never reinstalled.</li>
         </ul>
+        <div class="flag"><b>Known limitation (#2583, 2026-11-28).</b> <code>ensureOrtMarker</code>'s (<code>server/tts-sidecar/scripts/install-ort.mjs</code>) <code>owner === 'plain'</code> and <code>owner === 'none'</code> branches have no on-box acceptance and are covered only by the automated tests (<code>server/src/tts/ort-ensure-marker.test.ts</code>), by owner decision (no row added).</div>
         <div class="flag"><b>Wave-3 step 2, 2026-08-20 — STILL OWED, not run.</b> Needs a real installed release directory (<code>release/</code> layout). <code>docs/testing/onbox-wave3-results/step-2-ort-marker.md</code>.</div>
         <div class="flag"><b>2026-08-23 (Castwright#2619) — STILL OWED, BLOCKED. No packaged release directory available on this box.</b> Checked exhaustively: neither the primary checkout nor this worktree sits under a <code>releases/</code> ancestor; no <code>*astwright*</code> directory anywhere under <code>C:\</code>, Program Files, or <code>%LOCALAPPDATA%\Programs</code>; no running Castwright/Electron process; no uninstall-registry entry. Per the issue's own instruction, did not manufacture a fake release directory (would require a release cut, forbidden by standing rules). Matches the standing conclusion on record since wave-3. <code>docs/testing/onbox-wave5-results/step-ort-c-a40.md</code>.</div>
 
