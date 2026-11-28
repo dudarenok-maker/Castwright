@@ -15,7 +15,7 @@ import assert from 'node:assert/strict';
 import http from 'node:http';
 import net from 'node:net';
 import { spawn, spawnSync } from 'node:child_process';
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { serverOwnerPath, writeServerOwner } from '../lib/server-owner.mjs';
@@ -699,6 +699,30 @@ async function decideWithOwnMarkerOnTarget(t, probeServed) {
   });
   return { decision, port, url };
 }
+
+// #3264 — a stop that never ran the server's release (`npm run stop`, a manual
+// kill, a crash) leaves its marker; the launcher drops every dead process's
+// marker before deciding anything, and never one whose pid is alive.
+test('decideLaunchAction: #3264 prunes a dead server marker left behind, keeps a live one', async (t) => {
+  const runDir = makeRunDir(t);
+  const deadPid = spawnSync(process.execPath, ['-e', ''], { windowsHide: true }).pid;
+  const deadPort = await closedPort();
+  const livePort = await closedPort();
+  writeServerOwner({ runDir, port: deadPort, https: true, pid: deadPid });
+  writeServerOwner({ runDir, port: livePort, https: true, pid: process.pid });
+  const port = await closedPort();
+  const decision = await decideLaunchAction({
+    port,
+    altPort: port,
+    lanHttps: false,
+    runDir,
+    url: `http://localhost:${port}/`,
+    scanForOwnServer: async () => null,
+  });
+  assert.equal(decision.kind, 'proceed');
+  assert.equal(existsSync(serverOwnerPath(runDir, deadPort)), false);
+  assert.equal(existsSync(serverOwnerPath(runDir, livePort)), true);
+});
 
 test('decideLaunchAction: #3264 own marker on the target port and no /api/health answer → skip, not fail', async (t) => {
   const { decision, port, url } = await decideWithOwnMarkerOnTarget(t, async () => null);

@@ -20,7 +20,7 @@ import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { enforceNodeRuntime } from './lib/node-runtime-guard.mjs';
 import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
-import { readServerOwner } from './lib/server-owner.mjs';
+import { pruneDeadServerOwners, readServerOwner } from './lib/server-owner.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -453,6 +453,10 @@ function ownServerOnTargetSkip(port, url, served) {
    /api/health answer decides, which covers a server started before the marker
    existed. The rebound scan below does the same per candidate.
 
+   Before any of that it prunes the markers of dead processes: a server stopped
+   by something that never ran its release (`npm run stop`, a manual kill, a
+   crash) leaves one, and a reused pid would make it read as ours.
+
    Returns one of:
      { kind: 'fail', message }                                   — main() should fail(message)
      { kind: 'skip', messageLines: string[] }                    — main() should print each line, then exit(0)
@@ -480,7 +484,9 @@ export async function decideLaunchAction({
   probeServed: probeServedFn = probeServed,
   scanForOwnServer: scanForOwnServerFn = scanForOwnServer,
   confirmOwnServerFromMarker: confirmOwnServerFromMarkerFn = confirmOwnServerFromMarker,
+  pruneOwners = pruneDeadServerOwners,
 }) {
+  pruneOwners(runDir);
   let mayHaveRebound = false;
   let foreignOccupantCwd = null;
 

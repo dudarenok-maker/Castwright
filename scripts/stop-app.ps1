@@ -119,6 +119,15 @@ if ($ports) {
     }
 }
 
+# #3264 — taskkill /T /F never runs the server's own shutdown release, so its
+# owner marker (server.owner.<port>.json) outlives it. Drop the markers of dead
+# processes now, via the same helper stop-app.mjs uses; one whose pid is alive
+# is never touched. Best-effort: a stop without node on PATH still stops.
+try {
+    $ownerLib = (New-Object System.Uri (Join-Path $PSScriptRoot "lib\server-owner.mjs")).AbsoluteUri
+    & node --input-type=module -e 'const [m, d] = process.argv.slice(1); (await import(m)).pruneDeadServerOwners(d)' $ownerLib $runDir 2>&1 | Out-Null
+} catch {}
+
 # #2632 N53 — a denied sweep-kill, or zero ports resolved for this
 # checkout, must not both read as the same "[OK] nothing to stop" claim.
 # See Get-StopSummaryMessage's own comment.
