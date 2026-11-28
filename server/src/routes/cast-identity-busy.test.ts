@@ -5,8 +5,10 @@
    answers 409 `book_busy` while `runBookJob(bookId, 'analysis', ...)` holds the book: the
    same signal the whole-slice cast PUT's 409 uses (`book-state.ts`). A write that only
    touches voice, style or decline markers stays live, and dismissing a suggestion stays
-   live (its reversal is a spec promise). Each refused route is paired with a control: the
-   same request once the job's token is released goes through.
+   live (its reversal is a spec promise). The library cast override is refused too, while
+   either of its two books holds such a job (#4564, owner ruling 2026-11-28), although it
+   only merges profile fields. Each refused route is paired with a control: the same request
+   once the job's token is released goes through.
 
    The check sits inside the write's own book-op span. A registration takes book-op
    (`runBookJob`), so a job cannot register between the check and the write. The TOCTOU
@@ -109,12 +111,12 @@ afterAll(() => {
 });
 
 /** Register an analysis job the real way (`runBookJob`), held open until `finish`. */
-async function holdAnalysis(): Promise<{ finish: () => Promise<void> }> {
+async function holdAnalysis(id: string = bookId): Promise<{ finish: () => Promise<void> }> {
   const { runBookJob } = await import('../workspace/book-jobs.js');
   const bookOp = await import('../workspace/book-op-lock.js');
   let open!: () => void;
   const gate = new Promise<void>((r) => (open = r));
-  const reg = await runBookJob(bookId, 'analysis', () => gate);
+  const reg = await runBookJob(id, 'analysis', () => gate);
   if (reg === bookOp.BOOK_GONE) throw new Error('test setup: book not found');
   return {
     finish: async () => {
@@ -259,5 +261,43 @@ describe('R55: a write that leaves the id set and the identity history alone sta
     } finally {
       await job.finish();
     }
+  });
+});
+
+describe('#4564: the library cast override is refused while either of its books analyses', () => {
+  const send = () =>
+    request(app)
+      .post('/api/library-cast/override')
+      .set('Content-Type', 'application/json')
+      .send({
+        sourceBookId: bookId,
+        sourceCharacterId: 'wren',
+        targetBookId: otherBookId,
+        targetCharacterId: 'wren',
+      });
+
+  it.each([
+    ['source', () => bookId],
+    ['target', () => otherBookId],
+  ])('answers 409 book_busy while the %s book analyses, and writes neither book', async (_n, busyId) => {
+    const before = [snapshot(bookDir), snapshot(otherDir)];
+    const job = await holdAnalysis(busyId());
+    try {
+      const res = await send();
+      expect(res.status).toBe(409);
+      expect(res.body.code).toBe('book_busy');
+      expect(res.body.error).toMatch(/read-only until the analysis finishes/);
+      expect(res.text).not.toContain(workspaceRoot);
+      expect([snapshot(bookDir), snapshot(otherDir)]).toEqual(before);
+    } finally {
+      await job.finish();
+    }
+  });
+
+  it('control: once the job is released the same request goes through', async () => {
+    const job = await holdAnalysis();
+    await job.finish();
+    const res = await send();
+    expect(res.status).toBe(200);
   });
 });
