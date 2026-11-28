@@ -872,7 +872,7 @@ export interface ExportQueueItem {
   filename: string;
   format: 'm4b' | 'm4a' | 'mp3' | 'zip' | 'link' | 'srt' | 'vtt';
   size: string;
-  status: 'done' | 'in_progress' | 'failed';
+  status: 'done' | 'in_progress' | 'cancelling' | 'failed';
   timestamp: string;
   destination: string;
   progress?: number;

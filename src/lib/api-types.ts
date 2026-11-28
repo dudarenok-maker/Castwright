@@ -6988,19 +6988,22 @@ export interface components {
             captionScope?: "whole-book" | "per-chapter" | null;
             /** @enum {string} */
             destination: "download" | "sync-folder";
-            /** @enum {string} */
-            status: "queued" | "in_progress" | "done" | "failed" | "cancelled";
+            /**
+             * @description 'cancelling' is not terminal: the job was asked to stop and is still stopping; 'cancelled' is reported only once the work has stopped.
+             * @enum {string}
+             */
+            status: "queued" | "in_progress" | "cancelling" | "done" | "failed" | "cancelled";
             /** @description e.g. 'The Northern Star.zip' */
             filename: string;
             /** @description Final size once status === 'done'. */
             sizeBytes?: number | null;
-            /** @description 0..1 while in_progress; null otherwise. */
+            /** @description 0..1 while in_progress; 1 once done. A 'cancelling' or 'cancelled' job keeps the last value it had (0 if none was reported). */
             progress?: number | null;
             /** @description Set once status === 'done' AND destination === 'download'. */
             downloadUrl?: string | null;
             /** @description Absolute path the archive was copied to when destination === 'sync-folder'. Non-loopback requests receive the home directory collapsed to `~` (a path not under it is unchanged). A 'cancelled' job keeps it when the copy had already landed before the cancel (nothing in the sync folder is ever deleted). */
             syncPath?: string | null;
-            /** @description True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A cancelled job can still gain a syncPath until this clears, so a client that cancelled keeps following the job until it is false or absent. */
+            /** @description True while an un-cancellable sync-folder copy is in flight (the mp3-folder copy, or a single-file commit rename). A job cancelled during the copy reads 'cancelling' and can still gain a syncPath until the copy ends; 'cancelled' is final, so a 'cancelled' job never gains one. */
             syncCopyInFlight?: boolean | null;
             /** @description Human-readable reason; populated when status === 'failed' or 'cancelled'. A cancelled job whose sync-folder copy had already landed reads 'Cancelled by user. The files were already copied to the sync folder.'; a failed job whose sync-folder copy had already landed ends with 'The files were already copied to the sync folder.' */
             errorReason?: string | null;
