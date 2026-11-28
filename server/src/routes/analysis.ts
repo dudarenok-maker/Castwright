@@ -6848,8 +6848,11 @@ async function runMainAnalyzerJobBody(
           /* Per-chapter failure (malformed JSON after retry, validation
              miss, model truncation, …) is NON-FATAL for the run. The
              chapter is dropped from cast detection; the rest of the
-             book still gets analysed. Surface the full error message in
+             book still gets analysed. Surface the classified user message in
              the SSE log so the user can see WHICH chapter failed and WHY
+             (a typed error such as AnalyzerInvalidOutputError leaves its
+             raw detail out of that line; the detail stays in the stage
+             error file)
              — historically one bad chapter aborted the entire pool with
              a generic toast and no way to diagnose. */
           castInFlight.delete(i);
