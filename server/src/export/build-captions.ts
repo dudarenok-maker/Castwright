@@ -210,6 +210,11 @@ export async function buildCaptions(opts: BuildCaptionsOptions): Promise<BuildCa
     return { sizeBytes, warning };
   } catch (e) {
     pipeline.rejectBuild(e);
+    /* Wait for the write stream's close before rethrowing (as buildMp3Zip
+       and buildCodecZip do): the caller unlinks outPath on this rejection,
+       and a still-pending deferred create would otherwise land after that
+       unlink and leave an orphan 0-byte file. */
+    await pipeline.donePromise.catch(() => {});
     throw e;
   }
 }

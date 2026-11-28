@@ -1,7 +1,9 @@
 import { describe, it, expect, vi } from 'vitest';
-import { withTransportRetry, type RetryClassifier, type RetryDisposition } from './transport-retry.js';
+import { parseRetryDelayMs, withTransportRetry, type RetryClassifier, type RetryDisposition } from './transport-retry.js';
 import { AnalysisAbortedError } from '../errors.js';
 import { DailyQuotaExhaustedError, type GeminiRateLimiter } from '../rate-limit.js';
+import { ApiError } from '@google/genai';
+import { GEMINI_RETRY_CLASSIFIER } from '../transports/gemini-transport.js';
 
 const tagged = (d: RetryDisposition, retryAfter: number | null = null) =>
   Object.assign(new Error(d), { d, retryAfter });
@@ -96,5 +98,62 @@ describe('withTransportRetry (extracted from GeminiAnalyzer.generateWithLimiter)
     const err = await p.then(() => null, (e: unknown) => e);
     expect(err).toBeInstanceOf(AnalysisAbortedError);
     expect((err as Error).message).toBe('Aborted during gemini retry backoff.');
+  });
+});
+/* #4718 — `@google/genai` wraps a non-2xx body not served as application/json:
+   {"error":{"message":"<Google envelope text>","code":429,"status":"Too Many Requests"}}.
+   Google's RetryInfo sits inside that string, not in the outer object's details. */
+describe('wrapped Gemini 429 (RetryInfo inside the message string)', () => {
+  const inner = {
+    error: {
+      code: 429,
+      message: 'Quota exceeded for metric generate_content_requests_per_minute.',
+      status: 'RESOURCE_EXHAUSTED',
+      details: [
+        { '@type': 'type.googleapis.com/google.rpc.QuotaFailure', violations: [{ quotaMetric: 'generate_content_requests' }] },
+        { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '37s' },
+      ],
+    },
+  };
+  const unwrapped = () => new ApiError({ status: 429, message: JSON.stringify(inner) });
+  const wrapped = () =>
+    new ApiError({
+      status: 429,
+      message: JSON.stringify({ error: { message: JSON.stringify(inner), code: 429, status: 'Too Many Requests' } }),
+    });
+
+  it('parseRetryDelayMs reads RetryInfo from an unwrapped and a wrapped envelope alike', () => {
+    expect(parseRetryDelayMs(unwrapped())).toBe(37000);
+    expect(parseRetryDelayMs(wrapped())).toBe(37000);
+  });
+
+  it('parseRetryDelayMs returns null for a non-array details instead of throwing', () => {
+    const msg = JSON.stringify({ error: { message: 'x', details: { a: 1 } } });
+    expect(parseRetryDelayMs(new ApiError({ status: 429, message: msg }))).toBeNull();
+  });
+
+  it('parseRetryDelayMs skips a null details entry and still reads the RetryInfo after it', () => {
+    const msg = JSON.stringify({
+      error: { message: 'x', details: [null, 'junk', { '@type': 'type.googleapis.com/google.rpc.RetryInfo', retryDelay: '5s' }] },
+    });
+    expect(parseRetryDelayMs(new ApiError({ status: 429, message: msg }))).toBe(5000);
+  });
+
+  it('withTransportRetry blocks the limiter for the delay Google asked for and classifies rate-limit', async () => {
+    const limiter = fakeLimiter();
+    const err = wrapped();
+    expect(GEMINI_RETRY_CLASSIFIER.classify(err)).toBe('rate-limit');
+    const attempt = vi.fn().mockRejectedValueOnce(err).mockResolvedValueOnce('ok');
+    const onThrottle = vi.fn();
+    vi.useFakeTimers();
+    try {
+      const p = withTransportRetry(attempt, opts(limiter, { classifier: GEMINI_RETRY_CLASSIFIER, onThrottle }));
+      await vi.advanceTimersByTimeAsync(60_000);
+      await expect(p).resolves.toBe('ok');
+    } finally {
+      vi.useRealTimers();
+    }
+    expect(limiter.recordRejection).toHaveBeenCalledWith('m', 37000);
+    expect(onThrottle.mock.calls[0][0]).toBeGreaterThanOrEqual(27_000);
   });
 });

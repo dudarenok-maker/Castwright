@@ -1,0 +1,1 @@
+{"analysisEngine":"gemini","defaultAnalysisModel":"gemini-3.5-flash-lite","analyzerExtraParamsByEngine":{"gemini":{"config":{"safetySettings":[{"category":"castwright-onbox-probe-value","threshold":"BLOCK_NONE"}]}}}}

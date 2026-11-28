@@ -1,0 +1,9 @@
+# E115 (discharged 2026-11-28 (#4738), removed from the register): rejected-value re-run
+
+> **2026-11-28 — #4718 fix on-box (`fix/server-4718-gemini-400-classify`), claude/claude:** Rejected value re-run — **PASS** on `f36e7873`, real Gemini key, `gemini-3.5-flash-lite`, the Coalfall fixture (3 chapters). This worktree's dev server on port 8130 (the worktree's own 8090 was held by another process), a throwaway `USER_SETTINGS_FILE`, TTS sidecar auto-start off; stdout was redirected to `logs/server.log`. Gemini answered the 400 on the first attempt. All three `chapter-failed` frames read `"code":"analyzer-request-rejected"` with the value `"[redacted]"`. `Select-String -Path logs\server.log -SimpleMatch 'castwright-onbox-probe-value'` counts 0 (also 0 in `logs/server.err.log`; each file has 6 `[redacted]` lines). On screen, the three Analysing failure cards end `"[redacted]"` and the probe value is not in the page HTML (the first-run Setup wizard opened first, so the route was opened by hash). Evidence: `docs/testing/onbox-4718-results/E115/`. The other three bullets passed on 2026-11-26 on `main` at `035ff80a` (#4700, `docs/testing/onbox-batch-2-results/E115/`; the output-cap label was read from the catalog API, not the browser) and were not re-run.
+>
+> **Row verdict: DISCHARGE**
+
+Observation, not a criterion of this row and not fixed here: the Analysing screen's phase log panel prints the `❌ ... cast FAILED` lines with the raw nested Google error envelope (value redacted); the failure cards show the clean message.
+
+Fixed later in this PR by ce134ceb, not re-run on-box.

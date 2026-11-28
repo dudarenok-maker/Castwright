@@ -21,7 +21,15 @@ const seam = vi.hoisted(() => {
   const holds: Record<string, Hold | undefined> = {};
   /* Holds that were entered stay reachable here so cleanup can release them. */
   const entered: Hold[] = [];
-  const state = { revokeReady: false, renameCalls: 0, builds: 0, folderBuilds: 0, failCopy: false };
+  const state = {
+    revokeReady: false,
+    renameCalls: 0,
+    builds: 0,
+    folderBuilds: 0,
+    failCopy: false,
+    /* The latest mp3-zip build's progress callback, so a test can tick it after a DELETE. */
+    progress: undefined as ((r: number) => void) | undefined,
+  };
   /* Predicates over (src, dest): a rename matching any of them rejects with EPERM. */
   const failRenames: Array<(src: string, dest: string) => boolean> = [];
   /* Predicates over the rm target: a matching rm rejects with EBUSY (recorded in `rmAttempts`). */
@@ -54,6 +62,7 @@ vi.mock('../export/build-mp3-zip.js', () => ({
   buildMp3Zip: vi.fn(async (opts: { outPath: string; onProgress?: (r: number) => void }) => {
     /* A progress tick replaces the jobs-map entry with a copy, as every real builder does. */
     opts.onProgress?.(0.5);
+    seam.state.progress = opts.onProgress;
     await seam.maybeHold('builder');
     /* Different bytes per build so a test can tell which build the flat artifact holds. */
     const bytes = Buffer.from(`PK stub-zip-${++seam.state.builds}`);
@@ -223,6 +232,7 @@ beforeEach(async () => {
   seam.state.builds = 0;
   seam.state.folderBuilds = 0;
   seam.state.failCopy = false;
+  seam.state.progress = undefined;
   seam.failRenames.length = 0;
   seam.failRm.length = 0;
   seam.rmAttempts.length = 0;
@@ -353,7 +363,7 @@ describe('cancel seams (#4223)', () => {
 
   const SYNC_SENTENCE = 'Cancelled by user. The files were already copied to the sync folder.';
 
-  it('a cancel after the sync commit records the sync-folder sentence, publishes syncPath to the map before the job settles, and does not revert the cancel (#4228)', async () => {
+  it('a cancel after the sync commit publishes syncPath while the job still reads cancelling, then ends cancelled with the sync-folder sentence (#4228)', async () => {
     const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-sync-reason-'));
     try {
       await writeUserSettings({ exportSyncFolder: syncRoot });
@@ -370,9 +380,9 @@ describe('cancel seams (#4223)', () => {
       await bail.entered;
       const syncFile = join(syncRoot, AUTHOR, job.filename);
       const midway = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
-      expect(midway.status).toBe('cancelled');
+      expect(midway.status).toBe('cancelling');
       expect(midway.syncPath).toBe(syncFile);
-      expect(midway.errorReason).toBe(SYNC_SENTENCE);
+      expect(midway.errorReason).toBeNull();
       bail.release();
       await awaitInFlightJobs();
 
@@ -392,7 +402,7 @@ describe('cancel seams (#4223)', () => {
     }
   });
 
-  it('an mp3-folder cancelled during the swap after its sync copy: DELETE already reads the sync-folder sentence and the synced copy stays (#4228)', async () => {
+  it('an mp3-folder cancelled during the swap after its sync copy reads cancelling until the swap ends, then the sync-folder sentence, and the synced copy stays (#4228)', async () => {
     const syncRoot = mkdtempSync(join(tmpdir(), 'export-seam-folder-reason-'));
     try {
       await writeUserSettings({ exportSyncFolder: syncRoot });
@@ -403,9 +413,9 @@ describe('cancel seams (#4223)', () => {
       expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
       const syncDir = join(syncRoot, AUTHOR, TITLE);
       const afterDelete = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
-      expect(afterDelete.status).toBe('cancelled');
+      expect(afterDelete.status).toBe('cancelling');
       expect(afterDelete.syncPath).toBe(syncDir);
-      expect(afterDelete.errorReason).toBe(SYNC_SENTENCE);
+      expect(afterDelete.errorReason).toBeNull();
       swap.release();
       await awaitInFlightJobs();
 
@@ -453,10 +463,13 @@ describe('cancel seams (#4223)', () => {
     const second = await post('mp3-zip', 'download');
     await builder.entered;
     expect((await request(app).delete(`/api/books/${bookId}/exports/${second.id}`)).status).toBe(204);
+    expect((await request(app).get(`/api/books/${bookId}/exports/${second.id}`)).body.status).toBe('cancelling');
+    expect(readFileSync(flat).equals(firstBytes)).toBe(true);
     builder.release();
     await awaitInFlightJobs();
 
     expect(readFileSync(flat).equals(firstBytes)).toBe(true);
+    expect(ls(exportsDir()).filter((n) => n.includes('.staging-'))).toEqual([]);
     expect((await request(app).get(`/api/books/${bookId}/exports/${first.id}`)).body.status).toBe('done');
     const dl = await request(app)
       .get(`/api/books/${bookId}/exports/${first.id}/download`)
@@ -678,9 +691,9 @@ describe('cancel seams (#4223)', () => {
       const job = await post('mp3-folder', 'sync-folder');
       await copy.entered;
       expect((await request(app).delete(`/api/books/${bookId}/exports/${job.id}`)).status).toBe(204);
-      /* What the modal reads right after DELETE: cancelled, no syncPath yet, copy in flight. */
+      /* What the modal reads right after DELETE: cancelling, no syncPath yet, copy in flight. */
       const during = (await request(app).get(`/api/books/${bookId}/exports/${job.id}`)).body;
-      expect(during.status).toBe('cancelled');
+      expect(during.status).toBe('cancelling');
       expect(during.syncPath ?? null).toBeNull();
       expect(during.syncCopyInFlight).toBe(true);
       copy.release();
@@ -919,5 +932,178 @@ describe('cancel seams (#4223)', () => {
       rmSync(syncRoot, { recursive: true, force: true });
       await writeUserSettings({ exportSyncFolder: null });
     }
+  });
+});
+
+describe('cancel goes through cancelling and ends cancelled only once the work stops (srv-96, #2303)', () => {
+  const url = (id: string) => `/api/books/${bookId}/exports/${id}`;
+  const get = async (id: string) => (await request(app).get(url(id))).body;
+  const del = async (id: string) => (await request(app).delete(url(id))).status;
+  const privateEntries = () => ls(exportsDir()).filter((n) => n.includes('.partial-') || n.includes('.staging-'));
+  const manifestsDir = () => join(bookDir, '.audiobook', 'export-manifests');
+  const pause = () => new Promise((r) => setTimeout(r, 5));
+
+  /* A manifest left on disk by a process that no longer exists: nothing is building it. */
+  function writeLeftoverManifest(id: string, patch: Record<string, unknown>): void {
+    mkdirSync(manifestsDir(), { recursive: true });
+    writeFileSync(
+      join(manifestsDir(), `${id}.json`),
+      JSON.stringify({
+        id,
+        bookId,
+        format: 'mp3-zip',
+        destination: 'download',
+        status: 'in_progress',
+        filename: 'seam-book.zip',
+        sizeBytes: null,
+        progress: 0.5,
+        downloadUrl: null,
+        syncPath: null,
+        errorReason: null,
+        createdAt: new Date().toISOString(),
+        completedAt: null,
+        ...patch,
+      }),
+    );
+  }
+
+  it('DELETE while the builder is held answers 204 and the job reads cancelling with no completedAt', async () => {
+    const builder = seam.arm('builder');
+    const job = await post('mp3-zip', 'download');
+    await builder.entered;
+
+    expect(await del(job.id)).toBe(204);
+
+    const now = await get(job.id);
+    expect(now.status).toBe('cancelling');
+    expect(now.completedAt).toBeNull();
+    expect(now.errorReason).toBeNull();
+    expect(manifestOf(job.id).status).toBe('cancelling');
+    expect(manifestOf(job.id).completedAt).toBeNull();
+    builder.release();
+    await awaitInFlightJobs();
+  });
+
+  it('never shows cancelled while held: only after the build has torn down, with its private files gone', async () => {
+    const builder = seam.arm('builder');
+    /* The build's own teardown: the removal of its private `.partial-` file. */
+    const teardown = seam.arm('cancelRm');
+    const job = await post('mp3-zip', 'download');
+    await builder.entered;
+    expect(await del(job.id)).toBe(204);
+
+    for (let i = 0; i < 10; i++) {
+      expect((await get(job.id)).status, 'GET while the builder is still held after the abort').toBe('cancelling');
+      await pause();
+    }
+
+    builder.release();
+    await teardown.entered;
+    /* The builder has settled but its private file is still on disk. */
+    expect(privateEntries()).toHaveLength(1);
+    for (let i = 0; i < 10; i++) {
+      expect((await get(job.id)).status, 'GET while the private file is still being removed').toBe('cancelling');
+      await pause();
+    }
+
+    teardown.release();
+    let last = await get(job.id);
+    for (let i = 0; i < 400 && last.status !== 'cancelled'; i++) {
+      expect(last.status, 'GET between the release and the settle').toBe('cancelling');
+      await pause();
+      last = await get(job.id);
+    }
+    expect(last.status).toBe('cancelled');
+    expect(last.completedAt).toBeTruthy();
+    expect(last.errorReason).toBe('Cancelled by user.');
+    /* Read at the moment `cancelled` is first seen, before draining the job. */
+    expect(privateEntries()).toEqual([]);
+    expect(existsSync(join(exportsDir(), job.filename))).toBe(false);
+
+    await awaitInFlightJobs();
+    expect(manifestOf(job.id).status).toBe('cancelled');
+    expect(manifestOf(job.id).completedAt).toBe(last.completedAt);
+  });
+
+  it('a progress tick after DELETE does not turn cancelling back into in_progress', async () => {
+    const builder = seam.arm('builder');
+    const job = await post('mp3-zip', 'download');
+    await builder.entered;
+    expect(await del(job.id)).toBe(204);
+
+    expect(seam.state.progress).toBeTypeOf('function');
+    seam.state.progress!(0.9);
+
+    expect((await get(job.id)).status).toBe('cancelling');
+    builder.release();
+    await awaitInFlightJobs();
+    expect((await get(job.id)).status).toBe('cancelled');
+  });
+
+  it('a second DELETE while cancelling, and a DELETE after cancelled, answer 204 and change nothing', async () => {
+    const builder = seam.arm('builder');
+    const job = await post('mp3-zip', 'download');
+    await builder.entered;
+    expect(await del(job.id)).toBe(204);
+
+    const cancelling = await get(job.id);
+    const cancellingManifest = manifestOf(job.id);
+    expect(cancelling.status).toBe('cancelling');
+    expect(await del(job.id)).toBe(204);
+    expect(await get(job.id)).toEqual(cancelling);
+    expect(manifestOf(job.id)).toEqual(cancellingManifest);
+
+    builder.release();
+    await awaitInFlightJobs();
+
+    const cancelled = await get(job.id);
+    const cancelledManifest = manifestOf(job.id);
+    expect(cancelled.status).toBe('cancelled');
+    expect(await del(job.id)).toBe(204);
+    expect(await get(job.id)).toEqual(cancelled);
+    expect(manifestOf(job.id)).toEqual(cancelledManifest);
+  });
+
+  it('a manifest left at cancelling is served as cancelled after a restart', async () => {
+    const builder = seam.arm('builder');
+    const job = await post('mp3-zip', 'download');
+    await builder.entered;
+    expect(await del(job.id)).toBe(204);
+    expect(manifestOf(job.id).status).toBe('cancelling');
+
+    resetJobs();
+
+    const after = await get(job.id);
+    expect(after.status).toBe('cancelled');
+    expect(after.completedAt).toBeTruthy();
+    expect(after.errorReason).toBe('Cancelled by user.');
+    builder.release();
+    await awaitInFlightJobs();
+  });
+
+  it('a manifest left at cancelling with a landed sync copy says so after a restart', async () => {
+    writeLeftoverManifest('exp_leftcancel', {
+      status: 'cancelling',
+      destination: 'sync-folder',
+      syncPath: join(workspaceRoot, 'synced.zip'),
+    });
+
+    const after = await get('exp_leftcancel');
+
+    expect(after.status).toBe('cancelled');
+    expect(after.completedAt).toBeTruthy();
+    expect(after.errorReason).toBe('Cancelled by user. The files were already copied to the sync folder.');
+  });
+
+  it('DELETE of a leftover in_progress job with no running build ends cancelled at once, not stuck cancelling', async () => {
+    writeLeftoverManifest('exp_leftrunning', {});
+
+    expect(await del('exp_leftrunning')).toBe(204);
+
+    const after = await get('exp_leftrunning');
+    expect(after.status).toBe('cancelled');
+    expect(after.completedAt).toBeTruthy();
+    expect(after.errorReason).toBe('Cancelled by user.');
+    expect(manifestOf('exp_leftrunning').status).toBe('cancelled');
   });
 });

@@ -5,7 +5,7 @@ Issue: Castwright#3131 (chain #3118 → #2960 → #2435 → #2055). Worktree
 `docs/docs-3118-a26-wer-drift-sample`. Real hardware throughout — real
 Coqui/XTTS + real Whisper, real production `classifyTranscript()`, same
 technique as the prior 2-sample finding (`docs/testing/onbox-mechanical-batch2-results/step-3-content-correctness.md`,
-row A26, "False-positive control").
+row A26 (removed from the register 2026-11-28 by owner ruling, #4883), "False-positive control").
 
 ## Setup
 

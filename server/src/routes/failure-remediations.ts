@@ -74,7 +74,9 @@ export const FAILURE_REMEDIATIONS = {
       'Admin → Model Manager with a GEMINI_API_KEY. Then retry the chapter or resume the run.',
     helpDetail:
       'When GEMINI_API_KEY is set and Cloud fallback is on, an unreachable Ollama retries against Gemini, so this ' +
-      'error usually means no fallback was configured (check Cloud fallback in Admin → Model Manager), or both engines failed.',
+      'error usually means no fallback was configured (check Cloud fallback in Admin → Model Manager), or both engines failed. ' +
+      'If the analyzer is Gemini, this is a Google-side outage: retry the chapter or resume the run later. ' +
+      'Nothing in your setup needs changing.',
   },
   'analyzer-content-blocked': {
     userMessage:

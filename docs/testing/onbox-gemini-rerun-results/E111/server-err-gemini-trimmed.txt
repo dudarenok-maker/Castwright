@@ -1,0 +1,21 @@
+2026-11-28 09:20:38.123 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:20:38.127 [gemini] transient 503 unavailable — retrying in 1648ms (attempt 2/3)
+2026-11-28 09:22:11.649 [gemini] output truncated reason=MAX_TOKENS bytes=188 tokens=60 model=gemma-4-31b-it
+2026-11-28 09:22:38.667 [gemini] generate failed status=503 userTurnLength=8934 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:22:38.668 [gemini] transient 503 unavailable — retrying in 1718ms (attempt 2/3)
+2026-11-28 09:23:25.403 [gemini] stream idle 45000ms — retrying in 6533ms (attempt 3/3)
+2026-11-28 09:24:13.293 [gemini] output truncated reason=MAX_TOKENS bytes=187 tokens=60 model=gemma-4-31b-it
+2026-11-28 09:24:14.371 [gemini] generate failed status=503 userTurnLength=7011 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:24:14.380 [gemini] transient 503 unavailable — retrying in 1631ms (attempt 2/3)
+2026-11-28 09:24:38.765 [gemini] generate failed status=503 userTurnLength=7011 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:24:38.766 [gemini] transient 503 unavailable — retrying in 7159ms (attempt 3/3)
+2026-11-28 09:28:01.891 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:28:01.892 [gemini] transient 503 unavailable — retrying in 1403ms (attempt 2/3)
+2026-11-28 09:28:48.040 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 09:28:48.041 [gemini] transient 503 unavailable — retrying in 5077ms (attempt 3/3)
+2026-11-28 09:29:48.248 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 10:01:10.769 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 10:01:10.779 [gemini] transient 503 unavailable — retrying in 1639ms (attempt 2/3)
+2026-11-28 10:01:50.492 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"
+2026-11-28 10:01:50.501 [gemini] transient 503 unavailable — retrying in 5811ms (attempt 3/3)
+2026-11-28 10:03:03.582 [gemini] generate failed status=503 userTurnLength=25420 reason="503 UNAVAILABLE (high demand)"

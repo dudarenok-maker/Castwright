@@ -8844,22 +8844,30 @@ async function mockGetBookExport(_bookId: string, exportId: string): Promise<Boo
   return job;
 }
 
+/* How long a mock job reads `cancelling` before `cancelled`. Longer than the
+   800 ms export poll, so a mock-mode poller observes the in-between state. */
+const MOCK_EXPORT_CANCEL_MS = 1200;
+
 async function mockCancelBookExport(_bookId: string, exportId: string): Promise<void> {
   await wait(20);
-  const timers = MOCK_EXPORT_TIMERS.get(exportId);
-  if (timers) {
-    for (const t of timers) clearTimeout(t);
-    MOCK_EXPORT_TIMERS.delete(exportId);
-  }
   const job = MOCK_EXPORT_JOBS.get(exportId);
-  if (job && job.status !== 'done' && job.status !== 'failed' && job.status !== 'cancelled') {
-    MOCK_EXPORT_JOBS.set(exportId, {
-      ...job,
-      status: 'cancelled',
-      completedAt: new Date().toISOString(),
-      errorReason: 'Cancelled by user.',
-    });
-  }
+  /* Terminal jobs stay as they are. A job already cancelling keeps its pending
+     timer: clearing it would leave the job cancelling for good. */
+  if (!job || (job.status !== 'queued' && job.status !== 'in_progress')) return;
+  for (const t of MOCK_EXPORT_TIMERS.get(exportId) ?? []) clearTimeout(t);
+  MOCK_EXPORT_JOBS.set(exportId, { ...job, status: 'cancelling', errorReason: null });
+  MOCK_EXPORT_TIMERS.set(exportId, [
+    setTimeout(() => {
+      const j = MOCK_EXPORT_JOBS.get(exportId);
+      if (!j) return;
+      MOCK_EXPORT_JOBS.set(exportId, {
+        ...j,
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        errorReason: 'Cancelled by user.',
+      });
+    }, MOCK_EXPORT_CANCEL_MS),
+  ]);
 }
 
 /* Plan 67 — mock the slug minter so the design-fixture mode shows a

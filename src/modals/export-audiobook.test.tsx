@@ -10,12 +10,13 @@
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
-import { configureStore } from '@reduxjs/toolkit';
+import { configureStore, type Middleware } from '@reduxjs/toolkit';
 import { Provider } from 'react-redux';
 import { exportsSlice, exportsActions } from '../store/exports-slice';
+import { createExportPollMiddleware } from '../store/exports-middleware';
 import { accountSlice } from '../store/account-slice';
 import { uiSlice } from '../store/ui-slice';
-import { notificationsSlice } from '../store/notifications-slice';
+import { notificationsSlice, notificationsActions } from '../store/notifications-slice';
 import type { BookExportJob } from '../lib/types';
 
 /* qrcode resolves to a data: URL via a real toDataURL — keep it real, the
@@ -240,12 +241,40 @@ describe('ExportAudiobookModal', () => {
     });
   });
 
-  describe('cancel after a sync-folder copy (#4228)', () => {
-    async function cancelRunning(store: ReturnType<typeof makeStore>) {
-      mockedApi.createBookExport.mockResolvedValue(
-        makeJob({ id: 'exp_run', status: 'in_progress', progress: 0 }),
-      );
-      render(
+  /* #2303 — a cancelled export stays queued as `cancelling` until the server
+     says the work has stopped. The store carries the real poll middleware, so
+     these drive the whole click → poll → terminal path. */
+  describe('cancel keeps the job queued until the server reports it stopped (#2303)', () => {
+    function makePollingStore() {
+      const pushedToasts: string[] = [];
+      /* Counts pushes: the toast's dedupeKey would hide a second one in state. */
+      const recordToasts: Middleware = () => (next) => (action) => {
+        if (notificationsActions.pushToast.match(action)) pushedToasts.push(action.payload.message);
+        return next(action);
+      };
+      const store = configureStore({
+        reducer: {
+          exports: exportsSlice.reducer,
+          account: accountSlice.reducer,
+          ui: uiSlice.reducer,
+          notifications: notificationsSlice.reducer,
+        },
+        middleware: (gd) =>
+          gd().concat(recordToasts, createExportPollMiddleware({ intervalMs: 20 })),
+      });
+      return { store, pushedToasts };
+    }
+    type PollingStore = ReturnType<typeof makePollingStore>['store'];
+
+    const queuedJob = (store: PollingStore) =>
+      (store.getState().exports.byBookId['demo__sa__test'] ?? []).find((j) => j.id === 'exp_run');
+    const runJob = (overrides: Partial<BookExportJob>) => makeJob({ id: 'exp_run', ...overrides });
+    /* Several poll intervals, for asserting that something does NOT happen. */
+    const severalPolls = () => act(() => new Promise<void>((r) => setTimeout(r, 120)));
+
+    async function cancelRunning(store: PollingStore) {
+      mockedApi.createBookExport.mockResolvedValue(runJob({ status: 'in_progress', progress: 0 }));
+      const view = render(
         <Provider store={store}>
           <ExportAudiobookModal open={true} bookId="demo__sa__test" onClose={vi.fn()} />
         </Provider>,
@@ -261,78 +290,93 @@ describe('ExportAudiobookModal', () => {
         expect(screen.queryByTestId('export-active-job')).toBeNull();
         expect(screen.getByTestId('export-submit')).toBeInTheDocument();
       });
+      return view;
     }
 
-    it('toasts the sync path when the cancelled job already has one', async () => {
+    it('keeps the job as cancelling, then removes it once the poll reports cancelled', async () => {
+      let served = runJob({ status: 'cancelling' });
+      mockedApi.getBookExport.mockImplementation(async () => served);
+      const { store, pushedToasts } = makePollingStore();
+      await cancelRunning(store);
+
+      await waitFor(() => expect(queuedJob(store)?.status).toBe('cancelling'));
+      await severalPolls();
+      expect(queuedJob(store)?.status).toBe('cancelling');
+
+      served = runJob({ status: 'cancelled' });
+      await waitFor(() => expect(queuedJob(store)).toBeUndefined());
+      expect(pushedToasts).toEqual([]);
+    });
+
+    /* A sync-folder copy cannot be stopped: the job stays `cancelling` until it
+       ends, and `syncPath` says whether the files landed (#4228). */
+    it('pushes the sync-folder toast exactly once, even with the modal gone', async () => {
+      let served = runJob({ status: 'cancelling', syncPath: null, syncCopyInFlight: true });
+      mockedApi.getBookExport.mockImplementation(async () => served);
+      const { store, pushedToasts } = makePollingStore();
+      const view = await cancelRunning(store);
+      await waitFor(() => expect(queuedJob(store)?.status).toBe('cancelling'));
+      view.unmount();
+      expect(pushedToasts).toEqual([]);
+
+      served = runJob({ status: 'cancelled', syncPath: '/sync/A/Book' });
+      await waitFor(() => expect(queuedJob(store)).toBeUndefined());
+      await severalPolls();
+      expect(pushedToasts).toEqual([
+        'Export cancelled, but its files were already copied to your sync folder (/sync/A/Book).',
+      ]);
+    });
+
+    it('removes and toasts a job that already reads cancelled on the first read', async () => {
       mockedApi.getBookExport.mockResolvedValue(
-        makeJob({ id: 'exp_run', status: 'cancelled', syncPath: '/sync/A/Book' }),
+        runJob({ status: 'cancelled', syncPath: '/sync/A/Book' }),
       );
-      const store = makeStore();
+      const { store, pushedToasts } = makePollingStore();
       await cancelRunning(store);
-      await waitFor(() => {
-        const toasts = store.getState().notifications.toasts;
-        expect(toasts).toHaveLength(1);
-        expect(toasts[0].message).toContain('/sync/A/Book');
-      });
+      await waitFor(() => expect(queuedJob(store)).toBeUndefined());
+      await severalPolls();
+      expect(pushedToasts).toHaveLength(1);
+      expect(pushedToasts[0]).toContain('/sync/A/Book');
     });
 
-    it('keeps following a cancelled job whose sync copy is in flight, then toasts the landed sync path', async () => {
-      /* The real ordering: DELETE returns while the un-cancellable copy runs, so
-         the first read has no syncPath; a later read has it. */
+    it('does not bring back a job the poll removed while the click-time read was pending', async () => {
+      let answerClickRead: (job: BookExportJob) => void = () => {};
       mockedApi.getBookExport
-        .mockResolvedValueOnce(
-          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: true }),
+        .mockImplementationOnce(
+          () => new Promise<BookExportJob>((resolve) => (answerClickRead = resolve)),
         )
-        .mockResolvedValue(
-          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: '/sync/A/Book', syncCopyInFlight: false }),
+        .mockResolvedValue(runJob({ status: 'cancelled' }));
+      const { store } = makePollingStore();
+      await cancelRunning(store);
+      await waitFor(() => expect(queuedJob(store)).toBeUndefined());
+
+      await act(async () => answerClickRead(runJob({ status: 'cancelling' })));
+      expect(queuedJob(store)).toBeUndefined();
+    });
+
+    it.each(['done', 'failed'] as const)(
+      'keeps a job that ends %s after the click, with no cancel toast',
+      async (outcome) => {
+        mockedApi.getBookExport.mockResolvedValue(
+          runJob({ status: outcome, syncPath: '/sync/A/Book' }),
         );
-      const store = makeStore();
-      await cancelRunning(store);
-      expect(store.getState().notifications.toasts).toHaveLength(0);
-      await waitFor(
-        () => {
-          const toasts = store.getState().notifications.toasts;
-          expect(toasts).toHaveLength(1);
-          expect(toasts[0].message).toContain('/sync/A/Book');
-        },
-        { timeout: 4000 },
-      );
-      expect(mockedApi.getBookExport).toHaveBeenCalledTimes(2);
-    });
+        const { store, pushedToasts } = makePollingStore();
+        await cancelRunning(store);
+        await waitFor(() => expect(queuedJob(store)?.status).toBe(outcome));
+        await severalPolls();
+        expect(queuedJob(store)?.status).toBe(outcome);
+        expect(pushedToasts).toEqual([]);
+      },
+    );
 
-    it('shows no toast when the in-flight copy finishes without landing a sync path', async () => {
-      mockedApi.getBookExport
-        .mockResolvedValueOnce(
-          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: true }),
-        )
-        .mockResolvedValue(
-          makeJob({ id: 'exp_run', status: 'cancelled', syncPath: null, syncCopyInFlight: false }),
-        );
-      const store = makeStore();
+    it('returns to the picker and keeps the job queued when the cancel and the reads fail', async () => {
+      mockedApi.cancelBookExport.mockRejectedValueOnce(new Error('offline'));
+      mockedApi.getBookExport.mockRejectedValue(new Error('offline'));
+      const { store, pushedToasts } = makePollingStore();
       await cancelRunning(store);
-      await waitFor(() => expect(mockedApi.getBookExport).toHaveBeenCalledTimes(2), { timeout: 4000 });
-      expect(store.getState().notifications.toasts).toHaveLength(0);
-    });
-
-    it('shows no toast when the cancelled job has no sync path', async () => {
-      mockedApi.getBookExport.mockResolvedValue(
-        makeJob({ id: 'exp_run', status: 'cancelled', syncPath: undefined }),
-      );
-      const store = makeStore();
-      await cancelRunning(store);
-      await waitFor(() => expect(mockedApi.getBookExport).toHaveBeenCalled());
-      expect(store.getState().notifications.toasts).toHaveLength(0);
-    });
-
-    it('still dismisses with no toast when the job read fails', async () => {
-      mockedApi.getBookExport.mockRejectedValue(new Error('gone'));
-      const store = makeStore();
-      await cancelRunning(store);
-      await waitFor(() => {
-        const jobs = store.getState().exports.byBookId['demo__sa__test'] ?? [];
-        expect(jobs.find((j) => j.id === 'exp_run')).toBeUndefined();
-      });
-      expect(store.getState().notifications.toasts).toHaveLength(0);
+      await severalPolls();
+      expect(queuedJob(store)?.status).toBe('in_progress');
+      expect(pushedToasts).toEqual([]);
     });
   });
 

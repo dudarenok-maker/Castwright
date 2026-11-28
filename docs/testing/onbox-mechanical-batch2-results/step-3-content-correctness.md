@@ -28,7 +28,7 @@ was killed and relaunched cleanly, per the same-worktree-own-process
 convention documented elsewhere in this results file's own earlier runs — no
 other lane's process was touched.
 
-## Row A26 — Catastrophic-WER override on a real Coqui language-collapse (#2055, source #2026)
+## Row A26 — Catastrophic-WER override on a real Coqui language-collapse (#2055, source #2026) — removed from the register 2026-11-28 by owner ruling, #4883
 
 **Method:** drove the sidecar's raw `/synthesize` (`engine:"coqui"`,
 `model:"xtts_v2"`, `voice:"Damien Black"`, `language:"ru"`) and `/transcribe`

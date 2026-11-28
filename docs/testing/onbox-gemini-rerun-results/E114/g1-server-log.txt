@@ -1,0 +1,38 @@
+2026-11-28 14:38:58.583 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it
+2026-11-28 14:38:58.585 [analysis] failed {
+  manuscriptId: 'mns_9KPUzOXgNw',
+  lastStep: 'phase=0 Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting.',
+  model: 'gemma-4-31b-it',
+  name: 'AnalyzerReasoningOverflowError',
+  status: undefined,
+  upstreamStatus: undefined,
+  upstreamCode: undefined,
+  message: 'gemini gemma-4-31b-it used its whole output budget on reasoning (1197 reasoning tokens) and returned no answer — splitting the chunk cannot shrink reasoning.',
+  details: undefined
+}
+
+2026-11-28 14:43:07.535 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it
+2026-11-28 14:43:07.536 [analysis] failed {
+  manuscriptId: 'mns_NusxoxNuc1',
+  lastStep: 'phase=1 Running 1 chapter with up to 2 in parallel.',
+  model: 'gemma-4-31b-it',
+  name: 'AnalyzerReasoningOverflowError',
+  status: undefined,
+  upstreamStatus: undefined,
+  upstreamCode: undefined,
+  message: 'gemini gemma-4-31b-it used its whole output budget on reasoning and returned no answer — splitting the chunk cannot shrink reasoning.',
+  details: undefined
+}
+
+2026-11-28 14:44:17.777 [gemini] output truncated reason=MAX_TOKENS bytes=0 model=gemma-4-31b-it
+2026-11-28 14:44:17.779 [analysis] failed {
+  manuscriptId: 'mns_d9WdjVlnFr',
+  lastStep: 'phase=1 Running 1 chapter with up to 2 in parallel.',
+  model: 'gemma-4-31b-it',
+  name: 'AnalyzerReasoningOverflowError',
+  status: undefined,
+  upstreamStatus: undefined,
+  upstreamCode: undefined,
+  message: 'gemini gemma-4-31b-it used its whole output budget on reasoning and returned no answer — splitting the chunk cannot shrink reasoning.',
+  details: undefined
+}

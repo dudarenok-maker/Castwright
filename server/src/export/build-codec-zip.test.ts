@@ -7,10 +7,19 @@
    gap this round's crash-fix work surfaced (see the last test below) and
    closes alongside it, rather than leaving the module untested. */
 
-import { mkdtempSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import {
+  mkdtempSync,
+  mkdirSync,
+  readdirSync,
+  readFileSync,
+  renameSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs';
+import { getEventListeners } from 'node:events';
 import type { FileHandle } from 'node:fs/promises';
 import { tmpdir } from 'node:os';
-import { join } from 'node:path';
+import { basename, join } from 'node:path';
 import { describe, expect, it, beforeAll, afterAll, vi } from 'vitest';
 import { buildCodecZip } from './build-codec-zip.js';
 import { ExportIncompleteError } from './build-mp3-zip.js';
@@ -58,6 +67,32 @@ let raceHook: { path: string; replacement: Buffer } | null = null;
 const openedHandles: FileHandle[] = [];
 /* Path whose handle's read stream errors right after creation. */
 let readErrorPath: string | null = null;
+/* Source-read meter for the cancel tests: every file the builder opens under
+   `dir`, and the cumulative bytes those files' read streams emit. It counts by
+   wrapping `emit`, so unlike a 'data' listener it never starts a stream
+   flowing on its own. */
+interface SourceMeter {
+  dir: string;
+  opened: string[];
+  bytes: number;
+  onBytes?: () => void;
+}
+let sourceMeter: SourceMeter | null = null;
+function meterHandle(meter: SourceMeter, handle: FileHandle): void {
+  const create = handle.createReadStream.bind(handle);
+  handle.createReadStream = ((...a: Parameters<typeof create>) => {
+    const rs = create(...a);
+    const emit = rs.emit.bind(rs);
+    rs.emit = ((event: string | symbol, ...args: unknown[]) => {
+      if (event === 'data') {
+        meter.bytes += (args[0] as Buffer).length;
+        meter.onBytes?.();
+      }
+      return emit(event, ...args);
+    }) as typeof rs.emit;
+    return rs;
+  }) as typeof handle.createReadStream;
+}
 function fireRace(path: unknown): void {
   if (!raceHook || path !== raceHook.path) return;
   const { replacement } = raceHook;
@@ -83,6 +118,10 @@ vi.mock('node:fs/promises', async (importOriginal) => {
       fireRace(args[0]);
       const h = await real.open(...args);
       openedHandles.push(h);
+      if (sourceMeter && String(args[0]).startsWith(sourceMeter.dir)) {
+        sourceMeter.opened.push(String(args[0]));
+        meterHandle(sourceMeter, h);
+      }
       if (readErrorPath === args[0]) {
         const create = h.createReadStream.bind(h);
         h.createReadStream = ((...a: Parameters<typeof create>) => {
@@ -294,17 +333,11 @@ describe('buildCodecZip', () => {
      first onProgress): settled at 65584 bytes, grew to 41943104 bytes 200ms
      later — a fully-completed build despite the "abort".
 
-     What actually stops the growth today: `signal?.throwIfAborted()`
-     throwing on the NEXT loop iteration reaches `createZipWritePipeline`'s
+     What stops the growth: the abort reaches `createZipWritePipeline`'s
      `rejectBuild`, which unpipes `zip.outputStream` from the write stream
      and destroys it — bytes stop reaching disk immediately, which is what
-     this test measures. (A third review pass found and removed a SEPARATE
-     mechanism that used to also destroy whichever chapter read stream was
-     most recently tracked, on abort — it didn't hold up: the loop
-     registers entries far faster than yazl's pump consumes them, so the
-     tracked stream was typically the wrong one and destroying it was a
-     no-op for the pump. That removal doesn't affect this test — the write
-     side, not the read side, is what keeps the file's size flat.) Large-ish
+     this test measures. The source reads are measured separately, in the
+     "cancel stops the source reads" tests below. Large-ish
      (2 MB) fixtures + a real 150ms settle window make growth observable if
      the write-side teardown regresses — a fixture too small could pass
      vacuously (already fully flushed before either sample). */
@@ -480,5 +513,131 @@ describe('buildCodecZip', () => {
       await new Promise((r) => setTimeout(r, 20));
     }
     expect(openedHandles.map((h) => h.fd)).toEqual(openedHandles.map(() => -1));
+  });
+});
+
+/* Cancel stops at the chapter boundary (#2303). Measured on what is READ from
+   the source files: a flat output file only shows that writes stopped, which is
+   how an earlier abort path looked fixed while yazl kept pumping. Chapters are
+   a few MB each so the pump is still inside a chapter when the abort lands. */
+describe('buildCodecZip — cancel stops the source reads', () => {
+  const chapterCount = 6;
+  const chapterBytes = 4 * 1024 * 1024;
+  let tmpRoot: string;
+  let bookDir: string;
+  const state: BookStateJson = {
+    ...makeState(),
+    chapters: Array.from({ length: chapterCount }, (_, i) => ({
+      id: i + 1,
+      title: `Chapter ${i + 1}`,
+      slug: `0${i + 1}-chapter-${i + 1}`,
+    })),
+  };
+
+  beforeAll(() => {
+    tmpRoot = mkdtempSync(join(tmpdir(), 'build-codec-zip-cancel-'));
+    bookDir = join(tmpRoot, 'book');
+    mkdirSync(join(bookDir, 'audio'), { recursive: true });
+    for (const c of state.chapters) {
+      writeFileSync(join(bookDir, 'audio', `${c.slug}.m4a`), Buffer.alloc(chapterBytes, c.id));
+    }
+  });
+
+  afterAll(() => {
+    rmSync(tmpRoot, { recursive: true, force: true });
+  });
+
+  function stagingDirsFor(outPath: string): string[] {
+    return readdirSync(tmpRoot).filter((n) => n.startsWith(`${basename(outPath)}.staging-`));
+  }
+
+  /* Chapter 1: the abort lands while the loop is waiting to register chapter 2.
+     Chapter 6: it lands after the last registration, when only the pipeline's
+     own abort handling can stop the read. */
+  it.each([1, chapterCount])(
+    'cancel during chapter %i: opens no later chapter and reads nothing after the promise settles',
+    async (inFlight) => {
+      const outPath = join(tmpRoot, `cancel-${inFlight}.m4a.zip`);
+      const readBeforeInFlight = (inFlight - 1) * chapterBytes;
+      const controller = new AbortController();
+      const meter: SourceMeter = { dir: bookDir, opened: [], bytes: 0 };
+      let abortScheduled = false;
+      /* Abort half way through the chapter in flight. */
+      meter.onBytes = () => {
+        if (abortScheduled || meter.bytes < readBeforeInFlight + chapterBytes / 2) return;
+        abortScheduled = true;
+        setImmediate(() => controller.abort());
+      };
+      const escaped: unknown[] = [];
+      const onEscape = (err: unknown) => {
+        escaped.push(err);
+      };
+      process.on('uncaughtException', onEscape);
+      process.on('unhandledRejection', onEscape);
+      openedHandles.length = 0;
+      sourceMeter = meter;
+      try {
+        const rejection = await buildCodecZip({
+          bookDir,
+          state,
+          outPath,
+          format: 'aac-m4a',
+          signal: controller.signal,
+        }).then(
+          () => null,
+          (e: unknown) => e,
+        );
+        const bytesAtSettle = meter.bytes;
+        const fdsAtSettle = openedHandles.map((h) => h.fd);
+        const stagingAtSettle = stagingDirsFor(outPath);
+        await new Promise((r) => setTimeout(r, 1500));
+
+        expect((rejection as Error | null)?.name).toBe('AbortError');
+        // (a) nothing past the chapter in flight at abort was ever opened.
+        expect(meter.opened).toEqual(
+          state.chapters.slice(0, inFlight).map((c) => join(bookDir, 'audio', `${c.slug}.m4a`)),
+        );
+        // (b) the pump was idle by the time the promise settled.
+        expect(meter.bytes - bytesAtSettle).toBe(0);
+        // The in-flight chapter was cut off, not drained to its end.
+        expect(bytesAtSettle).toBeGreaterThanOrEqual(readBeforeInFlight + chapterBytes / 2);
+        expect(bytesAtSettle).toBeLessThan(readBeforeInFlight + chapterBytes);
+        // Every handle was already closed when the promise settled.
+        expect(fdsAtSettle).toEqual(Array(inFlight).fill(-1));
+        // (d) no staging directory left behind.
+        expect(stagingAtSettle).toEqual([]);
+        expect(escaped).toEqual([]);
+      } finally {
+        sourceMeter = null;
+        process.off('uncaughtException', onEscape);
+        process.off('unhandledRejection', onEscape);
+      }
+    },
+  );
+
+  it('control: an uncancelled build opens every chapter and reads all of it', async () => {
+    const outPath = join(tmpRoot, 'control.m4a.zip');
+    const controller = new AbortController();
+    const meter: SourceMeter = { dir: bookDir, opened: [], bytes: 0 };
+    sourceMeter = meter;
+    try {
+      await buildCodecZip({
+        bookDir,
+        state,
+        outPath,
+        format: 'aac-m4a',
+        signal: controller.signal,
+      });
+    } finally {
+      sourceMeter = null;
+    }
+    expect(meter.opened).toHaveLength(chapterCount);
+    expect(meter.bytes).toBe(chapterCount * chapterBytes);
+    const entries = readZipEntries(readFileSync(outPath));
+    expect(entries.map((e) => e.data.length)).toEqual(Array(chapterCount).fill(chapterBytes));
+    expect(entries.every((e, i) => e.data.equals(Buffer.alloc(chapterBytes, i + 1)))).toBe(true);
+    // Waiting between chapters leaves nothing attached to the caller's signal.
+    expect(getEventListeners(controller.signal, 'abort')).toHaveLength(0);
+    expect(stagingDirsFor(outPath)).toEqual([]);
   });
 });

@@ -48,6 +48,11 @@ export function ExportQueueRow({ item, onDownload, onCopyLink, onRetry, onRemove
         <IconSpinner className="w-3.5 h-3.5" /> Running…
       </span>
     ),
+    cancelling: (
+      <span className="inline-flex items-center gap-1.5 text-ink/60">
+        <IconSpinner className="w-3.5 h-3.5" /> Cancelling…
+      </span>
+    ),
     failed: (
       <span className="inline-flex items-center gap-1.5 text-rose-600">
         <IconWarning className="w-3.5 h-3.5" /> Failed
