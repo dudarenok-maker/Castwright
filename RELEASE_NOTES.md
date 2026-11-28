@@ -55,6 +55,7 @@
 - **On a phone, Help, Theme and Account now live in the menu.** The top bar used to push them off the edge of the screen. They sit in the menu instead, and the analysing screen has a menu button too.
 - **The QA report no longer offers to resume a voice check that is switched off.** It now says Render-integrity QA (voice match) is off, and points you to Advanced settings → Per-sentence QA gates to turn it on.
 - **Russian pronouns like «ей» and «его» are no longer flagged as missing characters.** Castwright's cast check used to mistake a sentence that began with one of these words for a speaker you hadn't added. It now leaves them alone and still flags real unlisted speakers.
+- **Russian books no longer show a sentence-opening adverb like «Осторожно» as a missing speaker.** Castwright now leaves five of these words alone and still flags real unlisted speakers.
 - **The Voices page no longer shows a drag handle on voice cards that did nothing, or lets you drag them.** Voice cards look the same otherwise, and you still assign voices from the Cast screen.
 - **A steadier QR scanner when you pair the Android app.** The companion app's pairing scanner now shows its "camera unavailable" screen instead of closing if the camera fails to start, no longer stops reading codes after a stuck camera frame, and no longer crashes if you back out right as it opens.
 

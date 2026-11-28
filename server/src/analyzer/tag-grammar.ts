@@ -55,6 +55,10 @@ const RU_STOPWORDS = [
   // only after a preposition so they never open a tag, and this list also gates roster
   // resolution (narrator-line recovery, the minor-cast fold), where «Ней» (Marshal Ney) is a name.
   'его', 'ему', 'им', 'ими', 'их', 'её', 'ее', 'ей', 'ею',
+  // -о manner adverbs observed opening a sentence before a speech verb in the «Ночной дозор»
+  // manuscript (#2369 part 2). Owner decision: an exact table, not a suffix rule, erring toward
+  // not suppressing a real name.
+  'осторожно', 'честно', 'хорошо', 'неохотно', 'глухо',
 ] as const;
 const FR_VERBS = [
   'dit', 'demanda', 'répondit', 'répliqua', 'ajouta', 'cria', 'murmura',

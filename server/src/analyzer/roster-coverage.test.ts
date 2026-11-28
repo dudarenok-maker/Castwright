@@ -338,6 +338,18 @@ describe('roster guard — localized detection (es/ru/fr/de) #1051', () => {
     const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
     expect(res.missingSpeakers.map((s) => s.name)).toContain('Гесер');
   });
+  const RU_OBSERVED_ADVERBS = ['осторожно', 'честно', 'хорошо', 'неохотно', 'глухо'];
+  it.each(RU_OBSERVED_ADVERBS)('does NOT flag a Russian adverb "%s" before a speech verb (stopword, #2369)', (adverb: string) => {
+    const w = adverb[0].toUpperCase() + adverb.slice(1);
+    const body = `${w} сказал маг, и в амулете остался один заряд. ${w} сказала Ольга, что всё иначе.`;
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).not.toContain(w);
+  });
+  it('still flags a genuine unrostered Russian speaker despite the adverb stopwords (#2369 control)', () => {
+    const body = 'Осторожно сказал маг. «Слушай», — сказал Гесер мне в детстве.';
+    const res = validateRosterCoverage(body, new Set<string>(['Мара']), DEFAULT_ROSTER_COVERAGE_THRESHOLDS, 'ru');
+    expect(res.missingSpeakers.map((s) => s.name)).toContain('Гесер');
+  });
 });
 
 describe('validateAttributionCoverage — localized half-state (es/ru) #1051', () => {
