@@ -53,7 +53,9 @@
       "name": "Olga",
       "role": "minor",
       "color": "#444444",
-      "voiceState": "generated"
+      "voiceState": "generated",
+      "lines": 0,
+      "scenes": 0
     },
     {
       "id": "boris",
