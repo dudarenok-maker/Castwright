@@ -10,8 +10,16 @@
    merely because this test imports the module). */
 
 import { describe, it, expect, vi, afterEach } from 'vitest';
-import { readFileSync } from 'node:fs';
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import {
+  readServerOwner,
+  serverOwnerPath,
+  writeServerOwner,
+} from '../../scripts/lib/server-owner.mjs';
+import { listenWithAutoRebind, type RebindServer } from './crash-logging.js';
 
 /* #3174 (G4) — bootWarmUserSettings() calls the real (module-level)
    readUserSettings import, so forcing its malformed-file throw needs the
@@ -39,6 +47,7 @@ import {
   bootWarmUserSettings,
   bootStartSidecarSupervisor,
   bootRepairDuplicateBookIds,
+  publishServerOwnerMarker,
   type ShutdownDeps,
 } from './index.js';
 
@@ -48,6 +57,10 @@ function makeDeps(overrides: Partial<ShutdownDeps> = {}): {
 } {
   const calls: string[] = [];
   const deps: ShutdownDeps = {
+    releaseServerOwner: vi.fn(() => {
+      calls.push('releaseServerOwner');
+    }),
+    boundPort: 8443,
     releaseSidecarOwnership: vi.fn(() => {
       calls.push('releaseSidecarOwnership');
     }),
@@ -80,6 +93,7 @@ describe('runShutdownSequence (#1366)', () => {
     const { deps } = makeDeps();
     await runShutdownSequence(deps);
 
+    expect(deps.releaseServerOwner).toHaveBeenCalledTimes(1);
     expect(deps.releaseSidecarOwnership).toHaveBeenCalledTimes(1);
     expect(deps.allowSleep).toHaveBeenCalledTimes(1);
     expect(deps.sidecarSupervisor!.stop).toHaveBeenCalledTimes(1);
@@ -94,16 +108,41 @@ describe('runShutdownSequence (#1366)', () => {
     expect(deps.releaseSidecarOwnership).toHaveBeenCalledWith('/some/other/.run');
   });
 
-  it('releases sidecar ownership and drops the sleep lock before reaping the sidecar/mDNS/port-forwarder handles', async () => {
+  it('releases the owner marker for the bound port from runDir (#3264)', async () => {
+    const { deps } = makeDeps({ runDir: '/some/other/.run', boundPort: 8445 });
+    await runShutdownSequence(deps);
+
+    expect(deps.releaseServerOwner).toHaveBeenCalledWith('/some/other/.run', 8445);
+  });
+
+  it('skips the owner-marker release when the server never listened, and still runs every other teardown (#3264)', async () => {
+    const { deps, calls } = makeDeps({ boundPort: null });
+    await runShutdownSequence(deps);
+
+    expect(deps.releaseServerOwner).not.toHaveBeenCalled();
+    expect(calls).toEqual([
+      'releaseSidecarOwnership',
+      'allowSleep',
+      'sidecarSupervisor.stop',
+      'mdnsResponderHandle.kill',
+      'portForwarderHandle.close',
+    ]);
+  });
+
+  it('releases the owner marker and sidecar ownership and drops the sleep lock before reaping the sidecar/mDNS/port-forwarder handles', async () => {
     const { deps, calls } = makeDeps();
     await runShutdownSequence(deps);
 
-    // releaseSidecarOwnership and allowSleep are synchronous and must run,
-    // in order, before the async reap/kill/close calls are even invoked.
-    expect(calls.slice(0, 2)).toEqual(['releaseSidecarOwnership', 'allowSleep']);
+    // The two releases and allowSleep are synchronous and must run, in order,
+    // before the async reap/kill/close calls are even invoked.
+    expect(calls.slice(0, 3)).toEqual([
+      'releaseServerOwner',
+      'releaseSidecarOwnership',
+      'allowSleep',
+    ]);
     // The remaining three (sidecar reap, mDNS kill, port-forwarder close) are
     // invoked in this order and all awaited via Promise.all before resolving.
-    expect(calls.slice(2)).toEqual([
+    expect(calls.slice(3)).toEqual([
       'sidecarSupervisor.stop',
       'mdnsResponderHandle.kill',
       'portForwarderHandle.close',
@@ -161,6 +200,122 @@ describe('runShutdownSequence (#1366)', () => {
     expect(sidecarResolved).toBe(true);
     expect(mdnsResolved).toBe(true);
     expect(forwarderResolved).toBe(true);
+  });
+});
+
+describe('server owner marker (#3264)', () => {
+  const roots: string[] = [];
+  const tempDir = (): string => {
+    const dir = mkdtempSync(join(tmpdir(), 'index-owner-'));
+    roots.push(dir);
+    return dir;
+  };
+  afterEach(() => {
+    for (const dir of roots.splice(0)) rmSync(dir, { recursive: true, force: true });
+  });
+
+  /** A server whose `busyPort` is taken: binding it fails with EADDRINUSE. */
+  function serverWithBusyPort(busyPort: number): RebindServer {
+    let onError: (err: NodeJS.ErrnoException) => void = () => {};
+    let onListening: () => void = () => {};
+    let port = 0;
+    return {
+      on: (_event, cb) => {
+        onError = cb;
+      },
+      once: (_event, cb) => {
+        onListening = cb;
+      },
+      listen: (requested) => {
+        port = requested;
+        if (requested === busyPort) {
+          onError(Object.assign(new Error('in use'), { code: 'EADDRINUSE' }));
+        } else {
+          onListening();
+        }
+      },
+      address: () => ({ port, address: '127.0.0.1', family: 'IPv4' }),
+    };
+  }
+
+  it('after an auto-rebind, marks the port actually bound and not the requested one', () => {
+    const runDir = tempDir();
+
+    listenWithAutoRebind(serverWithBusyPort(8080), {
+      startPort: 8080,
+      autoRebind: true,
+      onLog: () => {},
+      onListening: (port) => publishServerOwnerMarker({ runDir, port, https: true }),
+    });
+
+    expect(readServerOwner(runDir, 8081)).toMatchObject({
+      pid: process.pid,
+      port: 8081,
+      https: true,
+    });
+    expect(existsSync(serverOwnerPath(runDir, 8080))).toBe(false);
+  });
+
+  it('reaps the markers of dead servers as it publishes its own', () => {
+    const runDir = tempDir();
+    // Above every platform's pid range, so no live process can hold it.
+    writeServerOwner({ runDir, port: 8090, https: false, pid: 2 ** 31 - 1 });
+
+    publishServerOwnerMarker({ runDir, port: 8080, https: false });
+
+    expect(existsSync(serverOwnerPath(runDir, 8090))).toBe(false);
+    expect(existsSync(serverOwnerPath(runDir, 8080))).toBe(true);
+  });
+
+  it('a failed write logs one line and never throws', () => {
+    // A run dir that is really a file: it can be neither created nor written into.
+    const runDir = join(tempDir(), 'not-a-dir');
+    writeFileSync(runDir, '');
+    const warnSpy = vi.spyOn(console, 'warn').mockImplementation(() => {});
+    try {
+      expect(() => publishServerOwnerMarker({ runDir, port: 8080, https: false })).not.toThrow();
+      expect(warnSpy).toHaveBeenCalledTimes(1);
+      expect(warnSpy.mock.calls[0][0]).toContain(
+        '[server] could not write the owner marker for port 8080',
+      );
+    } finally {
+      warnSpy.mockRestore();
+    }
+  });
+
+  /* listenerCallback is local to main(), which cannot run here (it binds a port),
+     so pin its wiring in the source. */
+  const source = readFileSync(fileURLToPath(new URL('./index.ts', import.meta.url)), 'utf8');
+  const between = (from: string, to: string): string => {
+    const start = source.indexOf(from);
+    const end = source.indexOf(to, start);
+    expect(start, `${from} not found in index.ts`).toBeGreaterThan(-1);
+    expect(end, `${to} not found after ${from}`).toBeGreaterThan(start);
+    return source.slice(start, end);
+  };
+
+  it('listenerCallback publishes and remembers the port it was handed, only after enforceSingleSidecarOwner could have exited and before the slow boot work', () => {
+    const publish = /publishServerOwnerMarker\(\{\s*runDir,\s*port: listenPort,\s*https: lanHttps,?\s*\}\)/;
+    const beforeEnforce = between(
+      'const listenerCallback = (listenPort: number)',
+      'enforceSingleSidecarOwner(',
+    );
+    const afterEnforce = between(
+      'enforceSingleSidecarOwner({ runDir });',
+      'sidecarSupervisor = createSidecarSupervisor(',
+    );
+
+    // A marker published ahead of the exit would announce a server that is dying.
+    expect(beforeEnforce).not.toMatch(publish);
+    expect(afterEnforce).toMatch(publish);
+    expect(afterEnforce).toContain('ownerMarkerPort = listenPort;');
+  });
+
+  it('shutdown() releases the marker of the remembered port', () => {
+    const shutdownBody = between('function shutdown(signal', 'isDirectlyInvoked(import.meta.url)');
+
+    expect(shutdownBody).toMatch(/releaseServerOwner,/);
+    expect(shutdownBody).toContain('boundPort: ownerMarkerPort,');
   });
 });
 

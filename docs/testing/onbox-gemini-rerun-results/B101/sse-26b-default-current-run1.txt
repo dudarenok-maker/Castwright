@@ -1,0 +1,21 @@
+# start 2026-11-28 14:57:46 +11:00 POST /api/manuscripts/mns_GomuRovAHW/analysis {model:gemma-4-26b-a4b-it,fresh:true}
+# HTTP 200
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 5 characters in 4m 22s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Detected 5 characters: Narrator, Oduvan, Wren, Maerin, Coalfall"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 4m 22s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 4m 22s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~21m 49s) via Gemma 4 26B…"}
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemma 4 26B spent its whole output budget reasoning on chapter \"Chapter One — The Knock\" and returned no answer, so the analysis stopped.","code":"analyzer-reasoning-overflow","remediation":"Reasoning: the Gemini reasoning setting for gemma-4-26b-a4b-it (Advanced settings → Analyzer request controls; sent as thinkingLevel — \"off\" sends MINIMAL). Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1…
+data: {"kind":"error","code":"analyzer-reasoning-overflow","message":"Gemma 4 26B spent its whole output budget reasoning on chapter \"Chapter One — The Knock\" and returned no answer, so the analysis stopped.","remediation":"Reasoning: the Gemini reasoning setting for gemma-4-26b-a4b-it (Advanced settings → Analyzer request controls; sent as thinkingLevel — \"off\" sends MINIMAL). Give the model more room: for Gemini, if you set 'Gemini max output tokens' in Advanced Settings below Auto, raise it or set it back to 0 (Auto, the model's own limit), otherwise switch to a different analyzer model; for Ollama, if you set 'Ollama num_predict' (ANALYZER_NUM_PREDICT) above -1, raise it or set it ba…
+# end 2026-11-28 15:13:40 +11:00 wallSeconds=954
+# DONE

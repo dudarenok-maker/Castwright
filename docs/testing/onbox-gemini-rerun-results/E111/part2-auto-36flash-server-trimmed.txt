@@ -1,0 +1,55 @@
+# stdout: [analysis] and [gemini] lines
+2026-11-28 10:11:33.934 [server] listening on http://localhost:8100
+2026-11-28 10:11:33.935 [server] workspace root: C:\Claude\Projects\wt-onbox-gemini-rerun\castwright-workspace
+2026-11-28 10:11:33.966 [sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)
+2026-11-28 10:11:37.958 [analysis] request received manuscript="mns_09kK9OMUQa" model="gemini-3.6-flash" fresh=true
+2026-11-28 10:11:37.968 [analysis] start manuscript="mns_09kK9OMUQa" engine=gemini model="gemini-3.6-flash"
+2026-11-28 10:11:37.984 [analysis] mns=mns_09kK9OMUQa phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 10:11:38.018 [analysis] mns=mns_09kK9OMUQa phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 10:11:38.019 [analysis] mns=mns_09kK9OMUQa phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 10:11:38.020 [analysis] mns=mns_09kK9OMUQa phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…
+2026-11-28 10:11:38.021 [analysis] mns=mns_09kK9OMUQa phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 10:11:38.025 [analysis] mns=mns_09kK9OMUQa phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…
+2026-11-28 10:11:38.029 [analysis] mns=mns_09kK9OMUQa phase=1 Attributing 1 chapter with Gemini 3.6 Flash…
+2026-11-28 10:11:38.030 [analysis] mns=mns_09kK9OMUQa phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 10:11:38.030 [analysis] mns=mns_09kK9OMUQa phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 10:12:09.321 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=19621 firstAnswerMs=19652 thoughtPartsBeforeAnswer=8
+2026-11-28 10:12:09.344 [analysis] mns=mns_09kK9OMUQa phase=0 Chapter 1/1 cast done — 13 characters in 31s
+2026-11-28 10:12:09.349 [analysis] mns=mns_09kK9OMUQa phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:12:09.360 [analysis] mns=mns_09kK9OMUQa phase=0 Quote-match tiers: verbatim=22, terminal-punct=0, segments=4.
+2026-11-28 10:12:09.377 [analysis] mns=mns_09kK9OMUQa phase=0 Detected 13 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Sela, Hart
+2026-11-28 10:12:09.377 [analysis] mns=mns_09kK9OMUQa phase=0 1 chapter identified in 31s
+2026-11-28 10:12:09.378 [analysis] mns=mns_09kK9OMUQa phase=1 Chapter 1/1 — held back 31s to preserve 10-chapter roster lag.
+2026-11-28 10:12:09.379 [analysis] mns=mns_09kK9OMUQa phase=1 Chapter 1/1 — Chapter One — The Knock (19,928 chars, ~2m 37s) via Gemini 3.6 Flash…
+2026-11-28 10:13:27.398 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=48339 firstAnswerMs=63675 thoughtPartsBeforeAnswer=14
+2026-11-28 10:15:14.911 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=23084 firstAnswerMs=49520 thoughtPartsBeforeAnswer=21
+2026-11-28 10:16:40.191 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=47230 firstAnswerMs=68347 thoughtPartsBeforeAnswer=18
+2026-11-28 10:18:39.910 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=71182 firstAnswerMs=103970 thoughtPartsBeforeAnswer=31
+2026-11-28 10:19:56.640 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=26615 firstAnswerMs=73312 thoughtPartsBeforeAnswer=37
+2026-11-28 10:21:16.005 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=45168 firstAnswerMs=78173 thoughtPartsBeforeAnswer=23
+2026-11-28 10:21:36.496 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=14694 firstAnswerMs=19716 thoughtPartsBeforeAnswer=4
+2026-11-28 10:22:25.777 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=46424 firstAnswerMs=49047 thoughtPartsBeforeAnswer=3
+2026-11-28 10:23:36.986 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=46218 firstAnswerMs=69191 thoughtPartsBeforeAnswer=17
+2026-11-28 10:23:45.201 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=2674 firstAnswerMs=7905 thoughtPartsBeforeAnswer=4
+2026-11-28 10:25:31.053 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=97488 firstAnswerMs=105321 thoughtPartsBeforeAnswer=4
+2026-11-28 10:26:09.614 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=15858 firstAnswerMs=38157 thoughtPartsBeforeAnswer=13
+2026-11-28 10:27:14.026 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=52891 firstAnswerMs=64133 thoughtPartsBeforeAnswer=8
+2026-11-28 10:28:26.314 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=61799 firstAnswerMs=71720 thoughtPartsBeforeAnswer=5
+2026-11-28 10:29:11.825 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=2129 firstAnswerMs=44064 thoughtPartsBeforeAnswer=27
+2026-11-28 10:29:41.865 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=23563 firstAnswerMs=29763 thoughtPartsBeforeAnswer=5
+2026-11-28 10:30:38.310 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=31925 firstAnswerMs=55677 thoughtPartsBeforeAnswer=5
+2026-11-28 10:31:21.098 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=42646 firstAnswerMs=42646 thoughtPartsBeforeAnswer=0
+2026-11-28 10:31:21.142 [analysis] mns=mns_09kK9OMUQa phase=1 Chapter 1/1 — attributed in 5 sections.
+2026-11-28 10:31:21.144 [analysis] mns=mns_09kK9OMUQa phase=1 Chapter 1/1 — ⚠ attribution may be incomplete (Duplicated block — 45 consecutive sentences repeat earlier ones at offset 309 (repeat-loop).); kept the best take and flagged the chapter for retry.
+2026-11-28 10:31:21.179 [analysis] mns=mns_09kK9OMUQa phase=1 Chapter 1/1 done — 380 sentences in 19m 12s
+2026-11-28 10:31:21.180 [analysis] mns=mns_09kK9OMUQa phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:31:21.180 [analysis] mns=mns_09kK9OMUQa phase=1 Attributed 380 sentences across 1 chapter
+2026-11-28 10:31:21.181 [analysis] mns=mns_09kK9OMUQa phase=1 Narrator: 188 lines
+2026-11-28 10:31:21.181 [analysis] mns=mns_09kK9OMUQa phase=1 Master Oduvan: 40 lines
+2026-11-28 10:31:21.181 [analysis] mns=mns_09kK9OMUQa phase=1 Coalfall: 40 lines
+2026-11-28 10:31:21.181 [analysis] mns=mns_09kK9OMUQa phase=1 Pell Hollis: 18 lines
+2026-11-28 10:31:21.182 [analysis] mns=mns_09kK9OMUQa phase=2 No library matches yet (voice library matching is not wired up for this slice).
+2026-11-28 10:31:21.456 [analysis] main run drained manuscript=mns_09kK9OMUQa
+
+# stderr: same, multi-line error dumps collapsed (prompt heads dropped)
+2026-11-28 10:31:21.143 [analysis] chapter 1 stage2 coverage SUSPECT after retries: Duplicated block — 45 consecutive sentences repeat earlier ones at offset 309 (repeat-loop).

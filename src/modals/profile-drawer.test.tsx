@@ -18,6 +18,7 @@ import { accountSlice } from '../store/account-slice';
 import { configSlice } from '../store/config-slice';
 import { haltActiveGeneration } from '../store/queue-thunks';
 import { seedSameCardPersona } from '../test/seed-same-card-persona';
+import { useAppSelector } from '../store';
 import { ProfileDrawer, type PriorMergeCandidate } from './profile-drawer';
 import {
   playSampleWithAutoLoad,
@@ -91,6 +92,7 @@ const unassignLibraryVoice = vi.fn(
   (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
     Promise.resolve<{ cleared: ('qwen' | 'coqui')[] }>({ cleared: ['qwen', 'coqui'] }),
 );
+let listVoiceLibraryResult: unknown[] = [];
 const promoteToLibrary = vi.fn(
   (_args: { bookId: string; characterId: string; name: string }) =>
     Promise.resolve({ voiceUuid: 'lib-new', name: 'New' }),
@@ -103,7 +105,7 @@ vi.mock('../lib/api', () => ({
       unassignLibraryVoice(voiceUuid, args),
     promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
       promoteToLibrary(args),
-    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+    listVoiceLibrary: () => Promise.resolve({ voices: listVoiceLibraryResult }),
     /* Forward exactly the args received — a 2-arg call stays 2-arg so the
        existing override-write assertions (toHaveBeenCalledWith(id, null))
        keep matching after the optional scope arg landed. */
@@ -183,6 +185,9 @@ function renderDrawer(
     myVoices?: VoiceLibraryEntry[];
     onSave?: (next: Character, meta: { hadConflict: boolean }) => void;
     onLock?: (character: Character) => void;
+    /* Render the drawer from the store's live cast row (as layout.tsx does)
+       rather than a static prop, so slot mirrors reach it. */
+    live?: boolean;
   } = {},
 ) {
   const store = makeStore({
@@ -191,12 +196,18 @@ function renderDrawer(
     libraryBook: extra.libraryBook,
     myVoices: extra.myVoices,
   });
+  if (extra.live) store.dispatch(castActions.setCharacters([character]));
+  function LiveCharacter({ children }: { children: (c: Character) => React.ReactElement }) {
+    const row = useAppSelector((s) => s.cast.characters.find((c) => c.id === character.id));
+    return children(row ?? character);
+  }
   return {
     store,
     ...render(
       <Provider store={store}>
+        <LiveCharacter>{(liveCharacter) => (
         <ProfileDrawer
-          character={character}
+          character={extra.live ? liveCharacter : character}
           bookId={extra.bookId}
           voice={extra.voice}
           onClose={() => {}}
@@ -214,6 +225,7 @@ function renderDrawer(
           renderedFallbackEngine={extra.renderedFallbackEngine}
           onReassignLines={extra.onReassignLines}
         />
+        )}</LiveCharacter>
       </Provider>,
     ),
   };
@@ -236,6 +248,14 @@ const baseChar: Character = {
   lines: 100,
   scenes: 5,
 };
+
+describe('ProfileDrawer sticky header', () => {
+  it('blurs content scrolling under the header (dark-mode bg-white/95 is ~8% opaque)', () => {
+    renderDrawer({ ...baseChar });
+    const header = screen.getByLabelText('Close').closest('.sticky');
+    expect(header?.className).toContain('backdrop-blur-md');
+  });
+});
 
 describe('ProfileDrawer evidence rendering', () => {
   it('renders the first 3 evidence quotes by default, in array order', () => {
@@ -2245,6 +2265,168 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
       { bookId: 'book-1' },
     );
     expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
+  });
+
+  it('hides "Save to my voices" + the "Voice designed" line when the cast slot is a CLONE (consent bypass)', () => {
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneA', libraryUuid: 'cloneA', provenance: 'cloned' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('hides "Save to my voices" right after a CLONED My-voices entry is picked', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    const cloned: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'clone1',
+      name: 'My clone',
+      provenance: 'cloned',
+    };
+    renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned], live: true },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-clone1'));
+    await waitFor(() => expect(assignLibraryVoice).toHaveBeenCalledWith('clone1', expect.anything()));
+    await waitFor(() => expect(screen.queryByTestId('profile-drawer-my-voice-clone1')).toBeNull());
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('after picking a clone then Removing it, a fresh design shows Save + the designed line again', async () => {
+    assignLibraryVoice.mockResolvedValue({ updated: 1, written: ['qwen'] });
+    unassignLibraryVoice.mockResolvedValue({ cleared: ['qwen'] });
+    const cloned: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'clone1',
+      name: 'My clone',
+      provenance: 'cloned',
+    };
+    const { store } = renderDrawer(
+      { ...baseChar, ttsEngine: 'qwen' },
+      { bookId: 'book-1', myVoices: [...myVoicesFixture, cloned], live: true },
+    );
+    fireEvent.click(screen.getByTestId('profile-drawer-my-voice-clone1'));
+    await waitFor(() => expect(screen.getByTestId('profile-drawer-remove-my-voice')).toBeInTheDocument());
+    fireEvent.click(screen.getByTestId('profile-drawer-remove-my-voice'));
+    await waitFor(() => expect(unassignLibraryVoice).toHaveBeenCalled());
+    await waitFor(() => expect(screen.queryByTestId('profile-drawer-remove-my-voice')).toBeNull());
+    act(() => {
+      store.dispatch(
+        castActions.setOverrideVoiceName({
+          characterId: 'halloran',
+          engine: 'qwen',
+          name: 'qwen-halloran-fresh',
+          provenance: 'designed',
+        }),
+      );
+    });
+    await waitFor(() =>
+      expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument(),
+    );
+    expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
+  });
+
+  it('hides "Save to my voices" when the slot says designed but its My-voices ENTRY is cloned', () => {
+    const relabelled: VoiceLibraryEntry = {
+      ...myVoicesFixture[0],
+      voiceUuid: 'relab1',
+      provenance: 'cloned',
+    };
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab1', libraryUuid: 'relab1', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1', myVoices: [relabelled] },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it.each([
+    ['consent', { consent: { personName: 'Dad', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: '2026-01-01T00:00:00.000Z', attestedBy: 'me' } }],
+    ['a clonedFrom link', { clonedFrom: 'orig-clone' }],
+  ])('hides "Save to my voices" when the slot says designed but its entry carries %s', (_l, over) => {
+    const relabelled = { ...myVoicesFixture[0], voiceUuid: 'relab2', ...over } as VoiceLibraryEntry;
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab2', libraryUuid: 'relab2', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1', myVoices: [relabelled] },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('fetches the library when the slot names an entry the store lacks, hiding Save until it loads', async () => {
+    listVoiceLibraryResult = [{ ...myVoicesFixture[0], voiceUuid: 'des9' }];
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-des9', libraryUuid: 'des9', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument(),
+    );
+    listVoiceLibraryResult = [];
+  });
+
+  it('keeps Save hidden after the fetch when the loaded entry is cloned', async () => {
+    listVoiceLibraryResult = [
+      { ...myVoicesFixture[0], voiceUuid: 'des8', provenance: 'cloned' },
+    ];
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-des8', libraryUuid: 'des8', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    await waitFor(() => expect(listVoiceLibraryResult.length).toBe(1));
+    await act(async () => {});
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    listVoiceLibraryResult = [];
+  });
+
+  it('still shows "Save to my voices" for a DESIGNED qwen slot when the coqui slot is a clone', () => {
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-desP', libraryUuid: 'desP', provenance: 'designed' },
+          coqui: { name: 'xtts-cloneP', libraryUuid: 'cloneP', provenance: 'cloned' },
+        },
+      },
+      { bookId: 'book-1', myVoices: [{ ...myVoicesFixture[0], voiceUuid: 'desP' }] },
+    );
+    expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
+    expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
   });
 
   it('does not show "Save to my voices" before any Qwen voice is designed', () => {

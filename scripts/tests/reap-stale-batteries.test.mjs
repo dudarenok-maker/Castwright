@@ -214,7 +214,7 @@ const processes = [
   },
 
   // B19 — C1, second harness: `npm run test:scripts` spawns this launcher
-  // (run-powershell.mjs:52). `Invoke-Pester` itself is in-process and never
+  // (run-powershell.mjs's spawnSync). `Invoke-Pester` itself is in-process and never
   // reaches any command line — the launcher PATH is the only handle there is.
   {
     ...proc(19001, 19000, 'pwsh.exe', 5, NOW - 40 * MIN),
@@ -790,7 +790,7 @@ test('A2: an exact restrictTo entry whose live start time differs is not killed;
 // battery as a whole, by the most-specific known root, at a real separator. ---
 
 const PRIMARY = 'C:\\Claude\\Projects\\Audiobook-Generator';
-const SCRATCH = 'C:/Users/dudar/AppData/Local/Temp/claude/sess/scratchpad/pr4315';
+const SCRATCH = 'C:/Users/you/AppData/Local/Temp/claude/sess/scratchpad/pr4315';
 
 // Captured verbatim from `npx vitest run` in a scratchpad worktree whose
 // node_modules is junctioned from the primary: the main vitest argv names the
@@ -904,7 +904,7 @@ test('BL3: the neutral install-path allowance has a component boundary', () => {
     '"C:\\Program Files (x86)\\nodejs\\node.exe"',
     'C:\\ProgramData\\x\\y.exe',
     'C:\\Windows\\System32\\cmd.exe',
-    'C:\\Users\\dudar\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js',
+    'C:\\Users\\you\\AppData\\Roaming\\npm\\node_modules\\npm\\bin\\npx-cli.js',
   ]) {
     const loc = classifyBatteryLocation([`${neutral} ${PRIMARY}\\node_modules\\vitest\\vitest.mjs run`], PRIMARY, [PRIMARY]);
     assert.deepEqual(loc, { inRoot: true, foreign: null }, neutral);

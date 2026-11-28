@@ -303,7 +303,8 @@ import { RevisionOpFailure } from '../lib/revision-op-failure';
 import { bookMetaActions, selectEffectiveMeta } from '../store/book-meta-slice';
 import { exportsActions } from '../store/exports-slice';
 import { notificationsActions } from '../store/notifications-slice';
-import type { DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
+import type { BookExportJob, DriftEvent, LibraryBook, LibraryResponse } from '../lib/types';
+import { STALL_THRESHOLD_MS } from '../store/chapters-slice';
 import type { Chapter, Character, Voice } from '../lib/types';
 import {
   selectUndesignedQwenCharacters,
@@ -1340,6 +1341,77 @@ describe('Layout — Export status pill (fs-54)', () => {
     const pill = await findByTestId('export-pill');
     expect(pill).toHaveTextContent('Exporting');
     expect(pill).toHaveTextContent('1 running');
+    expect(pill).toHaveTextContent('50%');
+  });
+
+  /* srv-96 — a cancelling export is non-terminal: the work has not stopped. */
+  const exportJob = (overrides: Partial<BookExportJob>): BookExportJob => ({
+    id: 'exp_1',
+    bookId: 'b1',
+    format: 'mp3-zip',
+    destination: 'download',
+    status: 'in_progress',
+    filename: 'Test.zip',
+    sizeBytes: null,
+    progress: 0.5,
+    downloadUrl: null,
+    syncPath: null,
+    errorReason: null,
+    createdAt: '2026-01-01T00:00:00Z',
+    completedAt: null,
+    ...overrides,
+  });
+
+  const renderOnBooks = (store: ReturnType<typeof makeStore>) =>
+    render(
+      <Provider store={store}>
+        <MemoryRouter initialEntries={['/books']}>
+          <Routes>
+            <Route path="/books" element={<Layout />} />
+          </Routes>
+        </MemoryRouter>
+      </Provider>,
+    );
+
+  it('keeps the Export pill visible for a lone cancelling job and never calls it stalled', async () => {
+    const store = makeStore();
+    store.dispatch(exportsActions.exportStarted(exportJob({})));
+    store.dispatch(exportsActions.exportUpdated(exportJob({ status: 'cancelling' })));
+    const { findByTestId } = renderOnBooks(store);
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const pill = await findByTestId('export-pill');
+    expect(pill).toHaveTextContent('Exporting');
+    expect(pill).toHaveTextContent('1 running');
+    /* No in_progress job, so no average to show. */
+    expect(pill).not.toHaveTextContent('%');
+
+    /* Long past the stall threshold with no progress change: re-render with a
+       fresh job object, as the next poll would. */
+    const later = Date.now() + STALL_THRESHOLD_MS * 2;
+    const now = vi.spyOn(Date, 'now').mockReturnValue(later);
+    try {
+      act(() => {
+        store.dispatch(exportsActions.exportUpdated(exportJob({ status: 'cancelling' })));
+      });
+      expect(await findByTestId('export-pill')).toHaveTextContent('Exporting');
+      expect(await findByTestId('export-pill')).not.toHaveTextContent('Stalled');
+    } finally {
+      now.mockRestore();
+    }
+  });
+
+  it('counts a cancelling job but leaves it out of the in-progress average', async () => {
+    const store = makeStore();
+    store.dispatch(exportsActions.exportStarted(exportJob({ id: 'exp_1', progress: 0.5 })));
+    store.dispatch(
+      exportsActions.exportStarted(exportJob({ id: 'exp_2', status: 'cancelling', progress: 0.9 })),
+    );
+    const { findByTestId } = renderOnBooks(store);
+
+    fireEvent.click(await findByTestId('status-pill'));
+    const pill = await findByTestId('export-pill');
+    expect(pill).toHaveTextContent('2 running');
     expect(pill).toHaveTextContent('50%');
   });
 

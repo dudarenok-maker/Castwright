@@ -1,0 +1,25 @@
+# stdout: [analysis] and [gemini] lines
+2026-11-28 10:33:07.850 [server] listening on http://localhost:8100
+2026-11-28 10:33:07.851 [server] workspace root: C:\Claude\Projects\wt-onbox-gemini-rerun\castwright-workspace
+2026-11-28 10:33:07.898 [sidecar] auto-start disabled (user pref or DISABLE_AUTOSTART_SIDECAR=1)
+2026-11-28 10:33:13.183 [analysis] request received manuscript="mns_mmq8FMsfLe" model="gemini-3.6-flash" fresh=true
+2026-11-28 10:33:13.476 [analysis] start manuscript="mns_mmq8FMsfLe" engine=gemini model="gemini-3.6-flash"
+2026-11-28 10:33:13.499 [analysis] mns=mns_mmq8FMsfLe phase=0 Discarded cached progress — starting from scratch.
+2026-11-28 10:33:13.539 [analysis] mns=mns_mmq8FMsfLe phase=0 Manuscript: 3,723 words, 19,928 characters, 1 chapter
+2026-11-28 10:33:13.540 [analysis] mns=mns_mmq8FMsfLe phase=0 Estimated total time: ~2m 0s (refined after stage 1)
+2026-11-28 10:33:13.541 [analysis] mns=mns_mmq8FMsfLe phase=0 Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…
+2026-11-28 10:33:13.544 [analysis] mns=mns_mmq8FMsfLe phase=0 Running 1 chapter cast-detection with up to 2 in parallel.
+2026-11-28 10:33:13.546 [analysis] mns=mns_mmq8FMsfLe phase=0 Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…
+2026-11-28 10:33:13.550 [analysis] mns=mns_mmq8FMsfLe phase=1 Attributing 1 chapter with Gemini 3.6 Flash…
+2026-11-28 10:33:13.551 [analysis] mns=mns_mmq8FMsfLe phase=1 Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)
+2026-11-28 10:33:13.552 [analysis] mns=mns_mmq8FMsfLe phase=1 Running 1 chapter with up to 2 in parallel.
+2026-11-28 10:33:14.639 [gemini] stream-timing model=gemini-3.6-flash firstChunkMs=none firstAnswerMs=none thoughtPartsBeforeAnswer=0
+2026-11-28 10:33:14.640 [analysis] mns=mns_mmq8FMsfLe phase=0 ❌ Chapter 1/1 cast FAILED — Chapter One — The Knock: Gemini gemini-3.6-flash daily quota exhausted — resets at 2026-11-28T00:00:00.000Z.
+2026-11-28 10:33:14.641 [analysis] mns=mns_mmq8FMsfLe phase=0 Continuing without chapter 1 in the cast roster (1s spent). Re-run analysis to retry.
+2026-11-28 10:33:14.648 [analysis] mns=mns_mmq8FMsfLe phase=0 Cast detection: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:33:14.649 [analysis] mns=mns_mmq8FMsfLe phase=0 Phase 0 paused — 1 chapter still needs cast detection (see ❌ lines above). Phase 1 won't start until every chapter has a roster — retry below or re-run analysis.
+2026-11-28 10:33:14.649 [analysis] mns=mns_mmq8FMsfLe phase=1 Attribution: peaked at 0 concurrent analyzer calls (K=2).
+2026-11-28 10:33:14.651 [analysis] main run drained manuscript=mns_mmq8FMsfLe
+
+# stderr: same, multi-line error dumps collapsed (prompt heads dropped)
+2026-11-28 10:33:14.637 [gemini] generate failed status=429 userTurnLength=24999 message=Quota exceeded for metric: generativelanguage.googleapis.com/generate_content_free_tier_requests, limit: 20, model: gemini-3.6-flash, description: Generate content requests per day limit exceeded on Free Tier. See https://aistudio.google.com/docs/rate-limits.\\ | quotaId": "GenerateRequestsPerDayPerProjectPerModel-FreeTier", | quotaValue": "20" | retryDelay": "30405s" | Please retry in 8h26m45.271256007s.",

@@ -132,6 +132,27 @@ describe('TopBar — global nav', () => {
   });
 });
 
+describe('TopBar — queue chip (#4691)', () => {
+  it('renders an icon + the bare count, with the full meaning in the accessible name', () => {
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'books', queueCount: 12, onOpenQueue: vi.fn() })} />,
+    );
+    const chip = screen.getByTestId('topbar-queue-chip');
+    expect(chip.textContent).toBe('12');
+    expect(chip.querySelector('svg')).not.toBeNull();
+    expect(chip).toHaveAttribute('aria-label', 'Generation queue — 12 pending');
+    expect(chip).toHaveAttribute('title', 'Generation queue');
+    expect(screen.getByRole('button', { name: 'Generation queue — 12 pending' })).toBe(chip);
+  });
+
+  it('is absent when nothing is queued', () => {
+    renderWithStore(
+      <TopBar {...makeProps({ stage: 'books', queueCount: 0, onOpenQueue: vi.fn() })} />,
+    );
+    expect(screen.queryByTestId('topbar-queue-chip')).not.toBeInTheDocument();
+  });
+});
+
 describe('TopBar — persistent Help affordance (fe-29)', () => {
   it('renders the Help menu trigger and opens a popover with the three actions', () => {
     renderWithStore(<TopBar {...makeProps()} />);
@@ -1104,7 +1125,31 @@ describe('TopBar — #916 phone inline-chrome trim', () => {
     const home = screen.getByRole('button', { name: 'Castwright — home' });
     const wordmark = within(home).getByText('Castwright');
     expect(wordmark.className).toMatch(/hidden/);
-    expect(wordmark.className).toMatch(/sm:inline/);
+    expect(wordmark.className).toMatch(/2xl:inline/);
+  });
+
+  /* #4691 decision A — Help / Theme / Account stay inline from sm up, so the
+     bar sheds width elsewhere: the wordmark text and version pill are 2xl+ (owner
+     decision 2026-11-28), and the book title truncates (full text kept in `title`)
+     down to a 44px / few-character floor instead of holding its width. */
+  it('hides the version pill below 2xl', () => {
+    renderWithStore(<TopBar {...makeProps({ stage: 'books' })} />);
+    expect(screen.getByTestId('version-pill').parentElement!.className).toMatch(
+      /hidden 2xl:inline-flex/,
+    );
+  });
+
+  it('truncates a long book title with an ellipsis and keeps the full text in title', () => {
+    const long = 'The Coalfall Commission: A Very Long Subtitle That Cannot Fit';
+    renderWithStore(<TopBar {...makeProps({ stage: 'ready', view: 'listen', projectTitle: long })} />);
+    const button = screen.getByTitle(long);
+    expect(button.className).toMatch(/min-w-\[44px\]/);
+    expect(button.className).not.toMatch(/min-w-0\b/);
+    expect(button.className).not.toMatch(/shrink-0/);
+    const text = within(button).getByText(long);
+    expect(text.className).toMatch(/truncate/);
+    expect(text.className).toMatch(/min-w-\[3ch\]/);
+    expect(text.className).toMatch(/max-w-\[/);
   });
 
   it('hides the inline Admin pill on phone for a nav stage (it lives in the drawer there)', () => {

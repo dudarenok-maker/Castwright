@@ -1,0 +1,29 @@
+# start 2026-11-28 15:10:07 +11:00 POST /api/manuscripts/mns_ZvwASlFfb3/analysis {model:gemma-4-26b-a4b-it,fresh:true}
+# HTTP 200
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 26B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 45s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 1m 30s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 2m 15s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — large chapter, section 1/4 (1,519 chars) to fit the model context…"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 3m 1s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 3m 46s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 4m 31s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 5m 16s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 6m 2s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 6m 47s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 45s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 1m 31s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 2m 16s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 3m 1s, still waiting."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":1806,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-26b-a4b-it","waitMs":2058,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 45s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 26B in 1m 30s, still waiting."}

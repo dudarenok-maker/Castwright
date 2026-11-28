@@ -9,7 +9,7 @@
    the router exactly as app.ts does. */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import express, { type Express } from 'express';
@@ -4526,6 +4526,7 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     // never touches character.voiceUuid) does. Resolution must follow
     // overrideTtsVoices.qwen.libraryUuid, mirroring pickVoiceForEngine.
     writeFileSync(qwenVoice.qwenVoicePtPath('qwen-libX'), 'LIBRARY-ASSIGNED-BYTES');
+    await seedDesignedEntry('libX');
 
     writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-6', [
       {
@@ -4547,6 +4548,170 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     const newPtPath = qwenVoice.qwenVoicePtPath(`qwen-${entry.voiceUuid}`);
     expect(readFileSync(newPtPath, 'utf8')).toBe('LIBRARY-ASSIGNED-BYTES');
     expect(entry.engines.qwen?.status).toBe('ready');
+  });
+
+  it('refuses (403) to promote a character whose qwen slot is a CLONE, writing nothing (consent bypass)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-cloneX'), 'CLONE-BYTES');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-clone', [
+      {
+        id: 'char-cloned',
+        name: 'Cloned',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneX', libraryUuid: 'cloneX', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const libBefore = (await vl.listEntries()).length;
+    const ptsBefore = readdirSync(paths.qwenVoicesDir()).sort();
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-clone', characterId: 'char-cloned', name: 'Copy' });
+
+    expect(res.status).toBe(403);
+    expect(res.body.error).toMatch(/cloned/i);
+    expect((await vl.listEntries()).length).toBe(libBefore);
+    expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
+  });
+
+  async function seedDesignedEntry(voiceUuid: string) {
+    await vl.writeEntry({
+      voiceUuid,
+      name: voiceUuid,
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+    });
+  }
+
+  const relabConsent = {
+    personName: 'Dad',
+    relationship: 'family-with-permission' as const,
+    permittedUse: 'personal' as const,
+    attestedAt: '2026-01-01T00:00:00.000Z',
+    attestedBy: 'me',
+  };
+  it.each([
+    ['a cloned entry', { provenance: 'cloned' as const, consent: relabConsent }],
+    [
+      'an entry carrying consent',
+      {
+        consent: {
+          personName: 'Dad',
+          relationship: 'family-with-permission' as const,
+          permittedUse: 'personal' as const,
+          attestedAt: '2026-01-01T00:00:00.000Z',
+          attestedBy: 'me',
+        },
+      },
+    ],
+    ['an entry with a clonedFrom link', { clonedFrom: 'orig-clone' }],
+  ])('refuses (403) when the slot says designed but the source ENTRY is %s', async (_label, over) => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-relab1'), 'RELABELLED-BYTES');
+    await vl.writeEntry({
+      voiceUuid: 'relab1',
+      name: 'Relabelled',
+      provenance: 'designed',
+      tags: [],
+      pinned: false,
+      engines: { qwen: { status: 'ready', baseModel: modelPaths.currentQwenBaseModel() } },
+      createdAt: '2026-01-01T00:00:00.000Z',
+      updatedAt: '2026-01-01T00:00:00.000Z',
+      ...over,
+    } as import('../workspace/voice-library.js').VoiceLibraryEntry);
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-relab', [
+      {
+        id: 'char-relab',
+        name: 'Relab',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab1', libraryUuid: 'relab1', provenance: 'designed' },
+        },
+      },
+    ]);
+    const libBefore = (await vl.listEntries()).length;
+    const ptsBefore = readdirSync(paths.qwenVoicesDir()).sort();
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-relab', characterId: 'char-relab', name: 'Copy' });
+
+    expect(res.status).toBe(403);
+    expect((await vl.listEntries()).length).toBe(libBefore);
+    expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
+  });
+
+  it('refuses (503, retryable) and writes nothing when the source manifest is unreadable but its .pt exists', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-trunc1'), 'CLONE-BYTES-2');
+    mkdirSync(vl.entryDir('trunc1'), { recursive: true });
+    writeFileSync(join(vl.entryDir('trunc1'), 'voice.json'), '{"voiceUuid":"trunc1","name":"Rel');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-trunc', [
+      {
+        id: 'char-trunc',
+        name: 'Trunc',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-trunc1', libraryUuid: 'trunc1', provenance: 'designed' },
+        },
+      },
+    ]);
+    const libBefore = (await vl.listEntries()).length;
+    const ptsBefore = readdirSync(paths.qwenVoicesDir()).sort();
+
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-trunc', characterId: 'char-trunc', name: 'Copy' });
+
+    expect(res.status).toBe(503);
+    expect(res.body.error).not.toMatch(/clone/i);
+    expect((await vl.listEntries()).length).toBe(libBefore);
+    expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
+  });
+
+  it('promotes a DESIGNED qwen slot even when the coqui slot is a clone (copy reads qwen bytes only)', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-desM'), 'DESIGNED-BYTES');
+    await seedDesignedEntry('desM');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-mixA', [
+      {
+        id: 'char-mixA',
+        name: 'MixA',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-desM', libraryUuid: 'desM', provenance: 'designed' },
+          coqui: { name: 'xtts-cloneM', libraryUuid: 'cloneM', provenance: 'cloned' },
+        },
+      },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-mixA', characterId: 'char-mixA', name: 'Mixed' });
+    expect(res.status).toBe(201);
+    expect(readFileSync(qwenVoice.qwenVoicePtPath(`qwen-${res.body.voiceUuid}`), 'utf8')).toBe(
+      'DESIGNED-BYTES',
+    );
+  });
+
+  it('refuses (403) a CLONED qwen slot even when the coqui slot is designed', async () => {
+    mkdirSync(paths.qwenVoicesDir(), { recursive: true });
+    writeFileSync(qwenVoice.qwenVoicePtPath('qwen-cloneN'), 'CLONE-BYTES');
+    writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-promo-mixB', [
+      {
+        id: 'char-mixB',
+        name: 'MixB',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-cloneN', libraryUuid: 'cloneN', provenance: 'cloned' },
+          coqui: { name: 'xtts-desN', libraryUuid: 'desN', provenance: 'designed' },
+        },
+      },
+    ]);
+    const res = await request(app)
+      .post('/api/voice-library/promote')
+      .send({ bookId: 'book-promo-mixB', characterId: 'char-mixB', name: 'Mixed' });
+    expect(res.status).toBe(403);
   });
 
   it('missing source .pt → entry created with stale status, no throw (still 201)', async () => {

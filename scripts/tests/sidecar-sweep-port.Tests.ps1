@@ -13,6 +13,17 @@ BeforeAll {
     $modulePath = Join-Path $PSScriptRoot "..\lib\sidecar-sweep-port.psm1"
     Import-Module $modulePath -Force
 
+    # Parent pid for note fixtures. Process.Parent exists only in pwsh 7 (it is
+    # $null under Windows PowerShell 5.1, which wrote `"ppid":,` and got the
+    # note rejected), so use CIM where it exists and fall back to .Parent
+    # where it does not (pwsh on POSIX).
+    function Get-ParentPid {
+        if (Get-Command Get-CimInstance -ErrorAction SilentlyContinue) {
+            return (Get-CimInstance Win32_Process -Filter "ProcessId=$PID").ParentProcessId
+        }
+        return (Get-Process -Id $PID).Parent.Id
+    }
+
     # #2632 N52 — `Set-Content -Encoding utf8` WRITES a UTF-8 BOM under
     # Windows PowerShell 5.1 (measured: `ef bb bf 4c` — the file's own
     # fixtures were quietly exercising the BOM-prefixed cell on every run
@@ -59,7 +70,7 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'returns the per-checkout port recorded in tts.owner.<port>.json over server\.env (#2632 N27 fix)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9020"
 
@@ -236,7 +247,7 @@ Describe 'Get-SidecarSweepPort' {
 
     It 'matches lowercase tts.owner.*.json (control for the case-sensitivity cell)' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
         Set-EnvFixture -Path $script:envPath -Content "LOCAL_TTS_PORT=9070"
 
@@ -284,7 +295,7 @@ Describe 'Get-SidecarSweepPort' {
         $notePath1 = Join-Path $script:tempDir "tts.owner.9010.json"
         $notePath2 = Join-Path $script:tempDir "tts.owner.9011.json"
         $pidStr = $PID
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
 
         # Two notes (we use current process for testing, but they could be dead or live)
         Set-Content -Path $notePath1 -Value "{`"pid`":$pidStr,`"ppid`":1,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
@@ -400,7 +411,7 @@ Describe 'Get-PortsToSweep (#2632 N34)' {
     # site to independently mutate away from what's tested here.
     It 'includes the resolved sidecar port from tts.owner.<port>.json' {
         $notePath = Join-Path $script:tempDir "tts.owner.9010.json"
-        $ppidStr = $([System.Diagnostics.Process]::GetCurrentProcess().Parent.Id)
+        $ppidStr = Get-ParentPid
         Set-Content -Path $notePath -Value "{`"pid`":$PID,`"ppid`":$ppidStr,`"port`":9010,`"startedAt`":`"2026-08-25T00:00:00.000Z`"}" -Encoding utf8
 
         $ports = Get-PortsToSweep -BasePorts @(5173, 8080, 8443) -RunDir $script:tempDir -ServerEnvPath $script:envPath
@@ -475,6 +486,41 @@ Describe 'stop-app.ps1 call site (#2632 N34)' {
             $out = & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\stop-app.ps1') 2>&1 | Out-String
             $out | Should -Match 'nothing to stop \(no ports resolved'
             $out | Should -Not -Match 'Cannot bind'
+        } finally {
+            foreach ($k in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $savedEnv[$k]) }
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+        }
+    }
+
+    # #3264 — taskkill /T /F never runs the server's own marker release, so
+    # stop-app.ps1 prunes the owner markers of dead processes itself (as
+    # stop-app.mjs does) and must never delete one whose pid is alive. A real
+    # scratch checkout, real exited child for the dead pid, this shell's own
+    # pid for the live one.
+    It 'prunes a dead server owner marker and keeps one whose pid is alive (#3264)' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ("stop-app-prune-" + [guid]::NewGuid().ToString('N'))
+        $savedEnv = @{}
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $root 'scripts') -Force | Out-Null
+            Copy-Item (Join-Path $PSScriptRoot '..\stop-app.ps1') (Join-Path $root 'scripts')
+            Copy-Item (Join-Path $PSScriptRoot '..\lib') (Join-Path $root 'scripts\lib') -Recurse
+            $runDir = Join-Path $root 'run'
+            New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+            $shell = (Get-Process -Id $PID).Path
+            $dead = Start-Process $shell -ArgumentList @('-NoProfile', '-Command', 'exit 0') -PassThru
+            $dead.WaitForExit()
+            $deadMarker = Join-Path $runDir 'server.owner.18081.json'
+            $liveMarker = Join-Path $runDir 'server.owner.18082.json'
+            Set-Content -LiteralPath $deadMarker -Value ('{"pid":' + $dead.Id + ',"port":18081,"https":true,"startedAt":"2026-01-01T00:00:00.000Z"}')
+            Set-Content -LiteralPath $liveMarker -Value ('{"pid":' + $PID + ',"port":18082,"https":true,"startedAt":"2026-01-01T00:00:00.000Z"}')
+            foreach ($k in 'PORT', 'VITE_PORT', 'LOCAL_TTS_PORT', 'APP_RUN_DIR') {
+                $savedEnv[$k] = [Environment]::GetEnvironmentVariable($k)
+                [Environment]::SetEnvironmentVariable($k, $null)
+            }
+            [Environment]::SetEnvironmentVariable('APP_RUN_DIR', $runDir)
+            & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\stop-app.ps1') 2>&1 | Out-Null
+            Test-Path -LiteralPath $deadMarker | Should -BeFalse
+            Test-Path -LiteralPath $liveMarker | Should -BeTrue
         } finally {
             foreach ($k in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $savedEnv[$k]) }
             Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue

@@ -19,6 +19,8 @@ import { fileURLToPath } from 'node:url';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { enforceNodeRuntime } from './lib/node-runtime-guard.mjs';
 import { REPORT_EXCLUSION_FLAGS, withReportExclusionNodeOptions } from './lib/report-exclusion.mjs';
+import { pidIsAlive } from './lib/pid-alive.mjs';
+import { pruneDeadServerOwners, readServerOwner } from './lib/server-owner.mjs';
 import net from 'node:net';
 import http from 'node:http';
 import https from 'node:https';
@@ -293,22 +295,88 @@ export function isOwnServerInstance(served, ownRunDir, { normalize = defaultNorm
   return normalize(servedRunDir) === normalize(ownRunDir);
 }
 
+/* Whether a readable /api/health body names a runDir other than ours. A body
+   that is missing, or names none, says nothing, so it never overrides a marker.
+   It does override one: a dead server's marker can outlive it (Windows kills the
+   server without running its release; stop-app.mjs and the next boot prune it,
+   but a reused pid keeps it alive in the meantime), so a body that names another
+   runDir outvotes it on the target and alternate ports. */
+function healthNamesOtherRunDir(served, ownRunDir) {
+  return typeof served?.configLoad?.runDir === 'string' && !isOwnServerInstance(served, ownRunDir);
+}
+
+/* Is THIS worktree's own server the one serving `port`? Answered from the owner
+   marker the server writes for the port it actually bound (#3264,
+   lib/server-owner.mjs), with no /api/health request, so it works when the
+   server is on HTTPS and findRootCa() comes up empty. Identity comes from the
+   marker's LOCATION: it sits in this checkout's own runDir. It counts only if
+   the marker parses for this port, its pid is alive AND the port accepts a TCP
+   connect. The marker is not always removed: on Windows a stop kills the
+   server without running its release, so stop-app.mjs prunes it after the
+   kill and the next server boot prunes dead pids' markers. Residual: a leftover
+   marker whose pid was reused before either ran, while a foreign process holds
+   the same port, reads as ours here. In decideLaunchAction (target and
+   alternate ports, and the pre-spawn rebound scan) a readable /api/health
+   naming another runDir overrides it. The post-spawn scan instead passes
+   `ownerPid`, the pid of the server this launcher just spawned: the marker
+   must record exactly that pid, so a stale marker on another port (reused pid,
+   foreign listener, answering /api/health or not) can never be taken for the
+   child. Exported for scripts/tests/start-app-prod.test.mjs. */
+export async function confirmOwnServerFromMarker(
+  port,
+  runDir,
+  {
+    probePort: probePortFn = probePort,
+    pidIsAlive: pidIsAliveFn = pidIsAlive,
+    readServerOwner: readServerOwnerFn = readServerOwner,
+    ownerPid = null,
+  } = {},
+) {
+  const owner = readServerOwnerFn(runDir, port);
+  if (!owner || !pidIsAliveFn(owner.pid)) return false;
+  if (ownerPid !== null && owner.pid !== ownerPid) return false;
+  return probePortFn(port);
+}
+
 /* Single pass over [startPort, startPort + maxPorts) looking for THIS
-   worktree's own server, confirmed by IDENTITY (runDir via /api/health), not
-   merely a socket accepting a connection — a listening socket at a candidate
-   port could belong to a completely different process. `deadline`, when
-   given, additionally aborts the scan (returning null) before starting a new
-   candidate once time is up, so a caller's overall timeout budget can't be
+   worktree's own server, confirmed by IDENTITY (the owner marker in runDir),
+   not merely a socket accepting a connection — a listening socket at a
+   candidate port could belong to a completely different process. `deadline`,
+   when given, additionally aborts the scan (returning null) before starting a
+   new candidate once time is up, so a caller's overall timeout budget can't be
    blown open-ended by a slow multi-candidate pass (Castwright#3030 round 3,
-   finding N8). Exported for scripts/tests/start-app-prod.test.mjs. */
-export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline = Infinity) {
+   finding N8). `_lanHttps` is unused since #3264 (no network probe left to
+   pick a protocol for); it stays so the signature callers use is unchanged.
+
+   `probeServedFn`, when given, adds /api/health to the candidate check, as
+   decideLaunchAction does for the target and alternate ports: a marker that
+   confirms still loses to a readable body naming another runDir, and a listening
+   port with NO confirming marker is ours only if its body names our runDir (a
+   server started before the marker existed). Only the pre-spawn scan passes it;
+   waitForOwnServer's post-spawn scan stays marker-only, since the child it just
+   spawned always writes a marker, and passes `ownerPid` (that child's pid) so
+   only a marker recording it counts. Exported for
+   scripts/tests/start-app-prod.test.mjs. */
+export async function scanForOwnServer(
+  startPort,
+  maxPorts,
+  lanHttps,
+  runDir,
+  deadline = Infinity,
+  probeServedFn = null,
+  ownerPid = null,
+) {
   for (let i = 0; i < maxPorts; i += 1) {
     if (Date.now() >= deadline) return null;
     const candidate = startPort + i;
-    if (await probePort(candidate)) {
-      const served = await probeServed(candidate, lanHttps);
-      if (isOwnServerInstance(served, runDir)) return candidate;
+    const marked = await confirmOwnServerFromMarker(candidate, runDir, { ownerPid });
+    if (!probeServedFn) {
+      if (marked) return candidate;
+      continue;
     }
+    if (!marked && !(await probePort(candidate))) continue;
+    const served = await probeServedFn(candidate, lanHttps).catch(() => null);
+    if (marked ? !healthNamesOtherRunDir(served, runDir) : isOwnServerInstance(served, runDir)) return candidate;
   }
   return null;
 }
@@ -323,15 +391,14 @@ export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, de
    plausibly have taken the one port this launcher itself confirmed free a
    moment ago (short of the same vanishingly rare race this file has always
    tolerated), so identity confirmation buys nothing there and only adds a
-   dependency this path never needed before — going through probeServed's
-   TLS-cert resolution (findRootCa()) for every ordinary boot, on hardware
-   where cert FILES exist but the mkcert CA is not independently
-   discoverable, timed out for a server that was actually healthy
-   (Castwright#3030 round 3, finding N2: this is exactly the regression the
-   round-2 fix introduced by routing the ordinary path through identity
-   confirmation too).
+   dependency this path never needed before. When that dependency was an
+   /api/health probe, every ordinary boot went through its TLS-cert resolution
+   (findRootCa()) and, on hardware where cert FILES exist but the mkcert CA is
+   not independently discoverable, timed out for a server that was actually
+   healthy (Castwright#3030 round 3, finding N2).
 
-   Only the maxPorts>1 (rebind-possible) case needs identity confirmation —
+   Only the maxPorts>1 (rebind-possible) case needs identity confirmation,
+   which comes from the owner marker, not a network probe (#3264) —
    there, multiple candidates are plausible and a bare "something is
    listening" can't tell this worktree's own child apart from a different
    process that happens to occupy one of the scanned ports. Per the
@@ -341,13 +408,13 @@ export async function scanForOwnServer(startPort, maxPorts, lanHttps, runDir, de
    must read — not a port a consumer merely asked for or guessed
    (Castwright#3030 round 2, finding F1). Exported for
    scripts/tests/start-app-prod.test.mjs. */
-export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir }) {
+export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lanHttps, runDir, ownerPid = null }) {
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
     if (maxPorts === 1) {
       if (await probePort(startPort)) return startPort;
     } else {
-      const found = await scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline);
+      const found = await scanForOwnServer(startPort, maxPorts, lanHttps, runDir, deadline, null, ownerPid);
       if (found !== null) return found;
     }
     await new Promise((r) => setTimeout(r, 500));
@@ -355,12 +422,40 @@ export async function waitForOwnServer({ startPort, maxPorts = 1, timeoutMs, lan
   return null;
 }
 
+/* The lines main() prints when this worktree's own server already serves the
+   target port. `served` is its /api/health body, or null when none could be
+   read, which only costs the missing-server/.env warning. */
+function ownServerOnTargetSkip(port, url, served) {
+  const lines = [];
+  if (served?.configLoad?.envLoaded === false) {
+    lines.push(
+      `[WARN] server on :${port} is running WITHOUT server/.env ` +
+        `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
+    );
+  }
+  lines.push(`[SKIP] server already listening on :${port} — leaving it alone`);
+  lines.push(`[READY] ${url}`);
+  return { kind: 'skip', messageLines: lines };
+}
+
 /* Everything main() must decide BEFORE spawning, extracted so it is
    unit-testable with injected probe functions rather than only reachable by
    spawning the real launcher (Castwright#3030 round 4, finding R5 — this
    file's pre-spawn orchestration had zero automated coverage, which is
    exactly how round 4's finding R1 survived rounds 1-3 unnoticed). Probe
-   functions default to the real network-touching ones; tests inject fakes.
+   functions default to the real ones (network, and the owner-marker read);
+   tests inject fakes.
+
+   On the target port and the alternate port, "is that our own server?" is
+   answered from the owner marker first (confirmOwnServerFromMarker, #3264), so
+   a healthy own server that /api/health cannot be read from (HTTPS with mkcert
+   unreachable) is still recognised. Without a confirming marker the
+   /api/health answer decides, which covers a server started before the marker
+   existed. The rebound scan below does the same per candidate.
+
+   Before any of that it prunes the markers of dead processes: a server stopped
+   by something that never ran its release (`npm run stop`, a manual kill, a
+   crash) leaves one, and a reused pid would make it read as ours.
 
    Returns one of:
      { kind: 'fail', message }                                   — main() should fail(message)
@@ -388,32 +483,31 @@ export async function decideLaunchAction({
   probePort: probePortFn = probePort,
   probeServed: probeServedFn = probeServed,
   scanForOwnServer: scanForOwnServerFn = scanForOwnServer,
+  confirmOwnServerFromMarker: confirmOwnServerFromMarkerFn = confirmOwnServerFromMarker,
+  pruneOwners = pruneDeadServerOwners,
 }) {
+  pruneOwners(runDir);
   let mayHaveRebound = false;
   let foreignOccupantCwd = null;
 
   const alreadyUp = await probePortFn(port);
   if (alreadyUp) {
-    const served = await probeServedFn(port, lanHttps);
-    if (!served) {
-      return {
-        kind: 'fail',
-        message:
-          `Port :${port} is occupied by a process that does not answer /api/health — ` +
-          `likely a stale or foreign server. Run "npm run stop" and retry.`,
-      };
-    }
-    if (isOwnServerInstance(served, runDir)) {
-      const lines = [];
-      if (served.configLoad && served.configLoad.envLoaded === false) {
-        lines.push(
-          `[WARN] server on :${port} is running WITHOUT server/.env ` +
-            `(cwd=${served.configLoad.cwd}) — on DEFAULTS. Stop it and relaunch from server/.`,
-        );
+    let served;
+    if (await confirmOwnServerFromMarkerFn(port, runDir)) {
+      // Best-effort: an unreadable health answer leaves the marker deciding.
+      served = await probeServedFn(port, lanHttps).catch(() => null);
+      if (!healthNamesOtherRunDir(served, runDir)) return ownServerOnTargetSkip(port, url, served);
+    } else {
+      served = await probeServedFn(port, lanHttps);
+      if (!served) {
+        return {
+          kind: 'fail',
+          message:
+            `Port :${port} is occupied by a process that does not answer /api/health — ` +
+            `likely a stale or foreign server. Run "npm run stop" and retry.`,
+        };
       }
-      lines.push(`[SKIP] server already listening on :${port} — leaving it alone`);
-      lines.push(`[READY] ${url}`);
-      return { kind: 'skip', messageLines: lines };
+      if (isOwnServerInstance(served, runDir)) return ownServerOnTargetSkip(port, url, served);
     }
     /* A DIFFERENT Castwright install (e.g. a sibling worktree's own server)
        answers on our target port — not a duplicate of this worktree's own
@@ -422,7 +516,7 @@ export async function decideLaunchAction({
     foreignOccupantCwd = served.configLoad?.cwd ?? 'unknown';
   }
 
-  const stalePort = await scanForOwnServerFn(port + 1, 19, lanHttps, runDir, Date.now() + 5000);
+  const stalePort = await scanForOwnServerFn(port + 1, 19, lanHttps, runDir, Date.now() + 5000, probeServedFn);
   if (stalePort !== null) {
     return {
       kind: 'skip',
@@ -439,10 +533,15 @@ export async function decideLaunchAction({
      would miss that running server and spawn a duplicate (two servers, one
      stale pid file). Detect a live instance of THIS worktree's own server on
      the alternate port and leave it alone — a sibling worktree's (or any
-     other install's) own server answering there is not a reason to skip. */
+     other install's) own server answering there is not a reason to skip. The
+     owner marker identifies it (#3264); /api/health is asked only when no
+     marker does, as for a server started before the marker existed. */
   if (altPort !== port && (await probePortFn(altPort))) {
-    const servedAlt = await probeServedFn(altPort, altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443));
-    if (isOwnServerInstance(servedAlt, runDir)) {
+    const altHttps = altPort === Number(process.env.LAN_HTTPS_PORT ?? 8443);
+    const altIsOwn = (await confirmOwnServerFromMarkerFn(altPort, runDir))
+      ? !healthNamesOtherRunDir(await probeServedFn(altPort, altHttps).catch(() => null), runDir)
+      : isOwnServerInstance(await probeServedFn(altPort, altHttps), runDir);
+    if (altIsOwn) {
       return {
         kind: 'skip',
         messageLines: [
@@ -565,6 +664,9 @@ async function main() {
     timeoutMs: HEALTH_TIMEOUT_MS,
     lanHttps,
     runDir,
+    // spawn() above runs node directly (no shell/wrapper), so child.pid is the
+    // server's process.pid, which is what its owner marker records.
+    ownerPid: child.pid,
   });
   if (boundPort === null) {
     fail(

@@ -44,6 +44,13 @@ test('computeScopes routes a shared attribution-eval fixture diff to the fronten
   assert.equal(scopes.step_test, true);
 });
 
+// The frontend clone-readiness selectors and help-topics.clone-labels.test.tsx import
+// server/src/tts/clone-engines.ts, so a diff of only that file must schedule step_test.
+test('computeScopes routes server/src/tts/clone-engines.ts to the frontend test step', () => {
+  const scopes = computeScopes(['server/src/tts/clone-engines.ts'], { eventName: 'pull_request' });
+  assert.equal(scopes.step_test, true);
+});
+
 // Defect D.
 test('computeScopes routes a workflow diff to test:hooks', () => {
   const scopes = computeScopes(['.github/workflows/verify.yml'], { eventName: 'pull_request' });
@@ -152,4 +159,13 @@ test('main fails SAFE: all-true and exit 0 when computation throws', () => {
     Object.values(json).every(Boolean),
     'every key must be true — degrading to all-FALSE would skip every leg',
   );
+});
+
+// #4875 — src/mocks/no-real-home-path.test.ts scans e2e/** (the mock app is
+// seeded from the e2e URL seams), so an e2e-only diff must schedule step_test.
+test('computeScopes routes an e2e-only diff to the frontend test step (#4875)', () => {
+  const scopes = computeScopes(['e2e/responsive/workspace-path-overflow.spec.ts'], {
+    eventName: 'pull_request',
+  });
+  assert.equal(scopes.step_test, true);
 });

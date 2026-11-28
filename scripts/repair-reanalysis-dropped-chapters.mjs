@@ -29,7 +29,7 @@
 
    Dry-run by default. Pass --apply to write.
 
-   Config via env (defaults target the The Drowning Bell incident):
+   Config via env (defaults target the Drowning Bell incident):
      BOOK_DIR        live book dir (contains .audiobook/, audio/)
      BACKUP_BOOK_DIR known-good backup of the same book dir
      CACHE_FILE      analysis cache json (server/handoff/cache/<manuscriptId>.json)

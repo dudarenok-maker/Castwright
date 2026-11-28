@@ -912,7 +912,7 @@ export function resolveNarratorCharacterId(
 /** One group per sentence. Plan 70d — earlier code folded consecutive
     same-speaker sentences into one synth call to cut HTTP roundtrips.
     Two production failures pushed us to per-sentence:
-      1. A 207-sentence narrator block on the canonical The Hollow Tide book
+      1. A 207-sentence narrator block on the canonical book, The Hollow Tide
          folded into one Kokoro call that ran longer than the 30 s
          "Worker has gone quiet" client watchdog, then either timed out
          on the model side or hung at very large context sizes — never
@@ -2925,7 +2925,7 @@ export async function synthesiseChapter(
        own error. NOT always, though — a wrong/proxied SIDECAR_URL can 5xx
        `/unload` while the synth path is perfectly healthy, in which case
        Coqui really does load on top of a resident Qwen and an 8 GB card can
-       OOM. That residue is what on-box register row A19 exists to settle;
+       OOM. That residue is what on-box register row A19 (removed from the register 2026-11-28 by owner ruling, #4883) existed to settle;
        if it shows a recycle storm rather than a clean render or a specific
        sidecar error, this policy is the thing to revisit. Fail-soft +
        abort-rethrow mirror clone-voice-resolver.ts's best-effort self-heal.

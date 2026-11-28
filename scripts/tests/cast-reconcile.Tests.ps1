@@ -52,7 +52,7 @@ Describe 'Get-CastReconciliationSummary' {
         $state = @{ bookId = 'b1'; manuscriptId = 'm1'; title = 'The Floodmark' } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'state.json') -Value $state -Encoding utf8
 
-        # cast.json has only narrator -- the The Floodmark-style corrupted state.
+        # cast.json has only narrator -- the Floodmark-style corrupted state.
         $cast = @{ characters = @(@{ id = 'narrator'; name = 'Narrator' }) } | ConvertTo-Json -Depth 5
         Set-Content -Path (Join-Path $script:audiobookDir 'cast.json') -Value $cast -Encoding utf8
 

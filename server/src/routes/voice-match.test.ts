@@ -162,7 +162,7 @@ beforeAll(async () => {
   /* A DIFFERENT author + series, confirmed, with its own narrator. Every
      book's narrator shares the deterministic id/name "narrator", so a
      library-wide exact-name match would let this unrelated-series narrator
-     surface as a candidate for a The Hollow Tide book's narrator. It must not. */
+     surface as a candidate for The Hollow Tide's narrator. It must not. */
   writeBookOnDisk(
     workspaceRoot,
     'Derek Landy',

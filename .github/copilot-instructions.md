@@ -53,7 +53,7 @@ Sidecar/pytest (optional venv):
 - npm run test:sidecar (wrapper; prints SKIP if venv not bootstrapped)
 
 Pester (PowerShell scripts tests):
-- Install Pester 5 once: Install-Module -Name Pester -Scope CurrentUser -Force -SkipPublisherCheck
+- Install Pester 5.x once (Pester 6 is not supported): Install-Module -Name Pester -RequiredVersion 5.7.1 -Scope CurrentUser -Force -SkipPublisherCheck
 - npm run test:scripts
 
 ---

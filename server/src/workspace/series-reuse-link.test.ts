@@ -171,7 +171,7 @@ describe('linkSeriesReuseAtAnalysis (plan 126 Facet A)', () => {
   /* Stable-key continuity — the narrator (and any character that keeps its
      deterministic voiceId/id across books) must link even when the analyzer
      renames it to something with ZERO name-token overlap with the prior. This
-     is the The Riptide narrator regression: prior books call it "Narrator", this
+     is The Riptide narrator regression: prior books call it "Narrator", this
      book's analysis named it "Author" → the name scorer's 0.34 floor drops it,
      so the bespoke qwen voice silently fails to carry over. */
   it('links by stable voiceId even when the name has no token overlap (narrator rename)', async () => {

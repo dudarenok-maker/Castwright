@@ -103,6 +103,8 @@ import {
   HOLLOW_TIDE_CONTINUE,
   HOLLOW_TIDE_LISTEN_PROGRESS,
   HOLLOW_TIDE_DRIFT_EVENTS,
+  HOLLOW_TIDE_VOICE_LIBRARY,
+  HOLLOW_TIDE_CLONE_TRANSCRIPT,
   COALFALL_VOICES,
 } from '../mocks/marketing/hollow-tide';
 import { MOCK_BASE_VOICES, MOCK_VOICE_LIBRARY } from '../mocks/voices';
@@ -8830,7 +8832,7 @@ async function mockCreateBookExport(
         downloadUrl: URL.createObjectURL(blob),
         syncPath:
           body.destination === 'sync-folder'
-            ? 'C:\\Users\\dudar\\OneDrive\\Audiobooks\\Mock.zip'
+            ? 'C:\\Users\\you\\OneDrive\\Audiobooks\\Mock.zip'
             : null,
         completedAt: new Date().toISOString(),
       });
@@ -8854,22 +8856,30 @@ async function mockGetBookExport(_bookId: string, exportId: string): Promise<Boo
   return job;
 }
 
+/* How long a mock job reads `cancelling` before `cancelled`. Longer than the
+   800 ms export poll, so a mock-mode poller observes the in-between state. */
+const MOCK_EXPORT_CANCEL_MS = 1200;
+
 async function mockCancelBookExport(_bookId: string, exportId: string): Promise<void> {
   await wait(20);
-  const timers = MOCK_EXPORT_TIMERS.get(exportId);
-  if (timers) {
-    for (const t of timers) clearTimeout(t);
-    MOCK_EXPORT_TIMERS.delete(exportId);
-  }
   const job = MOCK_EXPORT_JOBS.get(exportId);
-  if (job && job.status !== 'done' && job.status !== 'failed' && job.status !== 'cancelled') {
-    MOCK_EXPORT_JOBS.set(exportId, {
-      ...job,
-      status: 'cancelled',
-      completedAt: new Date().toISOString(),
-      errorReason: 'Cancelled by user.',
-    });
-  }
+  /* Terminal jobs stay as they are. A job already cancelling keeps its pending
+     timer: clearing it would leave the job cancelling for good. */
+  if (!job || (job.status !== 'queued' && job.status !== 'in_progress')) return;
+  for (const t of MOCK_EXPORT_TIMERS.get(exportId) ?? []) clearTimeout(t);
+  MOCK_EXPORT_JOBS.set(exportId, { ...job, status: 'cancelling', errorReason: null });
+  MOCK_EXPORT_TIMERS.set(exportId, [
+    setTimeout(() => {
+      const j = MOCK_EXPORT_JOBS.get(exportId);
+      if (!j) return;
+      MOCK_EXPORT_JOBS.set(exportId, {
+        ...j,
+        status: 'cancelled',
+        completedAt: new Date().toISOString(),
+        errorReason: 'Cancelled by user.',
+      });
+    }, MOCK_EXPORT_CANCEL_MS),
+  ]);
 }
 
 /* Plan 67 — mock the slug minter so the design-fixture mode shows a
@@ -10497,6 +10507,13 @@ async function realPromoteToLibrary(body: {
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(body),
   });
+  /* The server's cloned-source 403 and unreadable-source 503 carry a curated
+     `{ error }` sentence — surface just that, like realAssignLibraryVoice's 409
+     below. */
+  if (res.status === 403 || res.status === 503) {
+    const err = await res.json().catch(() => ({}));
+    throw new Error((err as { error?: string }).error || 'Voice library promote failed.');
+  }
   if (!res.ok)
     throw new Error(
       `Voice library promote failed (${res.status}): ${(await res.text()) || res.statusText}`,
@@ -10597,12 +10614,20 @@ async function realRevokeVoiceLibraryEntry(voiceUuid: string): Promise<VoiceLibr
    Exported so api.voice-library.test.ts can exercise the mock pair
    directly — the api module locks USE_MOCKS at import time, mirroring
    mockGetBookState/_resetMockBookStates above. */
-let mockVoiceLibraryEntries: VoiceLibraryEntry[] = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({
+/* #4864 — under VITE_DEMO_CAPTURE the store seeds from the Hollow Tide
+   library instead (the author's cloned voice beside the series' designed
+   ones), so the marketing My-voices / clone shots read as one fictional
+   library rather than the generic test fixtures. */
+const MOCK_VOICE_LIBRARY_SEED: VoiceLibraryEntry[] = DEMO_CAPTURE
+  ? HOLLOW_TIDE_VOICE_LIBRARY
+  : MOCK_VOICE_LIBRARY_ENTRIES;
+
+let mockVoiceLibraryEntries: VoiceLibraryEntry[] = MOCK_VOICE_LIBRARY_SEED.map((e) => ({
   ...e,
 }));
 
 export function _resetMockVoiceLibrary(): void {
-  mockVoiceLibraryEntries = MOCK_VOICE_LIBRARY_ENTRIES.map((e) => ({ ...e }));
+  mockVoiceLibraryEntries = MOCK_VOICE_LIBRARY_SEED.map((e) => ({ ...e }));
 }
 
 /* e2e test-only escape hatch (plan 276) — mock mode's public API surface
@@ -11054,7 +11079,9 @@ export async function mockSampleLibraryVoice(
 /** The canned "Whisper" transcript mock ingest returns. Shared with
  *  mockCloneVoice so the two can't drift — if they did, mock mode would report
  *  `transcriptSource: 'user'` for a transcript the user never touched (#1836). */
-const MOCK_WHISPER_TRANSCRIPT = 'the quick brown fox jumped';
+/* #4864 — under VITE_DEMO_CAPTURE the "Whisper" text is a Hollow Tide line,
+   so the clone-sample marketing shot shows a believable transcript. */
+const MOCK_WHISPER_TRANSCRIPT = DEMO_CAPTURE ? HOLLOW_TIDE_CLONE_TRANSCRIPT : 'the quick brown fox jumped';
 
 export async function mockCloneVoiceSample(_form: FormData): Promise<CloneSampleCandidate> {
   await wait(300);

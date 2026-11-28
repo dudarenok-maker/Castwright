@@ -60,6 +60,12 @@ export const STEPS = [
         'vite.config.ts',
         'vitest.config.ts',
         'server/package.json',
+        /* server/src imports scripts/lib/{server-owner,node-runtime-guard}.mjs;
+           tsc resolves their types from these sibling .d.mts files, which sit
+           outside the globs above. (The .mjs bodies are not type-checked: no
+           allowJs.) */
+        'scripts/lib/server-owner.d.mts',
+        'scripts/lib/node-runtime-guard.d.mts',
       ],
       includeLockfiles: ['root', 'server'],
     },
@@ -442,7 +448,11 @@ export const STEPS = [
   {
     name: 'test',
     inputs: {
-      globs: ['src/**'],
+      /* e2e/**: src/mocks/no-real-home-path.test.ts scans it (#4875). On an
+         e2e-, data- or mocks-only diff the Windows leg's unscoped `npm test`
+         is what runs that guard (Ubuntu's `vitest --changed` cannot select
+         it); workflow-wiring.test.mjs pins that leg to stay unscoped. */
+      globs: ['src/**', 'e2e/**'],
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',
@@ -456,6 +466,10 @@ export const STEPS = [
            core. extraFiles are literal paths (no globs), so each is named. */
         'server/src/analyzer/attribution-eval/__fixtures__/anchor-offset-vectors.json',
         'server/src/analyzer/attribution-eval/__fixtures__/review-apply-vectors.json',
+        /* The clone-readiness selectors and help-topics.clone-labels.test.tsx
+           import this server module directly, so an edit to it alone must
+           schedule the frontend suite. */
+        'server/src/tts/clone-engines.ts',
       ],
       includeLockfiles: ['root'],
     },
@@ -646,7 +660,7 @@ export const STEPS = [
         'scripts/tests/fixtures/**',
       ],
       // run-powershell.mjs (#2567 review): `npm run test:scripts` actually
-      // launches through this file (package.json:46), not run.ps1 directly —
+      // launches through this file (the `test:scripts` script in package.json), not run.ps1 directly —
       // without it here, an edit to the launcher itself (e.g. the pwsh/
       // powershell fallback logic) prints test:scripts [cached] and the
       // Pester battery never re-verifies the very script that runs it.
@@ -1315,20 +1329,41 @@ function detectSiblingContention() {
 
 // Tool fingerprints — strings that change when the relevant tool's
 // availability or version changes. Used to invalidate the cache when a user
-// installs Pester or bootstraps the pytest venv after a previous skip.
+// installs/upgrades Pester, or bootstraps the pytest venv after a previous skip
+// (the Pester runner itself exits 1 without Pester 5.x, so only the venv skips).
 
-function pesterFingerprint() {
-  const r = spawnSync(
-    'powershell',
-    [
-      '-NoProfile',
-      '-Command',
-      "$m = Get-Module -ListAvailable Pester | Sort-Object Version -Descending | Select-Object -First 1; if ($m) { $m.Version.ToString() } else { 'unavailable' }",
-    ],
-    { encoding: 'utf8', timeout: 5000, windowsHide: true },
-  );
-  if (r.error || r.status !== 0) return 'unavailable';
-  return (r.stdout ?? '').trim() || 'unavailable';
+// Same selection as scripts/tests/run.ps1 (highest Pester 5.x, via the shared
+// select-pester5.ps1) under the shell run-powershell.mjs picks (pwsh first,
+// else Windows PowerShell), so the fingerprint moves exactly when the Pester
+// that actually runs changes. `spawn` and `lib` are parameters only so tests can
+// pin the shell order and the failed-load path without installing anything.
+export function pesterFingerprint(
+  spawn = spawnSync,
+  lib = join(dirname(fileURLToPath(import.meta.url)), 'lib', 'select-pester5.ps1'),
+) {
+  const script =
+    "$ErrorActionPreference = 'Stop'; " +
+    `. '${lib.replace(/'/g, "''")}'; ` +
+    '$m = Select-Pester5Module -Modules (Get-Module -ListAvailable -Name Pester); ' +
+    "if ($m) { \"$($m.Version)|$($m.Path)\" } else { 'unavailable' }";
+  for (const shell of ['pwsh', 'powershell']) {
+    // -ExecutionPolicy Bypass as run-powershell.mjs passes it: Windows
+    // PowerShell 5.1's default (Restricted) blocks the dot-source above.
+    const r = spawn(shell, ['-ExecutionPolicy', 'Bypass', '-NoProfile', '-Command', script], {
+      encoding: 'utf8',
+      timeout: 15000,
+      windowsHide: true,
+    });
+    // A shell that cannot be spawned (ENOENT, EACCES, EFTYPE, ...) falls
+    // through to the next, as run-powershell's which() does. A timeout does not
+    // (pwsh resolved, so the runner would use it), and neither does a failed
+    // load: it must not read as "no Pester" ('unavailable').
+    if (r.error && r.error.code !== 'ETIMEDOUT') continue;
+    if (r.error) return `error:${r.error.code ?? 'spawn'}`;
+    if (r.status !== 0) return `error:exit${r.status}`;
+    return (r.stdout ?? '').trim() || 'error:empty';
+  }
+  return 'unavailable';
 }
 
 // I2 (#2146 review): this used to hardcode the Windows venv layout

@@ -320,7 +320,7 @@ describe('POST /api/import → POST /api/books — excluded chapters round-trip'
   });
 
   it('auto-excludes front/back-matter at import even with no excludedSlugs (plan 148)', async () => {
-    /* The the Hollow Tide stall: EPUB back-matter (Acknowledgments / Contents / a
+    /* The Hollow Tide stall: EPUB back-matter (Acknowledgments / Contents / a
        next-book teaser) was queued because nothing flagged it. Layer A now
        applies the front/back-matter heuristic at import, so these default to
        excluded WITHOUT the client sending excludedSlugs. Story chapters stay

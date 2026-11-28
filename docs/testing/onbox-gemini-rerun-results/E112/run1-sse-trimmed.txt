@@ -1,0 +1,17 @@
+# POST /api/manuscripts/mns_C7-tTwCEkp/analysis/chapters {"chapterIds":[2],"model":"gemma-4-31b-it"}
+# Heartbeat and keep-alive lines removed; long lines cut.
+START 2026-11-28 12:02:20 +1100
+data: {"kind":"log","phaseId":0,"message":"Re-analyzing 1 chapter via Gemma 4 31B."}
+data: {"kind":"phase","phaseId":0,"progress":0.02,"label":"Detecting characters","model":"gemma-4-31b-it"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 2 — Chapter One — The Knock: detecting cast…"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":1411,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":6939,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":2,"model":"gemma-4-31b-it","waitMs":49750,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 2 cast — 6 characters detected."}
+data: {"kind":"cast-update","characters":[{"id":"narrator","name":"Narrator","role":"Third-person observer","color":"narrator","tone":{"warmth":50,"pace":45,"authority":70,"emotion":30},"gender":"neutral","description":"A measured narrator describing the scene in the forge","evidence":[{"quote":"The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when th… (trimmed, 2878 chars)
+data: {"kind":"phase","phaseId":0,"progress":0.9500000000000001,"label":"Detecting characters","model":"gemma-4-31b-it"}
+data: {"kind":"log","phaseId":0,"message":"Cast finalisation deferred — 2 non-excluded chapters still need Phase 0a detection (1/3 covered). Existing stage1 left intact; run the main analysis to fill the gaps."}
+data: {"kind":"cast-update","characters":[{"id":"narrator","name":"Narrator","role":"Third-person observer","color":"narrator","tone":{"warmth":50,"pace":45,"authority":70,"emotion":30},"gender":"neutral","description":"A measured narrator describing the scene in the forge","evidence":[{"quote":"The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when th… (trimmed, 2878 chars)
+data: {"kind":"phase","phaseId":0,"progress":1,"label":"Detecting characters","model":"gemma-4-31b-it"}
+data: {"kind":"error","code":"cast_incomplete","message":"Phase 0a covers 1 of 3 chapters — run main analysis to detect the rest before stage1 can finalise."}
+END 2026-11-28 12:04:10 +1100
