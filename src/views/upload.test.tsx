@@ -40,6 +40,7 @@ import { chaptersSlice } from '../store/chapters-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { accountSlice } from '../store/account-slice';
 import type { LibraryBook, Sentence } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 function makeStore(opts: {
   reuploadingBookId?: string | null;
@@ -53,6 +54,7 @@ function makeStore(opts: {
     middleware: (getDefault) =>
       opts.guard ? getDefault().prepend(restructureGuardMiddleware) : getDefault(),
     reducer: {
+      loadedBook: heldBook(opts.reuploadingBookId ?? ''),
       manuscript: manuscriptSlice.reducer,
       ui: uiSlice.reducer,
       library: librarySlice.reducer,

@@ -26,6 +26,7 @@ import {
 } from '../lib/play-sample-with-auto-load';
 import type { BaseVoice, Character, LibraryBook, Voice } from '../lib/types';
 import type { PromoteQwenVoiceResponse } from '../lib/api';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 
 vi.mock('../lib/play-sample-with-auto-load', () => ({
   playSampleWithAutoLoad: vi.fn().mockResolvedValue({ analyzerEvicted: false }),
@@ -145,9 +146,14 @@ function makeStore({ baseVoices, voices, libraryBook, myVoices }: StoreSetup = {
       loadedBook: loadedBookSlice.reducer,
       notifications: notificationsSlice.reducer,
     },
-    preloadedState: myVoices
-      ? { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } }
-      : undefined,
+    preloadedState: {
+      /* #3519 — the slices hold the book the drawer is opened on. */
+      loadedBook: loadedPair({ bookId: 'book-1' }),
+      voiceLibrary: {
+        ...voiceLibrarySlice.getInitialState(),
+        ...(myVoices ? { entries: myVoices } : {}),
+      },
+    },
   });
   if (baseVoices) store.dispatch(voicesActions.hydrateBaseVoices(baseVoices));
   if (voices) store.dispatch(voicesActions.hydrate({ voices }));

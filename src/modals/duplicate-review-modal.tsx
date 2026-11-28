@@ -25,7 +25,9 @@ import { useEffect, useState } from 'react';
 import { IconClose } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { api } from '../lib/api';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { castActions } from '../store/cast-slice';
 import { CAST_EDITS_PAUSED_TOOLTIP, useCastReadOnly } from '../components/cast-edits-paused-banner';
 import { notificationsActions } from '../store/notifications-slice';
@@ -90,9 +92,8 @@ export function DuplicateReviewModal({
      pickMergeSurvivor picks (longer-named / substring-containing).
      'a' or 'b'. */
   const [survivor, setSurvivor] = useState<'a' | 'b'>('a');
-  /* The book the cast slice holds: a link is mirrored into it only when it is the
-     loser's (review pass 1). */
-  const openBookId = useAppSelector((s) => s.manuscript?.bookId ?? null);
+  /* Read when an answer lands, not at render: which book the cast slice holds. */
+  const store = useStore<RootState>();
 
   /* Reset modal state every time it opens with a fresh pair. */
   useEffect(() => {
@@ -142,7 +143,7 @@ export function DuplicateReviewModal({
       /* Review pass 1 — the cast slice holds ONE book: mirror the link only into the
          book it was made in (the loser's), never into a same-id row of another
          open book, which the next autosave would then write. */
-      if (openBookId !== null && openBookId === loserBookId) {
+      if (selectHoldsBook(store.getState(), loserBookId)) {
         dispatch(
           castActions.applyManualMatch({
             characterId: loserChar.id,
@@ -185,13 +186,15 @@ export function DuplicateReviewModal({
         otherBookId: sideB.voice.bookId,
         otherCharacterId: sideB.character.id,
       });
-      dispatch(
-        castActions.applyNotLinked({
-          characterId: sideA.character.id,
-          otherBookId: sideB.voice.bookId,
-          otherCharacterId: sideB.character.id,
-        }),
-      );
+      if (selectHoldsBook(store.getState(), sideA.voice.bookId)) { // #3519
+        dispatch(
+          castActions.applyNotLinked({
+            characterId: sideA.character.id,
+            otherBookId: sideB.voice.bookId,
+            otherCharacterId: sideB.character.id,
+          }),
+        );
+      }
       /* The 'b' side's redux store lives in a sibling tab / foreign-cast
          cache. The server already wrote the symmetric entry to that
          book's cast.json; the next hydrate of the b-book will mirror it

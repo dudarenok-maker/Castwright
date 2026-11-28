@@ -14,7 +14,9 @@
 
 import { useState } from 'react';
 import { api } from '../lib/api';
-import { useAppDispatch } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { castActions } from '../store/cast-slice';
 import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
@@ -51,6 +53,7 @@ export function EmotionVariantDesigner({
 }) {
   const characterId = character.id;
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const playback = useSamplePlayback();
   const markStale = useMarkCharacterStaleIfRendered();
   const [busy, setBusy] = useState<Record<string, boolean>>({});
@@ -153,6 +156,7 @@ export function EmotionVariantDesigner({
         modelKey,
         emotion,
       });
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       dispatch(castActions.setCharacterEmotionVariant({ characterId, emotion, voiceId }));
       setSessionIds((s) => ({ ...s, [emotion]: voiceId }));
       /* A (re)designed variant changes how this character's tagged lines render,
@@ -176,6 +180,7 @@ export function EmotionVariantDesigner({
     setError(null);
     try {
       await api.removeQwenVariant(bookId, characterId, emotion);
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       dispatch(castActions.removeCharacterEmotionVariant({ characterId, emotion }));
       setSessionIds((s) => {
         const { [emotion]: _dropped, ...rest } = s;

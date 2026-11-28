@@ -15,6 +15,7 @@ import { changeLogSlice } from '../store/change-log-slice';
 import { notificationsSlice, notificationsActions, type Toast } from '../store/notifications-slice';
 import { api } from '../lib/api';
 import { ScriptReviewDiff } from './script-review-diff';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 // ---------------------------------------------------------------------------
 // Shared helpers for the summary-accordion + create-once tests (Tasks 5–8).
@@ -45,6 +46,7 @@ function renderDiff(opts: {
   const chapterIds = [...new Set(opts.ops.map((o) => o.chapterId))];
   const store = configureStore({
     reducer: {
+      loadedBook: heldBook('bk'),
       ui: uiSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       cast: castSlice.reducer,
@@ -94,6 +96,7 @@ const setSelected = (store: ReturnType<typeof renderDiff>['store'], keys: string
 function makeStore() {
   const store = configureStore({
     reducer: {
+      loadedBook: heldBook('book-A'),
       ui: uiSlice.reducer,
       manuscript: manuscriptSlice.reducer,
       cast: castSlice.reducer,
@@ -302,6 +305,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -363,6 +367,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const discardSpy = vi.spyOn(api, 'discardScriptReview').mockResolvedValue(undefined);
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -421,6 +426,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const discardSpy = vi.spyOn(api, 'discardScriptReview').mockRejectedValue(new Error('discard failed'));
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -534,6 +540,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
   it('renders the unappliable notice when bucket.unappliable is non-empty', () => {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -579,6 +586,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
   it('renders a validate_instruct row with the Instruct heading and before → after', () => {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -645,6 +653,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
   it('renders a reattribute row (not a silent blank) (fs-58 Unit B)', () => {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -698,6 +707,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
   it('renders a flag_nonstory row struck (fs-58 Unit B)', () => {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -761,6 +771,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
       reducer: {
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: heldBook(bookId),
         cast: castSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
         changeLog: changeLogSlice.reducer,
@@ -1104,6 +1115,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
     const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: true });
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('book-A'),
         ui: uiSlice.reducer,
         manuscript: manuscriptSlice.reducer,
         cast: castSlice.reducer,
@@ -1377,6 +1389,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
       const resolveSpy = vi.spyOn(api, 'resolveScriptReviewOps').mockResolvedValue({ ok: false });
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('book-1'),
           ui: uiSlice.reducer,
           manuscript: manuscriptSlice.reducer,
           cast: castSlice.reducer,
@@ -1464,6 +1477,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
       );
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('book-1'),
           ui: uiSlice.reducer,
           manuscript: manuscriptSlice.reducer,
           cast: castSlice.reducer,
@@ -1570,6 +1584,7 @@ describe('fs-58 — ScriptReviewDiff', () => {
         .mockImplementation(async (_bookId, { chapterId }) => (chapterId === 1 ? onePromise : twoPromise));
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('book-1'),
           ui: uiSlice.reducer,
           manuscript: manuscriptSlice.reducer,
           cast: castSlice.reducer,

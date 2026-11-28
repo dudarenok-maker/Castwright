@@ -13,6 +13,7 @@ import { voiceLibrarySlice, type VoiceLibraryEntry, type VoiceLibraryState } fro
 import { castSlice, castActions } from '../store/cast-slice';
 import { VoiceCard, VoiceLibraryPanel } from './voice-library-panel';
 import type { Character, Voice } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 const assignLibraryVoiceMock =
   vi.fn<
@@ -48,7 +49,7 @@ vi.mock('../lib/api', () => ({
    pass `myVoices` to seed entries for the new tests further down. */
 function makeVoiceLibraryStore(myVoices: VoiceLibraryState['entries'] = []) {
   return configureStore({
-    reducer: { voiceLibrary: voiceLibrarySlice.reducer },
+    reducer: { loadedBook: heldBook('b1'), voiceLibrary: voiceLibrarySlice.reducer },
     preloadedState: { voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: myVoices } },
   });
 }
@@ -899,7 +900,7 @@ describe('VoiceLibraryPanel — "My voices" group (fs-38 Wave 1, Task 16)', () =
     listVoiceLibraryMock.mockResolvedValue({ voices: [entry] });
     const coquiChar: Character = { ...marlow, id: 'coqui-char', ttsEngine: 'coqui' };
     const store = configureStore({
-      reducer: { voiceLibrary: voiceLibrarySlice.reducer, cast: castSlice.reducer },
+      reducer: { loadedBook: heldBook('b1'), voiceLibrary: voiceLibrarySlice.reducer, cast: castSlice.reducer },
       preloadedState: {
         voiceLibrary: { ...voiceLibrarySlice.getInitialState(), entries: [entry] },
       },

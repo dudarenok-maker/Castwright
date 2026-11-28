@@ -51,6 +51,7 @@ vi.mock('../store', async () => {
 });
 
 import { RestructureView } from './restructure';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 
 type S = { id: number; chapterId: number; characterId: string; text: string };
 const s = (chapterId: number, id: number, text: string): S => ({ id, chapterId, characterId: 'c', text });
@@ -86,6 +87,7 @@ function makeStore() {
       ui: uiSlice.reducer,
       chapters: chaptersSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: loadedBookSlice.reducer,
       library: librarySlice.reducer,
       notifications: notificationsSlice.reducer,
       cast: castSlice.reducer,

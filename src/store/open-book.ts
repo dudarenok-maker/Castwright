@@ -45,3 +45,14 @@ export function selectIsOpenBook(
 ): boolean {
   return state.loadedBook.loadedManuscriptId === book.manuscriptId;
 }
+
+/* The same question for a writer that knows its book only by id: a view or
+   handler that saves through its own route and mirrors the answer into the
+   slices. Ask when the answer lands, never when the request is made
+   (store/book-identity.harness.test.ts has one row per such writer). */
+export function selectHoldsBook(
+  state: { loadedBook: { loadedBookId: string | null } },
+  bookId: string,
+): boolean {
+  return state.loadedBook.loadedBookId === bookId;
+}

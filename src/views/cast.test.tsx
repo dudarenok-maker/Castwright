@@ -22,6 +22,8 @@ import { CastView } from './cast';
 import { playSampleWithAutoLoad } from '../lib/play-sample-with-auto-load';
 import { api } from '../lib/api';
 import type { Character, Voice, TtsModelKey, Sentence, DriftEvent, TtsEngine } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
+import { loadedBookSlice } from '../store/loaded-book-slice';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -742,6 +744,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     function makeSplitStore() {
       return configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -828,6 +831,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     it("#2129, widened by I2 (fix round, #2163) — both an alias-resolved AND a normalised-id row are marked so the banner stops implying the audio is fine", () => {
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -888,6 +892,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     it('F5 (#2163) — a resolution outside the stale-audio allowlist gets no note, even though it still counts as auto-reconciled', () => {
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -943,6 +948,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       // "audio is current" headline directly above it.
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1259,6 +1265,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       };
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1349,6 +1356,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       });
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1432,6 +1440,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       });
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1506,6 +1515,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       // to prove the hide is scoped to the dead entry, not the whole row.
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1592,6 +1602,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
     it('needs-your-decision: the reject button is disabled once the selected candidate is already in rejectedAgainst', () => {
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b_current'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           castDesign: castDesignSlice.reducer,
@@ -1671,6 +1682,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       function makeRejectedAgainstStore() {
         return configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -1907,6 +1919,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         };
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -1968,6 +1981,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       it('F1 (CRITICAL) — a needs-decision row whose OWN id is a reserved fold-bucket id keeps the link action disabled regardless of candidate', () => {
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -2007,6 +2021,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       it('F1/N2 decision — a needs-decision row named "narrator" keeps the link action disabled against an ordinary candidate', () => {
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -2053,6 +2068,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         };
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -2109,6 +2125,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       it('F4 — the source-side reserved check is normalisation-safe: a case/separator-drifted id still disables the link action', () => {
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -2151,6 +2168,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
         };
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -2343,6 +2361,7 @@ describe('CastView Qwen status pill (plan 117)', () => {
       function renderWithOrphans(orphanedCharacterFallbacks: Record<string, OrphanedCharacterFallback>) {
         const store = configureStore({
           reducer: {
+            loadedBook: heldBook('b_current'),
             ui: uiSlice.reducer,
             cast: castSlice.reducer,
             castDesign: castDesignSlice.reducer,
@@ -3994,6 +4013,7 @@ describe('CastView — bulk 1.7B tier pin + reset', () => {
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,
+        loadedBook: heldBook('bTier'),
       },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'bTier', status: 'complete' }));
@@ -4318,6 +4338,7 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         notifications: notificationsSlice.reducer,
         bookBusy: bookBusySlice.reducer,
         analysis: analysisSlice.reducer,
@@ -4429,6 +4450,7 @@ describe('route-backed mirrors raise no read-only toast (plan 291, I1)', () => {
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+        loadedBook: loadedBookSlice.reducer,
         notifications: notificationsSlice.reducer,
         bookBusy: bookBusySlice.reducer,
         analysis: analysisSlice.reducer,
@@ -4472,6 +4494,7 @@ describe('R57: the cast-identity controls of the Cast view while read-only', () 
     ]);
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook(BOOK),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         castDesign: castDesignSlice.reducer,

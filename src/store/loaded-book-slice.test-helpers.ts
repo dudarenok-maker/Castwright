@@ -11,3 +11,11 @@ export function loadedPair(ids: {
 }): LoadedBookState {
   return { loadedBookId: ids.bookId ?? null, loadedManuscriptId: ids.manuscriptId ?? null };
 }
+
+/** A fixed `loadedBook` reducer for a store that never hydrates a manuscript:
+    its slices hold `bookId` throughout. One constant state, so no action makes
+    a subscriber re-render. */
+export function heldBook(bookId: string): () => LoadedBookState {
+  const pair = loadedPair({ bookId });
+  return () => pair;
+}

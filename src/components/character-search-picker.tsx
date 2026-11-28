@@ -120,7 +120,8 @@ export function CharacterSearchPicker({
     setPendingRosterId(row.entry.id);
     try {
       const newLocalId = await onAddFromSeriesRoster(row.entry);
-      onPick(newLocalId);
+      /* '' — the book is no longer the one on hand, so there is no line to reassign (#3519). */
+      if (newLocalId) onPick(newLocalId);
       onClose();
     } catch (err) {
       console.warn('[character-search-picker] add-from-roster failed', err);

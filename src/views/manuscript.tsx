@@ -30,6 +30,7 @@ import { CHAR_COLORS } from '../lib/colors';
 import { stripChapterPrefix } from '../lib/format-chapter-title';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import {
   ANALYSIS_RUNNING_REASON,
   RESTRUCTURING_REASON,
@@ -817,7 +818,8 @@ export function ManuscriptView({
       if (!bookId) return;
       try {
         const result = await api.createCharacter(bookId, fields as Parameters<typeof api.createCharacter>[1]);
-        dispatch(castActions.addCharacter(result.character));
+        if (selectHoldsBook(store.getState(), bookId)) // #3519
+          dispatch(castActions.addCharacter(result.character));
       } catch (err) {
         /* R57 — refused while an analysis runs (R55): the read-only path (the form stays open). */
         if (dispatch(handleCastIdentityBusy(bookId, err))) throw err;
@@ -831,7 +833,7 @@ export function ManuscriptView({
         throw err;
       }
     },
-    [bookId, dispatch],
+    [bookId, dispatch, store],
   );
 
   /* fs-58 Task 10 — unresolved-findings badges on the Review Script button

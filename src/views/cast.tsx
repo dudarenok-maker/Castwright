@@ -37,7 +37,9 @@ import type {
   TtsEngine,
   Sentence,
 } from '../lib/types';
-import { useAppSelector, useAppDispatch } from '../store';
+import { useStore } from 'react-redux';
+import { useAppSelector, useAppDispatch, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { designWillGeneratePersona } from '../lib/design-persona';
 import { voicesActions } from '../store/voices-slice';
@@ -560,6 +562,7 @@ export function CastView({
      source of truth for ttsModelKey after a bulk pin or reset. */
   const storedTiers = useAppSelector(selectCastTierByCharacterId);
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   /* Plan 291 (#4031) — the cast is read-only while a re-analysis runs: what
      writes the cast slice (voice assign, compare) is disabled; the route-backed
      controls stay live, except the cast-identity ones the server refuses mid-run
@@ -581,6 +584,7 @@ export function CastView({
     setOrphanRejectBusyId(orphanedId);
     try {
       const res = await api.rejectOrphanMatch({ bookId, characterId: targetCharacterId, orphanedId });
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       dispatch(
         castActions.applyOrphanRejection({
           orphanedId,
@@ -649,6 +653,7 @@ export function CastView({
         characterId: targetCharacterId,
         orphanedId,
       });
+      if (!selectHoldsBook(store.getState(), bookId)) return true; // #3519 — saved; not on screen
       dispatch(
         castActions.undoOrphanRejection({
           orphanedId,
@@ -810,6 +815,7 @@ export function CastView({
         characterId: targetCharacterId,
         orphanedId,
       });
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       dispatch(
         castActions.applyOrphanLink({
           orphanedId,
@@ -1023,6 +1029,7 @@ export function CastView({
     try {
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, 'qwen3-tts-1.7b')));
       setPinDialogOpen(false);
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       qwenMembers.forEach((c) =>
         dispatch(castActions.updateCharacter({ ...c, ttsModelKey: 'qwen3-tts-1.7b' }, { routeBacked: true })),
       );
@@ -1037,6 +1044,7 @@ export function CastView({
     try {
       await Promise.all(voiceIds.map((vid) => api.setCastTier(bookId, vid, null)));
       setResetDialogOpen(false);
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       qwenMembers.forEach((c) =>
         dispatch(castActions.updateCharacter({ ...c, ttsModelKey: null }, { routeBacked: true })),
       );
@@ -1299,6 +1307,7 @@ export function CastView({
        `setCharacters` from the pre-request roster sent a stale whole-slice PUT that
        lacked the merge's aliases and `notLinkedTo` union. Mock mode has no cast to
        return, so it falls back to dropping the source locally (still unpersisted). */
+    if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
     dispatch(
       castActions.applyMerge({ characters: merged ?? characters.filter((c) => c.id !== sourceId) }),
     );

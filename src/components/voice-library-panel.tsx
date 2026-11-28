@@ -4,7 +4,9 @@ import { VoiceSwatch, Pill } from './primitives';
 import type { Character, TtsModelKey, Voice } from '../lib/types';
 import { findCharacterForVoice } from '../lib/voice-character-link';
 import { engineForModelKey, modelKeyForEngineChoice } from '../lib/tts-models';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { assignVoice, type VoiceLibraryEntry } from '../store/voice-library-slice';
 import { castActions } from '../store/cast-slice';
 import { pausedControlProps } from './cast-edits-paused-banner';
@@ -95,6 +97,7 @@ export function VoiceLibraryPanel({
      Voice.familyKey, and completes by dropping onto/tapping a cast ROW —
      a library entry isn't a `Voice` and has no row to complete against). */
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   /* Defensive read (mirrors EMPTY_LIBRARY_BOOKS in
      voices.tsx): the panel mounts inside CastView, which many existing test
      stores compose WITHOUT the `voiceLibrary` slice registered — a plain
@@ -281,6 +284,7 @@ export function VoiceLibraryPanel({
                   )
                     .unwrap()
                     .then(({ written, warning }) => {
+                      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
                       /* Gate 2 C-2 — mirror the profile drawer's `assignMyVoice`
                          reconcile-from-the-response discipline: a 200 only
                          means the slots in `written` actually landed (`qwen`

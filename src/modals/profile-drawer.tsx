@@ -35,7 +35,9 @@ import { useSamplePlayback } from '../lib/use-sample-playback';
 import { playSampleWithAutoLoad, type SampleStatus } from '../lib/play-sample-with-auto-load';
 import { resolveTtsVoiceForCharacter } from '../lib/tts-voice-mapping';
 import { gradientForTtsVoice } from '../lib/voice-palette';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { useLocalAnalyzerGuard } from '../hooks/use-local-analyzer-guard';
 import { voicesActions } from '../store/voices-slice';
 import { notificationsActions } from '../store/notifications-slice';
@@ -269,6 +271,7 @@ export function ProfileDrawer({
      merge, aliases and the library assign save through their own routes and
      stay live. */
   const readOnly = useCastReadOnly();
+  const store = useStore<RootState>();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   /* #3084 W4 — a persona engine on the Voice engine's card pauses a running render first. */
   const { guard: personaGuard, modal: personaGuardModal } = useLocalAnalyzerGuard({ purpose: 'design' });
@@ -474,6 +477,7 @@ export function ProfileDrawer({
          off `written` makes the optimistic write settle on what the server
          actually persisted. */
       const routedEngine = engineForModelKey(intendedModelKey);
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       for (const engine of written) {
         dispatch(
           castActions.setOverrideVoiceName({
@@ -539,6 +543,7 @@ export function ProfileDrawer({
       const { cleared } = await dispatch(
         unassignVoice({ voiceUuid, bookId, characterId: character.id }),
       ).unwrap();
+      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
       for (const engine of cleared) {
         dispatch(
           castActions.clearOverrideVoiceSlot({
@@ -1009,7 +1014,8 @@ export function ProfileDrawer({
     try {
       const { voiceStyle } = await api.generateVoiceStyle(bookId, character.id);
       setPersona(voiceStyle);
-      dispatch(castActions.setVoiceStyle({ characterId: character.id, voiceStyle }));
+      if (selectHoldsBook(store.getState(), bookId)) // #3519
+        dispatch(castActions.setVoiceStyle({ characterId: character.id, voiceStyle }));
     } catch (e) {
       setEngineError((e as Error).message || 'Voice-style generation failed.');
     } finally {
@@ -1039,7 +1045,7 @@ export function ProfileDrawer({
           seeded = true;
           return instruct;
         });
-        if (seeded) {
+        if (seeded && selectHoldsBook(store.getState(), bookId)) { // #3519
           dispatch(castActions.setVoiceStyle({ characterId: character.id, voiceStyle: instruct }));
         }
       } catch {
@@ -1049,7 +1055,7 @@ export function ProfileDrawer({
     return () => {
       cancelled = true;
     };
-  }, [bookId, character.id, character.voiceStyle, designedVoiceId, dispatch]);
+  }, [bookId, character.id, character.voiceStyle, designedVoiceId, dispatch, store]);
 
   /* First-design completion while the drawer is open: the middleware persisted
      the override + mirrored it into the cast slice. Reflect the designed
@@ -1535,26 +1541,29 @@ export function ProfileDrawer({
                     /* srv-43: seed the uuid so "Play 12s" can resolve the
                        uuid-keyed cache entry before the next cast refetch. */
                     if (approvedUuid) setStagedVoiceUuid(approvedUuid);
-                    dispatch(
-                      castActions.setVoiceStyle({
-                        characterId: character.id,
-                        voiceStyle: approvedPersona,
-                      }),
-                    );
-                    /* The promoted preview is a fresh base embedding, so any
-                       emotion variants (minted from the OLD one) are now stale on
-                       the server (#4040: dropped from the book GET, the cast PUT
-                       and render). Clear this row's immediately so the save-path
-                       spreads don't re-persist the stale slots and the cast's
-                       "Emotion variants" demand re-surfaces them (the instant
-                       half, and the only one a mock backend serves), then prune
-                       every OTHER row on the same voice key from the server's
-                       read (only rows of the loaded book on this voice key, and
-                       only variants present now). No-op on a first design (no
-                       variants existed). */
-                    dispatch(
-                      castActions.clearCharacterEmotionVariants({ characterId: character.id }),
-                    );
+                    /* #3519 — the promote answered late: mirror it only into its own book. */
+                    if (selectHoldsBook(store.getState(), bookId)) {
+                      dispatch(
+                        castActions.setVoiceStyle({
+                          characterId: character.id,
+                          voiceStyle: approvedPersona,
+                        }),
+                      );
+                      /* The promoted preview is a fresh base embedding, so any
+                         emotion variants (minted from the OLD one) are now stale on
+                         the server (#4040: dropped from the book GET, the cast PUT
+                         and render). Clear this row's immediately so the save-path
+                         spreads don't re-persist the stale slots and the cast's
+                         "Emotion variants" demand re-surfaces them (the instant
+                         half, and the only one a mock backend serves), then prune
+                         every OTHER row on the same voice key from the server's
+                         read (only rows of the loaded book on this voice key, and
+                         only variants present now). No-op on a first design (no
+                         variants existed). */
+                      dispatch(
+                        castActions.clearCharacterEmotionVariants({ characterId: character.id }),
+                      );
+                    }
                     if (bookId) void dispatch(refreshEmotionVariants(bookId, character.id));
                     setVoiceCompareInitial(null);
                     /* Resolving the compare ends the single-design lifecycle —

@@ -23,7 +23,7 @@ import { castActions } from '../store/cast-slice';
 import { resetBookSlices } from '../store/reset-book-slices';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
-import { selectIsOpenBook } from '../store/open-book';
+import { selectHoldsBook, selectIsOpenBook } from '../store/open-book';
 import { libraryActions } from '../store/library-slice';
 import { changeLogActions } from '../store/change-log-slice';
 import { hydrateBookExports } from '../store/exports-middleware';
@@ -931,7 +931,7 @@ export function ConfirmRoute() {
             targetBookId,
             targetCharacterId,
           });
-          if (res?.source) {
+          if (res?.source && selectHoldsBook(routeStore.getState(), bookId)) {
             dispatch(castActions.updateCharacter(res.source, { routeBacked: true }));
           }
         }}
@@ -992,6 +992,7 @@ function ReadyViewSwitch({
   currentChapterId: number;
 }) {
   const dispatch = useAppDispatch();
+  const readyStore = useStore<RootState>();
   const navigate = useNavigate();
   const { priorRoster, pushToast } = useOutletContext<LayoutContext>();
   /* Plan 89 C3 — shallow equality for the active book's `chapters` array;
@@ -1057,6 +1058,9 @@ function ReadyViewSwitch({
                 targetBookId: entry.bookId,
                 targetCharacterId: entry.id,
               });
+              /* #3519 — the new row, and the line reassignment the picker makes with the
+                 returned id, only while the slices still hold this book ('' = none). */
+              if (!selectHoldsBook(readyStore.getState(), bookId)) return '';
               dispatch(castActions.addCharacter(res.character));
               return res.character.id;
             } catch (err) {

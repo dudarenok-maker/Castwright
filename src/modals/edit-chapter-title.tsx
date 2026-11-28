@@ -18,6 +18,7 @@ import { IconClose, IconPencil } from '../lib/icons';
 import { PrimaryButton } from '../components/primitives';
 import { useAppDispatch, useAppSelector } from '../store';
 import type { RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import {
   RESTRUCTURING_REASON,
   refuseIfEditsLocked,
@@ -71,7 +72,8 @@ export function EditChapterTitleModal({ open, bookId, chapter, onClose }: Props)
     setBusy(true);
     try {
       await api.renameChapter(bookId, chapter.id, trimmed);
-      dispatch(chaptersActions.renameChapter({ chapterId: chapter.id, title: trimmed }));
+      if (selectHoldsBook(store.getState(), bookId)) // #3519
+        dispatch(chaptersActions.renameChapter({ chapterId: chapter.id, title: trimmed }));
       onClose();
     } catch (err) {
       dispatch(

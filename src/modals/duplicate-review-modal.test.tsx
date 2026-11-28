@@ -24,6 +24,7 @@ import {
 } from './duplicate-review-modal';
 import { api } from '../lib/api';
 import type { Character, Voice } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -99,6 +100,7 @@ function renderModal(
 ) {
   const store = configureStore({
     reducer: {
+      loadedBook: heldBook(extra.openBookId ?? 'ns'),
       cast: castSlice.reducer,
       notifications: notificationsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
@@ -135,7 +137,7 @@ describe('DuplicateReviewModal — mount', () => {
 
   it('null-renders when open is false', () => {
     const store = configureStore({
-      reducer: { cast: castSlice.reducer, notifications: notificationsSlice.reducer },
+      reducer: { loadedBook: heldBook('ns'), cast: castSlice.reducer, notifications: notificationsSlice.reducer },
     });
     const { container } = render(
       <Provider store={store}>
@@ -183,7 +185,7 @@ describe('DuplicateReviewModal — hydration states', () => {
 
   it('flips from loading to enabled and recomputes the survivor when casts land', () => {
     const store = configureStore({
-      reducer: { cast: castSlice.reducer, notifications: notificationsSlice.reducer },
+      reducer: { loadedBook: heldBook('ns'), cast: castSlice.reducer, notifications: notificationsSlice.reducer },
     });
     const { rerender } = render(
       <Provider store={store}>
@@ -373,7 +375,7 @@ describe('DuplicateReviewModal — cancel', () => {
 describe('DuplicateReviewModal — read-only cast (plan 291)', () => {
   it('disables the link while read-only and keeps "Different on purpose" live', () => {
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, cast: castSlice.reducer, notifications: notificationsSlice.reducer },
+      reducer: { loadedBook: heldBook('ns'), ui: uiSlice.reducer, cast: castSlice.reducer, notifications: notificationsSlice.reducer },
     });
     store.dispatch(uiSlice.actions.openBook({ id: 'ns', status: 'cast_pending' }));
     store.dispatch(castSlice.actions.latchAnalysisEra({ bookId: 'ns' }));

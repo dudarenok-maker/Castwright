@@ -9,6 +9,7 @@ import type { Dispatch } from '@reduxjs/toolkit';
 import { useStore } from 'react-redux';
 import { Checkbox } from './primitives';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import {
   scriptReviewActions,
@@ -416,7 +417,9 @@ export function ScriptReviewDiff({ bookId }: { bookId: string }) {
           dispatch(manuscriptActions.setSentenceCharacter({ chapterId, sentenceId, characterId })),
         onBoundaryMove: (chapterId) =>
           dispatch(changeLogActions.bumpBoundaryMove({ chapterId, count: 1 })),
-        isSameBook: () => stageBookIdRef.current === startBookId,
+        // #3519 — the stage names a book before the slices hold it: ask both.
+        isSameBook: () =>
+          stageBookIdRef.current === startBookId && selectHoldsBook(store.getState(), startBookId),
         // #4098 — an era that rises mid-run drops the manuscript save; resolving
         // the op anyway would lose the suggestion. Stop, toast, resolve nothing more.
         shouldStop: () => refuseIfLocked(),

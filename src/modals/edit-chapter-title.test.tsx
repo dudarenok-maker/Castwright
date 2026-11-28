@@ -20,6 +20,7 @@ import { RESTRUCTURING_REASON, RESTRUCTURING_TOAST_MESSAGE } from '../store/rest
 import { EditChapterTitleModal } from './edit-chapter-title';
 import { api } from '../lib/api';
 import type { Chapter } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 vi.mock('../lib/api', () => ({
   api: {
@@ -45,6 +46,7 @@ function renderModal(
 ) {
   const store = configureStore({
     reducer: {
+      loadedBook: heldBook('b1'),
       chapters: chaptersSlice.reducer,
       notifications: notificationsSlice.reducer,
       ui: uiSlice.reducer,
@@ -93,7 +95,7 @@ describe('EditChapterTitleModal — mount + seed', () => {
   });
 
   it('null-renders when open is false', () => {
-    const store = configureStore({ reducer: { notifications: notificationsSlice.reducer } });
+    const store = configureStore({ reducer: { loadedBook: heldBook('b1'), notifications: notificationsSlice.reducer } });
     const { container } = render(
       <Provider store={store}>
         <EditChapterTitleModal

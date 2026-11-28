@@ -42,7 +42,7 @@ import {
   castWrittenSince,
   castEraClearedSince,
 } from '../store/persistence-middleware';
-import { selectIsOpenBook, stageNamesBook } from '../store/open-book';
+import { selectHoldsBook, selectIsOpenBook, stageNamesBook } from '../store/open-book';
 import { selectEditsGated, selectLoadedBook } from '../store/loaded-book-slice';
 import { handleCastIdentityBusy, rehydrateCastAfterAnalysis, selectCastReadOnly } from '../store/cast-gate';
 import { CastEditsPausedStatus } from './cast-edits-paused-banner';
@@ -2601,9 +2601,11 @@ export function Layout() {
                 await Promise.all(targetIds.map((id) => api.setCastTier(bookId, id, pin)));
               }
               const targetChars = tier === 'qwen3-tts-1.7b' ? eligibleQwenMembers : qwenMembers;
-              targetChars.forEach((c) =>
-                dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin }, { routeBacked: true })),
-              );
+              /* #3519 — saved on the server; mirrored only into the slices that hold this book. */
+              if (!bookId || selectHoldsBook(store.getState(), bookId))
+                targetChars.forEach((c) =>
+                  dispatch(castActions.updateCharacter({ ...c, ttsModelKey: pin }, { routeBacked: true })),
+                );
               setStartGenBusy(false);
               const fallbackConfirmed = ui.startGenPrompt?.fallbackConfirmed;
               dispatch(uiActions.closeStartGenPrompt());
@@ -2867,6 +2869,7 @@ export function Layout() {
                         }
                         throw err;
                       }
+                      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
                       dispatch(castActions.applyMerge({ characters: res.characters }));
                       /* Source character has just disappeared from the cast — drop the
                drawer so React doesn't try to render a profile for a missing
@@ -2926,6 +2929,8 @@ export function Layout() {
                           dispatch(handleCastIdentityBusy(bookId, err));
                           throw err;
                         }
+                        /* #3519 — neither the row nor the Reassign Lines modal over another book. */
+                        if (!selectHoldsBook(store.getState(), bookId)) return;
                         dispatch(
                           castActions.applyUnlinkAlias({
                             sourceCharacterId,
@@ -2951,6 +2956,7 @@ export function Layout() {
                           aliasName,
                           targetCharacterId,
                         });
+                        if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
                         dispatch(
                           castActions.applyRepointAlias({
                             sourceCharacterId,
@@ -2974,6 +2980,7 @@ export function Layout() {
                 bookId
                   ? async (characterId, aliasName) => {
                       await api.addAlias({ bookId, characterId, aliasName });
+                      if (!selectHoldsBook(store.getState(), bookId)) return; // #3519
                       dispatch(castActions.applyAddAlias({ characterId, aliasName }));
                     }
                   : undefined

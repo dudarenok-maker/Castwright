@@ -13,6 +13,7 @@
 
 import { useCallback, useState } from 'react';
 import { useAppDispatch, useAppSelector, store } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { uiActions } from '../store/ui-slice';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -141,6 +142,9 @@ export function RestructureView({ bookId }: Props) {
            adopt its revisions through the same sequence-guarded hydrate book
            open uses; otherwise the dropped entries linger until the next poll. */
         dispatch(revisionsActions.hydrate({ bookId, state: fresh.revisions ?? null, requestSeq }));
+      }
+      /* #3519 — the stage names a book before the slices hold it. */
+      if (fresh && adoptedFresh && selectHoldsBook(store.getState(), bookId)) {
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,
@@ -161,7 +165,12 @@ export function RestructureView({ bookId }: Props) {
          those ids again and swallow the next chapter. Adopt the response's list
          (audio on disk is what `audioRenderedAt` records) and mark the book so
          Layout's retrying full read repairs the rest of its state. */
-      if (!fresh && res.chapters && activeBookId(store.getState()) === bookId) {
+      if (
+        !fresh &&
+        res.chapters &&
+        activeBookId(store.getState()) === bookId &&
+        selectHoldsBook(store.getState(), bookId)
+      ) {
         dispatch(
           chaptersActions.hydrateFromBookState({
             bookId,

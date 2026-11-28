@@ -29,6 +29,7 @@ import type { Toast } from '../store/notifications-slice';
 import { TOUR_STEPS } from '../lib/tour-steps';
 import { ManuscriptView, isExcludedSentenceId } from './manuscript';
 import type { Chapter, Character, Sentence } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 /* fs-58 — api mock for reviewScript + createCharacter trigger tests.
    Task 10 — getScriptReviewState is stubbed too: ManuscriptView now hydrates
@@ -970,6 +971,7 @@ describe('ManuscriptView — review-menu dismissal', () => {
   function renderReviewView() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-menu'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1064,6 +1066,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
   function makeQuarantineStore() {
     return configureStore({
       reducer: {
+        loadedBook: heldBook('bk-1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1101,6 +1104,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
     reviewScript.mockResolvedValue(undefined);
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1201,6 +1205,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
     };
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1261,6 +1266,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
     const user = userEvent.setup();
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1343,6 +1349,7 @@ describe('ManuscriptView — script-review planApply quarantine at seed', () => 
     const user = userEvent.setup();
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1430,6 +1437,7 @@ describe('ManuscriptView — handleReviewScript error toast', () => {
 
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-err'),
         manuscript: manuscriptSlice.reducer,
         notifications: notificationsSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -1619,6 +1627,7 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
   function renderAddCharView() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-addchar'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -1704,6 +1713,7 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
 
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-addchar'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -1756,6 +1766,7 @@ describe('ManuscriptView — Add character button (fs-58 Unit B Task 14)', () =>
     const narr = { id: 'narrator', name: 'Narrator', role: 'Narrator', color: 'narrator' as const };
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-r57'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -1891,6 +1902,7 @@ describe('ManuscriptView — promote first sentence to title (2026-07-01)', () =
   function renderPromote(currentChapterId: number, chapterSentences: Sentence[]) {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -1959,6 +1971,7 @@ describe('ManuscriptView — promote first sentence to title (2026-07-01)', () =
        'idle'. */
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         ui: uiSlice.reducer,
@@ -2041,6 +2054,7 @@ describe('ManuscriptView — unresolved-findings badge', () => {
   function renderBadgeView(currentChapterId: number) {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-badge'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2107,6 +2121,7 @@ describe('ManuscriptView — unresolved-findings badge', () => {
     const excludedChapter: Chapter = { ...otherChapter, excluded: true };
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-badge-excl'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2197,6 +2212,7 @@ describe('ManuscriptView — mount hydration race (fs-58 PR review round 3, Find
   function renderHydrationView() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-hydrate'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2310,6 +2326,7 @@ describe('ManuscriptView — cross-book mount hydration race (fs-58 PR review ro
 
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-A'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2501,6 +2518,7 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
   function renderGateView() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-gate'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2588,6 +2606,7 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     const user = userEvent.setup();
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-gate'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2684,6 +2703,7 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
     const user = userEvent.setup();
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-gate'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,
@@ -2770,6 +2790,7 @@ describe('ManuscriptView — re-run confirm gate (fs-58 Task 11)', () => {
 
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('bk-gate'),
         manuscript: manuscriptSlice.reducer,
         changeLog: changeLogSlice.reducer,
         scriptReview: scriptReviewSlice.reducer,

@@ -7,6 +7,7 @@ import { chaptersSlice } from '../store/chapters-slice';
 import { notificationsSlice } from '../store/notifications-slice';
 import { PromoteFirstSentenceButton } from './promote-first-sentence-button';
 import type { Sentence } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 const { renameChapter } = vi.hoisted(() => ({ renameChapter: vi.fn() }));
 vi.mock('../lib/api', async (importOriginal) => {
@@ -24,6 +25,7 @@ const firstSentence: Sentence = {
 function makeStore() {
   return configureStore({
     reducer: {
+      loadedBook: heldBook('b1'),
       manuscript: manuscriptSlice.reducer,
       chapters: chaptersSlice.reducer,
       notifications: notificationsSlice.reducer,

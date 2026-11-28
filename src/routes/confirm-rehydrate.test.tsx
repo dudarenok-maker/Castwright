@@ -73,6 +73,7 @@ vi.mock('../hooks/use-local-analyzer-guard', () => ({
 }));
 
 import { ConfirmRoute } from './index';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 const VOICELESS_COALFALL = { id: 'coalfall', name: 'Coalfall', voiceState: 'generated' } as Character;
 const VOICED_COALFALL = {
@@ -91,6 +92,7 @@ function makeStore(preloadCharacters: Character[]) {
       chapters: chaptersSlice.reducer,
       revisions: revisionsSlice.reducer,
       manuscript: manuscriptSlice.reducer,
+      loadedBook: heldBook(BOOK_ID),
       library: librarySlice.reducer,
       voices: voicesSlice.reducer,
       changeLog: changeLogSlice.reducer,
@@ -537,6 +539,7 @@ describe('ConfirmRoute — the entry read follows the cast gate (plan 291, item 
         chapters: chaptersSlice.reducer,
         revisions: revisionsSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+      loadedBook: heldBook(BOOK_ID),
         library: librarySlice.reducer,
         voices: voicesSlice.reducer,
         changeLog: changeLogSlice.reducer,
@@ -668,6 +671,7 @@ describe('ConfirmRoute — the owed entry read runs once when the gate drops (pl
         chapters: chaptersSlice.reducer,
         revisions: revisionsSlice.reducer,
         manuscript: manuscriptSlice.reducer,
+      loadedBook: heldBook(BOOK_ID),
         library: librarySlice.reducer,
         voices: voicesSlice.reducer,
         changeLog: changeLogSlice.reducer,

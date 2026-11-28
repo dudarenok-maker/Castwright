@@ -4,6 +4,7 @@ import { render, screen, fireEvent, waitFor } from '@testing-library/react';
 import { Provider } from 'react-redux';
 import { castSlice } from '../store/cast-slice';
 import { EmotionVariantDesigner } from './emotion-variant-designer';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 const designQwenVoice = vi.fn();
 const removeQwenVariant = vi.fn();
@@ -16,7 +17,7 @@ vi.mock('../lib/api', () => ({
 
 function makeStore(characters: any[]) {
   return configureStore({
-    reducer: { cast: castSlice.reducer },
+    reducer: { loadedBook: heldBook('b1'), cast: castSlice.reducer },
     preloadedState: { cast: { ...castSlice.getInitialState(), characters } },
   });
 }

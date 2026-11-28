@@ -29,7 +29,9 @@ import {
   engineGroupForModelKey,
   type TtsEngineId,
 } from '../lib/tts-models';
-import { useAppDispatch, useAppSelector } from '../store';
+import { useStore } from 'react-redux';
+import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { uiActions } from '../store/ui-slice';
 import { castActions } from '../store/cast-slice';
 import { voicesActions } from '../store/voices-slice';
@@ -223,6 +225,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     () => new Map(),
   );
   const dispatch = useAppDispatch();
+  const store = useStore<RootState>();
   const ttsModelKey = useAppSelector((s) => s.ui.ttsModelKey);
   const baseVoices = useAppSelector((s) => s.voices.baseVoices);
   const baseVoicesLoaded = useAppSelector((s) => s.voices.baseVoicesLoaded);
@@ -643,7 +646,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
         { self: { bookId: pair.b.voice.bookId, characterId: bId }, other: { bookId: pair.a.voice.bookId, characterId: aId } },
       ];
       for (const { self, other } of sides) {
-        if (self.bookId === currentBookId) {
+        /* #3519 — redux only while the slices hold that side's book. */
+        if (selectHoldsBook(store.getState(), self.bookId)) {
           dispatch(
             castActions.removeNotLinked({
               characterId: self.characterId,
@@ -651,7 +655,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
               otherCharacterId: other.characterId,
             }),
           );
-        } else {
+        }
+        if (self.bookId !== currentBookId) {
           setGlobalCastCache((prev) =>
             removeNotLinkedToCachedCharacter(
               prev,
@@ -860,11 +865,12 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
   function reconcileDuplicateResolution(resolution: DuplicateResolution) {
     if (resolution.kind === 'link') {
       const { winnerBookId, winnerCharacterId, addedAlias } = resolution;
-      if (winnerBookId === currentBookId) {
+      if (selectHoldsBook(store.getState(), winnerBookId)) {
         dispatch(
           castActions.applyAddAlias({ characterId: winnerCharacterId, aliasName: addedAlias }),
         );
-      } else {
+      }
+      if (winnerBookId !== currentBookId) {
         setGlobalCastCache((prev) =>
           appendAliasToCachedCharacter(prev, winnerBookId, winnerCharacterId, addedAlias),
         );
@@ -878,7 +884,7 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
       { self: resolution.b, other: resolution.a },
     ];
     for (const { self, other } of sides) {
-      if (self.bookId === currentBookId) {
+      if (selectHoldsBook(store.getState(), self.bookId)) {
         dispatch(
           castActions.applyNotLinked({
             characterId: self.characterId,
@@ -886,7 +892,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
             otherCharacterId: other.characterId,
           }),
         );
-      } else {
+      }
+      if (self.bookId !== currentBookId) {
         setGlobalCastCache((prev) =>
           appendNotLinkedToCachedCharacter(
             prev,
@@ -1012,7 +1019,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
     setMergeBusy(true);
     try {
       const res = await api.mergeCharacters({ bookId, sourceId: source.id, targetId: target.id });
-      dispatch(castActions.applyMerge({ characters: res.characters }));
+      if (selectHoldsBook(store.getState(), bookId)) // #3519
+        dispatch(castActions.applyMerge({ characters: res.characters }));
       setSelectedVoiceIds([]);
       dispatch(
         notificationsActions.pushToast({
@@ -1597,7 +1605,8 @@ export function LibraryView({ library, onOpenCharacter }: Props) {
                   });
                   for (const u of res.updated) {
                     if (u.bookId === currentBookId) {
-                      dispatch(castActions.updateCharacter(next, { routeBacked: true }));
+                      if (selectHoldsBook(store.getState(), u.bookId)) // #3519
+                        dispatch(castActions.updateCharacter(next, { routeBacked: true }));
                     } else {
                       setGlobalCastCache((prev) => {
                         const cached = prev.get(u.bookId);

@@ -10,6 +10,7 @@ import { AnalyzerModelOverrideBadge } from '../components/analyzer-model-overrid
 import { buildAnalyzerPickerGroups } from '../lib/models';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { RESTRUCTURING_REASON, refuseIfEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { fetchAnalyzerModels } from '../store/account-slice';
 import { uiActions } from '../store/ui-slice';
@@ -100,16 +101,19 @@ export function UploadView() {
           text,
           characterId: 'narrator',
         }));
-        dispatch(
-          manuscriptActions.previewReuploadDiff({
-            bookId: reuploadingBookId,
-            newSourceText: candidateText,
-            newSentences,
-            newWordCount: res.candidate.wordCount ?? 0,
-            newTitle: res.candidate.title ?? null,
-            newFormat: res.candidate.format ?? null,
-          }),
-        );
+        /* #3519 — Apply writes this preview into the slices, so it is staged only
+           while they still hold the re-uploaded book. */
+        if (selectHoldsBook(store.getState(), reuploadingBookId))
+          dispatch(
+            manuscriptActions.previewReuploadDiff({
+              bookId: reuploadingBookId,
+              newSourceText: candidateText,
+              newSentences,
+              newWordCount: res.candidate.wordCount ?? 0,
+              newTitle: res.candidate.title ?? null,
+              newFormat: res.candidate.format ?? null,
+            }),
+          );
         setBusy(false);
         return;
       }

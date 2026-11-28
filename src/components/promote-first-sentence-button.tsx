@@ -12,6 +12,7 @@
 import { useState } from 'react';
 import { useStore } from 'react-redux';
 import { useAppDispatch, useAppSelector, type RootState } from '../store';
+import { selectHoldsBook } from '../store/open-book';
 import { RESTRUCTURING_REASON, refuseIfManuscriptEditsLocked, selectEditsLocked } from '../store/restructure-lock';
 import { chaptersActions } from '../store/chapters-slice';
 import { manuscriptActions } from '../store/manuscript-slice';
@@ -60,8 +61,10 @@ export function PromoteFirstSentenceButton({
     setPhase('busy');
     try {
       await api.renameChapter(bookId, chapterId, cleaned);
-      dispatch(chaptersActions.renameChapter({ chapterId, title: cleaned }));
-      dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId, sentenceId: firstSentence.id }));
+      if (selectHoldsBook(store.getState(), bookId)) { // #3519
+        dispatch(chaptersActions.renameChapter({ chapterId, title: cleaned }));
+        dispatch(manuscriptActions.promoteSentenceToTitle({ chapterId, sentenceId: firstSentence.id }));
+      }
       setPhase('idle');
     } catch (err) {
       /* PR-gate review round 2 — a fired-off promise isn't cancelled by the

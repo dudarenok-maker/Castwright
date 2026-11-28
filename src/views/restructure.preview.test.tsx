@@ -29,14 +29,17 @@ vi.mock('../store', async () => {
 
 import { RestructureView } from './restructure';
 import { BOOK_READ_TIMEOUT_MS } from '../lib/book-read';
+import { loadedBookSlice } from '../store/loaded-book-slice';
+import { loadedPair } from '../store/loaded-book-slice.test-helpers';
 
 /* `guard` installs the real restructure guard (first in the chain, as in the app store):
    a user edit made mid-request is refused. Without it the store models a writer that
    bypasses the guard (a non-UI writer, or a write queued before the flag went up). */
 function makeStore(guard = false) {
   const store = configureStore({
-    reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer, bookMeta: bookMetaSlice.reducer },
+    reducer: { loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, analysis: analysisSlice.reducer, bookMeta: bookMetaSlice.reducer },
     middleware: (g) => (guard ? g().prepend(restructureGuardMiddleware) : g()),
+    preloadedState: { loadedBook: loadedPair({ bookId: 'b1' }) },
   });
   holder.store = store;
   store.dispatch(uiActions.openBook({ id: 'b1', status: 'complete' } as never));
@@ -308,7 +311,7 @@ describe('RestructureView — #3400 the remapped manuscript is what ends up on d
         }),
     );
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
+      reducer: { loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
       preloadedState: { settings: { ...settingsSlice.getInitialState(), autosaveDebounceMs: 40 } },
       middleware: () => (guard ? new Tuple(restructureGuardMiddleware, persistenceMiddleware) : new Tuple(persistenceMiddleware)),
     });
@@ -738,7 +741,7 @@ describe('RestructureView — a failed save before a restructure aborts it (#342
     diskSentences = [];
     events = [];
     const store = configureStore({
-      reducer: { ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
+      reducer: { loadedBook: loadedBookSlice.reducer, ui: uiSlice.reducer, chapters: chaptersSlice.reducer, manuscript: manuscriptSlice.reducer, library: librarySlice.reducer, notifications: notificationsSlice.reducer, cast: castSlice.reducer, revisions: revisionsSlice.reducer, settings: settingsSlice.reducer },
       preloadedState: { settings: { ...settingsSlice.getInitialState(), autosaveDebounceMs: 40 } },
       middleware: () => new Tuple(persistenceMiddleware),
     });

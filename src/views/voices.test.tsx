@@ -22,6 +22,7 @@ import { rebaselineSlice } from '../store/rebaseline-slice';
 import { voiceLibrarySlice } from '../store/voice-library-slice';
 import { LibraryView } from './voices';
 import type { BaseVoice, BookStateResponse, Character, Sentence, Voice } from '../lib/types';
+import { heldBook } from '../store/loaded-book-slice.test-helpers';
 
 const setVoicePin = vi.fn((_voiceId: string, _pinned: boolean) => Promise.resolve());
 const getBaseVoices = vi.fn<() => Promise<{ voices: BaseVoice[] }>>(() =>
@@ -202,6 +203,7 @@ const library: Voice[] = [
 function makeStore() {
   const store = configureStore({
     reducer: {
+      loadedBook: heldBook('b1'),
       ui: uiSlice.reducer,
       cast: castSlice.reducer,
       manuscript: manuscriptSlice.reducer,
@@ -398,6 +400,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
   function makeReadyStore(stageBookId: string | null = 'b1') {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook(stageBookId ?? ''),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -960,6 +963,7 @@ describe('LibraryView compare-two-voices affordance (plan 22a)', () => {
       });
       const store = configureStore({
         reducer: {
+          loadedBook: heldBook('b1'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           manuscript: manuscriptSlice.reducer,
@@ -1120,6 +1124,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
   function makeMergeStore(stageBookId: string = 'b1') {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook(stageBookId),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1345,6 +1350,7 @@ describe('LibraryView merge-cast-duplicates affordance (plan 98)', () => {
     function makeGateStore() {
       return configureStore({
         reducer: {
+          loadedBook: heldBook('b1'),
           ui: uiSlice.reducer,
           cast: castSlice.reducer,
           manuscript: manuscriptSlice.reducer,
@@ -1480,6 +1486,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
   ) {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1665,6 +1672,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     ];
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -1856,6 +1864,7 @@ describe('LibraryView cross-book duplicate review (plan 101)', () => {
     ];
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2038,6 +2047,7 @@ describe('LibraryView per-series Rebaseline button (plan 108 follow-up)', () => 
   function renderGlobalWithLibrary() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2184,6 +2194,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
   function renderQwen() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2308,6 +2319,7 @@ describe('LibraryView Qwen status sections (plan 117)', () => {
   it('does not show the "No voices yet" empty state for a Qwen-only library', () => {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2367,6 +2379,7 @@ describe('LibraryView Designed-voice provenance badge + Save to my voices (fs-38
   function renderProvenance() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2480,6 +2493,7 @@ describe('fe-34 — variant filter toggle', () => {
   function renderToggleView() {
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
@@ -2529,6 +2543,7 @@ describe('fe-34 — variant filter toggle', () => {
     // Library with ONLY a fully-covered voice → "Needs variants" matches nothing.
     const store = configureStore({
       reducer: {
+        loadedBook: heldBook('b1'),
         ui: uiSlice.reducer,
         cast: castSlice.reducer,
         manuscript: manuscriptSlice.reducer,
