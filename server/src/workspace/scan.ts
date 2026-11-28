@@ -25,6 +25,7 @@ import {
   analysisCompleteFor,
   hasCurrentTake,
   loadAnalysisCache,
+  noTextChapterIds,
   reachedConfirm,
 } from '../store/analysis-cache.js';
 import { normaliseBookLanguage, resolveEligibleEngines } from '../tts/language.js';
@@ -765,9 +766,10 @@ async function scanBook(
      12-chapter book with 2 excluded would stall at 10/12 forever. */
   const activeChapters = state?.chapters.filter((c) => !c.excluded) ?? [];
   const chapterCount = activeChapters.length;
-  /* A chapter is complete when it has a LIVE take (same finder as book-state's
-     completedSlugs): any live format, never a preserved `.previous` copy. */
-  const completedChapters = manuscriptFile
+  /* A chapter has audio when it has a LIVE take (same finder as book-state's
+     completedSlugs): any live format, never a preserved `.previous` copy.
+     `completedChapters` below adds the no-text chapters (#3507). */
+  const audioCompletedChapters = manuscriptFile
     ? activeChapters.filter((c) => chapterAudioExists(audioDir(bookDir), c.slug)).length
     : 0;
   const lastWorkedOn = relativeTimeFromMs(mtimeMs(existsSync(dotDir) ? dotDir : bookDir));
@@ -867,6 +869,8 @@ async function scanBook(
   let analysedChapterCount = 0;
   let analysisComplete = chapterCount === 0;
   let bookReachedConfirm = state?.castConfirmed === true;
+  /* #3507 — active chapters with no narratable text and no live take. */
+  let noTextCompletedChapters = 0;
   if (state?.manuscriptId) {
     try {
       const cache = await loadAnalysisCache(state.manuscriptId);
@@ -878,18 +882,28 @@ async function scanBook(
         activeChapters.map((c) => c.id),
       );
       bookReachedConfirm = reachedConfirm(state, cache);
+      if (manuscriptFile) {
+        const noText = new Set(noTextChapterIds(cache, activeChapters.map((c) => c.id)));
+        noTextCompletedChapters = activeChapters.filter(
+          (c) => noText.has(c.id) && !chapterAudioExists(audioDir(bookDir), c.slug),
+        ).length;
+      }
     } catch {
       /* missing/corrupt cache → treat as nothing analysed */
     }
   }
+  /* #3507 — generation skips a no-text chapter and counts it complete, so the
+     card does too. */
+  const completedChapters = audioCompletedChapters + noTextCompletedChapters;
 
   /* voices_pending — cast confirmed but generation not started. "Started" is
      derived from disk: any audio rendered, or any chapter carrying a durable
      failure marker. No persisted flag (see the design doc's Detection section).
+     A no-text chapter alone is not a start (#3507).
      The single transient window (first chapter mid-render, 0 done / 0 failed)
      self-heals on the next completed-or-failed chapter. */
   const generationStarted =
-    completedChapters > 0 || activeChapters.some((c) => c.generationState === 'failed');
+    audioCompletedChapters > 0 || activeChapters.some((c) => c.generationState === 'failed');
 
   let status: LibraryBookStatus;
   if (unreadable) status = 'unreadable';
@@ -905,9 +919,10 @@ async function scanBook(
   /* Distinct progress signals for the two intermediate states:
        - 'analysing' shows analysed chapters / total (matches the analysing
          view's per-chapter ticks),
-       - 'generating' shows synthesised chapters / total (audio files on
-         disk). Mixing them confused users who saw "Reading manuscript…
-         60%" on a book that had 60% of audio files but 0% of analysis. */
+       - 'generating' shows completed chapters / total (audio files on
+         disk, plus no-text chapters, #3507). Mixing them confused users
+         who saw "Reading manuscript… 60%" on a book that had 60% of audio
+         files but 0% of analysis. */
   const analysingProgress = chapterCount > 0 ? analysedChapterCount / chapterCount : 0;
   const generatingProgress = chapterCount > 0 ? completedChapters / chapterCount : 0;
 

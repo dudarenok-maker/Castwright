@@ -2926,9 +2926,36 @@ describe('book-state router — analysis completeness fields (plan 287 T6)', () 
       stage1Ready: boolean;
       resumeRequired: boolean;
       unattributedChapterIds: number[];
+      noTextChapterIds: number[];
       failedChapterErrors: Record<string, unknown>;
     };
   }
+
+  it('GET book-state: noTextChapterIds lists a no-text chapter only (#3507)', async () => {
+    const s = JSON.parse(originalState);
+    writeFileSync(
+      statePath(),
+      JSON.stringify({
+        ...s,
+        castConfirmed: true,
+        chapters: [
+          { id: 1, title: 'Chapter 1', slug: 'chapter-one' },
+          { id: 2, title: 'Chapter 2', slug: 'chapter-two' },
+          { id: 3, title: 'Chapter 3', slug: 'chapter-three', excluded: true },
+          { id: 4, title: 'Chapter 4', slug: 'chapter-four' },
+        ],
+      }),
+    );
+    /* 1 has a worded take, 2 has no text, 3 has no text but is excluded, 4 is a
+       `[]` take with a failure record. */
+    const a = await get({
+      stage1,
+      chapters: { 1: take(1), 2: [], 3: [], 4: [] },
+      failedChapterIds: [4],
+      failedChapterErrors: { '4': { code: 'attribution-incomplete', message: 'm', remediation: 'r', phase: 'attribution' } },
+    });
+    expect(a.noTextChapterIds).toEqual([2]);
+  });
 
   it('GET book-state: stage1Ready, resumeRequired, unattributedChapterIds — no stage1', async () => {
     seedState(false);

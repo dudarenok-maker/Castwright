@@ -19,16 +19,19 @@ let clearAnalysisCache: typeof import('../store/analysis-cache.js').clearAnalysi
    tempdir, so the tempdir rmSync won't catch them. */
 const seededManuscriptIds: string[] = [];
 
-/* A finished analysis of `chapterIds`: Phase 0's stage1 plus a take per chapter
-   (plan 287: a book is analysed only once its roster is final). `extra` overrides
-   or adds cache fields. */
+/* A finished analysis of `chapterIds`: Phase 0's stage1 plus a worded take per
+   chapter (plan 287: a book is analysed only once its roster is final). The takes
+   are not `[]`, which with no failure record means "no narratable text" and counts
+   the chapter complete (#3507). `extra` overrides or adds cache fields. */
 async function seedAnalysisCache(
   manuscriptId: string,
   chapterIds: number[],
   extra: Partial<import('../store/analysis-cache.js').AnalysisCache> = {},
 ): Promise<void> {
-  const chapters: Record<number, []> = {};
-  for (const id of chapterIds) chapters[id] = [];
+  const chapters: import('../store/analysis-cache.js').AnalysisCache['chapters'] = {};
+  for (const id of chapterIds) {
+    chapters[id] = [{ id: id * 100 + 1, chapterId: id, characterId: 'narrator', text: 'A line.' }] as never;
+  }
   await saveAnalysisCache(manuscriptId, {
     stage1: { characters: [], chapters: [] },
     chapters,
@@ -795,6 +798,78 @@ describe('voices_pending status', () => {
     writeFileSync(join(audioRoot, 'h5l-2.next-x.mp3'), '');
     const b = (await flatten()).find((x) => x.title === 'H5 Lone Book')!;
     expect(b.completedChapters).toBe(0);
+  });
+});
+
+/* #3507 — a no-text chapter (a `[]` take with no failure record) is never
+   rendered, so the card counts it complete. It is not evidence that generation
+   has started. */
+describe('scan status — no-text chapters (#3507)', () => {
+  async function scanConfirmed(
+    title: string,
+    slugs: string[],
+    cache: Partial<import('../store/analysis-cache.js').AnalysisCache>,
+    audio: string[] = [],
+  ) {
+    const chapters = slugs.map((slug, i) => ({ id: i + 1, slug }));
+    const { bookDir, bookId, audioRoot } = bookSkeleton(title, { castConfirmed: true, chapters });
+    const ids = chapters.map((c) => c.id);
+    await seedAnalysisCache(`m_${bookId}`, ids, cache);
+    writeCast(bookDir, [{ id: 'narrator' }]);
+    for (const slug of audio) writeFileSync(join(audioRoot, `${slug}.mp3`), '');
+    return (await flatten()).find((x) => x.title === title)!;
+  }
+  const take = (id: number) =>
+    [{ id: id * 100 + 1, chapterId: id, characterId: 'narrator', text: 'A line.' }] as never;
+
+  it('one chapter rendered and the other without text → complete, 2/2', async () => {
+    const b = await scanConfirmed('NT Complete', ['nta-1', 'nta-2'], { chapters: { 1: take(1), 2: [] } }, [
+      'nta-1',
+    ]);
+    expect(b.completedChapters).toBe(2);
+    expect(b.status).toBe('complete');
+  });
+
+  it('a [] take with a failure record is not complete → generating, 1/2', async () => {
+    const b = await scanConfirmed(
+      'NT Failed Empty',
+      ['ntb-1', 'ntb-2'],
+      { chapters: { 1: take(1), 2: [] }, failedChapterIds: [2] },
+      ['ntb-1'],
+    );
+    expect(b.completedChapters).toBe(1);
+    expect(b.status).toBe('generating');
+  });
+
+  it('nothing rendered and one chapter without text stays voices_pending, 1/2', async () => {
+    const b = await scanConfirmed('NT Not Started', ['ntc-1', 'ntc-2'], {
+      chapters: { 1: take(1), 2: [] },
+    });
+    expect(b.status).toBe('voices_pending');
+    expect(b.completedChapters).toBe(1);
+  });
+
+  it('the generating progress includes the chapter without text → 2/3', async () => {
+    const b = await scanConfirmed(
+      'NT Progress',
+      ['ntd-1', 'ntd-2', 'ntd-3'],
+      { chapters: { 1: take(1), 2: [], 3: take(3) } },
+      ['ntd-1'],
+    );
+    expect(b.status).toBe('generating');
+    expect(b.completedChapters).toBe(2);
+    expect(b.progress).toBeCloseTo(2 / 3, 5);
+  });
+
+  it('a chapter without text that also has a live take is counted once', async () => {
+    const b = await scanConfirmed(
+      'NT Counted Once',
+      ['nte-1', 'nte-2'],
+      { chapters: { 1: [], 2: take(2) } },
+      ['nte-1'],
+    );
+    expect(b.completedChapters).toBe(1);
+    expect(b.status).toBe('generating');
   });
 });
 

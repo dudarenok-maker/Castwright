@@ -132,6 +132,7 @@ import {
   analysisCompleteFor,
   clearAnalysisCache,
   loadAnalysisCache,
+  noTextChapterIds,
   reachedConfirm,
   unattributedChapterIds,
   type ChapterErrorRecord,
@@ -644,11 +645,14 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
        after a reload or a dropped snapshot: the roster is final
        (`stage1Ready`); the book has not reached Confirm and still needs a main
        resume (`resumeRequired` — never true past Confirm, so no Resume is
-       offered on a confirmed book); and the non-excluded chapters without a
-       current take (`unattributedChapterIds`, the Generate view's analysis gaps). */
+       offered on a confirmed book); the non-excluded chapters without a
+       current take (`unattributedChapterIds`, the Generate view's analysis gaps);
+       and the non-excluded chapters with no narratable text (`noTextChapterIds`,
+       #3507), which generation counts complete without audio. */
     let stage1Ready = false;
     let resumeRequired = false;
     let unattributed: number[] = [];
+    let noText: number[] = [];
     if (state.manuscriptId) {
       const cache = await loadAnalysisCache(state.manuscriptId);
       failedChapterIds = cache.failedChapterIds ?? [];
@@ -657,6 +661,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
       stage1Ready = !!cache.stage1;
       resumeRequired = !reachedConfirm(state, cache) && stage1Ready && !analysisCompleteFor(cache, activeIds);
       unattributed = unattributedChapterIds(cache, activeIds);
+      noText = noTextChapterIds(cache, activeIds);
       /* Spec §3.4 book-state row, amended by PR #3505 gate pass 1 — past
          Confirm, manuscript-edits.json is authoritative downstream (generation
          rebuilds the cache from it), so a chapter whose sentences it carries
@@ -979,6 +984,7 @@ bookStateRouter.get('/:bookId/state', async (req: Request, res: Response) => {
         stage1Ready,
         resumeRequired,
         unattributedChapterIds: unattributed,
+        noTextChapterIds: noText,
       },
     });
   } catch (e) {
