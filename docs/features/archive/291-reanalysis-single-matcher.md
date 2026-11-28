@@ -533,6 +533,19 @@ snapshot.
     - No banner and no disabled manuscript controls; the toast only.
     - Consequence: the #4098 manuscript window (a mid-run edit to an untouched chapter reverted
       by the persist) is unreachable for a registered job.
+29. **Every row is recounted, and a dismissal drops inherited declines** (owner, decided
+    2026-11-28, #4101).
+    - The persist, in both jobs, recounts `lines` / `scenes` for every row from the final
+      sentences, carried rows included: a carried row the run omitted goes to 0, and a
+      user-added row gets its count. With no sentences at all, counts are left as they are. A
+      drift-refused persist still writes only the re-created narrator row of item 27.
+    - Dismissing a plan-origin suggestion that carries `newRow` and `candidate` removes from
+      `newRow.notLinkedTo` the cross-book entries that `candidate.notLinkedTo` also holds. The
+      same-book edges the dismiss writes on both rows, and the history record, stay. A
+      dedup-origin suggestion, or one without `newRow` / `candidate`, drops nothing.
+    - Pinned by the `#4101` cases in `server/src/workspace/analysis-cast-io.test.ts`,
+      `server/src/store/cast-merge-suggestions.test.ts` and
+      `server/src/routes/cast-merge-suggestions.test.ts`.
 
 ---
 
@@ -590,11 +603,14 @@ server, jsdom on the frontend), Playwright (mock mode), Express, Redux Toolkit, 
   - Analysis-owned: `lines`, `scenes`, `evidence`, `attributes`, `detectionSource`.
   - Everything else is user-owned, including tone (`src/modals/profile-drawer.tsx:2104-2125`).
   - A joined row takes the prior value when present, else the fresh value.
+  - At persist, `lines` / `scenes` are then recounted from the final sentences for every row,
+    carried rows included (item 29, #4101).
   - Joined `aliases` = current aliases ∪ analyzer names.
   - The rule-11 fingerprint covers all user-owned fields. Because it is compared against the job's
     own **last** write (invariant 6), fields the job rewrites (colour, linker stamps) need no
     exclusion.
-- **Declines.** A decline union strips same-book entries only.
+- **Declines.** A decline union strips same-book entries only. Dismissing a plan-origin
+  suggestion drops from `newRow` the cross-book declines `candidate` also holds (item 29, #4101).
 - **Narrator.** It keeps the id `'narrator'` through Phase 1; its join is applied at persist.
 - **Tests.**
   - Analysis-route tests run with `OLLAMA_URL=http://127.0.0.1:1`.
@@ -885,7 +901,8 @@ export async function dismissSuggestionDurably(bookDir: string, bookId: string, 
 `dismissSuggestionDurably` runs under `withCastLock`:
 1. Read cast.json and the history status.
 2. Write the dismissal record — unless history is degraded: then skip it and log.
-3. Write edges on the rows that exist.
+3. Write edges on the rows that exist. For a plan-origin pair, also drop from `newRow` the
+   cross-book declines `candidate` holds (decided 2026-11-28, #4101; item 29).
 4. Remove the pair.
 
 The route curates errors with `requestFailureMessageFs`. A record backs only its own pair; pass 2
@@ -1022,7 +1039,8 @@ re-entrant. It never calls `saveAnalysisCache` or `writeJsonAtomicOrdered`
 `planConstraintsFor`: computes pair-keyed `declinedIds` per `new` row.
 
 `overlayPlanOntoCast`:
-- **Carry-forward.** Every `current` row is carried forward.
+- **Carry-forward.** Every `current` row is carried forward. The persist then recounts its
+  `lines` / `scenes` like any other row's (item 29, #4101).
 - **Joined rows.** User-owned fields come from `current`; analysis-owned fields come from the
   roster; aliases are unioned.
 - **A `new` row already in `current`** (item 13) takes its user-owned fields from `current`.
@@ -1102,7 +1120,7 @@ Each of the following runs under `withCastLock`:
   2. `extendPlan`;
   3. re-resolve (exact|history);
   4. re-reserve and re-mint collisions, remapping this run's sentences;
-  5. overlay (`persist`), recount, write cast.json;
+  5. overlay (`persist`), recount every row (item 29, #4101), write cast.json;
   6. nested `withBookLock` edits with `rerouteDeletedTargets`;
   7. reconcile suggestions.
 
