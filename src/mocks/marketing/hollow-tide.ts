@@ -37,8 +37,9 @@ const narrator = (): Character => ({
 /* v1.15 cloning scenes (#4864) — The Drowning Bell's Narrator is cast on the
    author's own cloned voice (HOLLOW_TIDE_VOICE_LIBRARY, below). The slot
    shape is exactly what the profile drawer's "Use a voice from My voices"
-   assign writes (profile-drawer.tsx assignMyVoice): `qwen-<uuid>` plus the
-   libraryUuid/provenance markers. Book 1 only — the reused narrator in
+   assign writes (profile-drawer.tsx assignMyVoice): a cloned entry gets BOTH
+   a `qwen-<uuid>` and an `xtts-<uuid>` slot (server /assign,
+   shouldWriteCoquiSlot), each with the libraryUuid/provenance markers. Book 1 only — the reused narrator in
    Books 2-4 keeps the plain factory, so no other scene's cast changes. */
 export const HOLLOW_TIDE_CLONED_VOICE_UUID = 'lib-clone-marin-vale';
 
@@ -48,6 +49,11 @@ const clonedNarrator = (): Character => ({
   overrideTtsVoices: {
     qwen: {
       name: `qwen-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
+      libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+      provenance: 'cloned',
+    },
+    coqui: {
+      name: `xtts-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
       libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
       provenance: 'cloned',
     },

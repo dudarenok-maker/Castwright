@@ -386,6 +386,11 @@ describe('Hollow Tide series-memory fixture (marketing/wiki screenshots)', () =>
         libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
         provenance: 'cloned',
       });
+      expect(narrator.overrideTtsVoices?.coqui).toEqual({
+        name: `xtts-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
+        libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+        provenance: 'cloned',
+      });
     });
 
     it('leaves the reused narrator in Books 2-4 uncloned, so no other scene changes', () => {
