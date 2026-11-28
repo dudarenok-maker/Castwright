@@ -87,16 +87,16 @@ describe('expandHomePath (#4446)', () => {
 
 describe('separator-insensitive home matching (#4446 review)', () => {
   const lan = { ip: '192.168.1.50', socket: { remoteAddress: '192.168.1.50' }, headers: {} } as any;
-  const wh = 'C:\\Users\\dudar';
+  const wh = 'C:\\Users\\you';
 
   it('collapseHomePath matches forward-slash and doubled-backslash spellings on win32', () => {
-    expect(collapseHomePath('C:/Users/dudar/Sync', w(wh))).toBe('~/Sync');
-    expect(collapseHomePath('C:\\\\Users\\\\dudar\\\\venv', w(wh))).toBe('~\\\\venv');
-    expect(collapseHomePath('c:/users/DUDAR', w(wh))).toBe('~');
+    expect(collapseHomePath('C:/Users/you/Sync', w(wh))).toBe('~/Sync');
+    expect(collapseHomePath('C:\\\\Users\\\\you\\\\venv', w(wh))).toBe('~\\\\venv');
+    expect(collapseHomePath('c:/users/you', w(wh))).toBe('~');
   });
   it('collapseHomePath keeps the ann/anna boundary across spellings', () => {
-    expect(collapseHomePath('C:/Users/dudara/x', w(wh))).toBe('C:/Users/dudara/x');
-    expect(collapseHomePath('C:\\\\Users\\\\dudara\\\\x', w(wh))).toBe('C:\\\\Users\\\\dudara\\\\x');
+    expect(collapseHomePath('C:/Users/youa/x', w(wh))).toBe('C:/Users/youa/x');
+    expect(collapseHomePath('C:\\\\Users\\\\youa\\\\x', w(wh))).toBe('C:\\\\Users\\\\youa\\\\x');
   });
   it('collapseHomePath on linux tolerates repeated / but not backslash', () => {
     expect(collapseHomePath('/home//ann/x', l('/home/ann'))).toBe('~/x');
@@ -104,11 +104,11 @@ describe('separator-insensitive home matching (#4446 review)', () => {
   });
   it('textForClient collapses Python repr (doubled backslash) and forward-slash text', () => {
     const o = { home: wh, platform: 'win32' as const };
-    expect(textForClient(lan, "No such file or directory: 'C:\\\\Users\\\\dudar\\\\venv'", o))
+    expect(textForClient(lan, "No such file or directory: 'C:\\\\Users\\\\you\\\\venv'", o))
       .toBe("No such file or directory: '~\\\\venv'");
-    expect(textForClient(lan, 'FileNotFoundError: C:/Users/dudar/x.wav', o)).toBe('FileNotFoundError: ~/x.wav');
-    expect(textForClient(lan, 'plain C:\\Users\\dudar\\x', o)).toBe('plain ~\\x');
-    expect(textForClient(lan, 'C:\\Users\\dudara\\x', o)).toBe('C:\\Users\\dudara\\x');
+    expect(textForClient(lan, 'FileNotFoundError: C:/Users/you/x.wav', o)).toBe('FileNotFoundError: ~/x.wav');
+    expect(textForClient(lan, 'plain C:\\Users\\you\\x', o)).toBe('plain ~\\x');
+    expect(textForClient(lan, 'C:\\Users\\youa\\x', o)).toBe('C:\\Users\\youa\\x');
   });
   it('textForClient on linux does not treat backslash as a separator', () => {
     const o = { home: '/home/ann', platform: 'linux' as const };

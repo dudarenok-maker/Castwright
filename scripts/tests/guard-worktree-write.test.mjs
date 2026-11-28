@@ -270,7 +270,7 @@ const FAKE_PORCELAIN = [
   'HEAD 0000000000000000000000000000000000000000',
   'detached',
   '',
-  'worktree C:/Users/dudar/AppData/Local/Temp/open-engine-ringer/oe-heartbeat/wt-3238',
+  'worktree C:/Users/you/AppData/Local/Temp/open-engine-ringer/oe-heartbeat/wt-3238',
   'HEAD 0000000000000000000000000000000000000000',
   'branch refs/heads/fix/scripts-3238-collect-process-snapshot-retry',
   '',
@@ -900,11 +900,11 @@ test('resolveOwnTranscriptPath derives the subagent transcript from the session 
   // The layout verified against all four real recorded fix-agent payloads.
   assert.equal(
     resolveOwnTranscriptPath(
-      'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3.jsonl',
+      'C:\\Users\\you\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3.jsonl',
       'a5672e0bf6137163a',
       win32.join,
     ),
-    'C:\\Users\\dudar\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3\\subagents\\agent-a5672e0bf6137163a.jsonl',
+    'C:\\Users\\you\\.claude\\projects\\C--Claude-Projects-wt-x\\b5a1be31-7f94-4441-b986-c1cebda324f3\\subagents\\agent-a5672e0bf6137163a.jsonl',
   );
 });
 
@@ -964,18 +964,18 @@ test('the derived path is one the running OS can actually open (round-trip again
 });
 
 test('resolveOwnTranscriptPath returns null rather than falling back to the session transcript', () => {
-  const session = 'C:\\Users\\dudar\\.claude\\projects\\p\\s.jsonl';
+  const session = 'C:\\Users\\you\\.claude\\projects\\p\\s.jsonl';
   // No agent_id: a main-session call, not a dispatched subagent.
   assert.equal(resolveOwnTranscriptPath(session, undefined), null);
   assert.equal(resolveOwnTranscriptPath(session, ''), null);
   // No transcript_path.
   assert.equal(resolveOwnTranscriptPath(undefined, 'abc'), null);
   // Not a .jsonl path — the layout assumption does not hold, so do not guess.
-  assert.equal(resolveOwnTranscriptPath('C:\\Users\\dudar\\.claude\\projects\\p\\s.txt', 'abc'), null);
+  assert.equal(resolveOwnTranscriptPath('C:\\Users\\you\\.claude\\projects\\p\\s.txt', 'abc'), null);
 });
 
 test('resolveOwnTranscriptPath refuses an agent_id that is not a bare token (path-traversal guard)', () => {
-  const session = 'C:\\Users\\dudar\\.claude\\projects\\p\\s.jsonl';
+  const session = 'C:\\Users\\you\\.claude\\projects\\p\\s.jsonl';
   for (const hostile of ['..\\..\\evil', 'a/b', 'a\\b', '../x', 'a b', 'a.b', '']) {
     assert.equal(resolveOwnTranscriptPath(session, hostile), null, `should refuse ${JSON.stringify(hostile)}`);
   }
