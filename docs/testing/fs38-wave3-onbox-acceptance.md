@@ -1979,7 +1979,8 @@ the artifact set is maximally populated:
 
 **Expected — the confirm dialog**
 - Titled `Revoke "<name>"?`, and states up front that
-  `The original recording and everything derived from it are permanently deleted.`
+  `The original recording and the voice built from it are permanently deleted.`
+  followed by a note that chapters already generated keep the voice until re-cast and regenerated.
 - The confirm button is labelled **`Revoke & delete recording`**.
 - Cancelling leaves everything intact (check this too).
 
