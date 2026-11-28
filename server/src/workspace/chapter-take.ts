@@ -12,7 +12,8 @@
    `scan.ts` types, `book-state-update.ts`, `audio/segments-io.ts`,
    `audio/render-integrity/embeddings-io.ts` and `verdicts-io.ts`,
    `book-op-lock.ts`, `revisions-store.ts` (which therefore takes take names
-   from the leaf), and the leaves `book-lock.ts` and `book-dir-key.ts`.
+   from the leaf), `file-lock.ts` (its curated sentences), and the leaves
+   `book-lock.ts` and `book-dir-key.ts`.
 
    LOCKS (§5.A "Fence and lock placement"): entry points never lock
    `book-op` themselves. Each takes a live `BookHandle` from the caller's
@@ -39,8 +40,9 @@ import type { TtsModelKey } from '../tts/model-keys.js';
 import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
 import { canonicalDirKey } from './book-dir-key.js';
 import { withBookLock } from './book-lock.js';
-import { assertHeld, readBookStateOrThrow, type AnyBookHandle } from './book-op-lock.js';
+import { assertHeld, readBookStateOrThrow, type AnyBookHandle, type BookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
+import { FS_FAILURE_REQUEST_ERROR, requestFailureMessageFs } from './file-lock.js';
 import { audioDir } from './paths.js';
 import { dropPendingForChapter, recordPending, type ChapterRef } from './revisions-store.js';
 import type { BookStateJson } from './scan.js';
@@ -1318,15 +1320,25 @@ export async function reconcileSlug(
   );
   if (replayed.result === 'parked') throw replayed.error;
   if (opts.migrate === false) return;
+  await migrateAndRestamp(handle, slug, opts.restamp !== false, ensureTakeIdentity);
+}
+
+/* `reconcileSlug` after its replay: §6.1 steps 1-5. `identity` is step 4,
+   which commit step 0 runs without letting it fail the commit. */
+async function migrateAndRestamp(
+  handle: AnyBookHandle,
+  slug: string,
+  restamp: boolean,
+  identity: typeof ensureTakeIdentity,
+): Promise<void> {
   await migrateSlugFiles(handle, slug);
   const root = audioDir(handle.bookDir);
-  const restamp = opts.restamp !== false;
   let verified: { identity: string; legacy: boolean } | null = null;
   if (restamp && chapterAudioExists(root, slug)) {
     verified = await segmentsDescribeLiveAudio(handle, root, slug);
     if (!verified) return;
   }
-  await ensureTakeIdentity(handle, slug, {
+  await identity(handle, slug, {
     mirrorState: restamp,
     ...(verified ? { onlyIfIdentity: verified.identity } : {}),
   });
@@ -1565,7 +1577,14 @@ export type CommitTakeResult =
   | { outcome: 'changed' }
   /** A live or staged file was held. Everything is back where it was and the
       staged set is kept: commit the same `StagedTake` again. */
-  | { outcome: 'retry'; cause: 'held-file' };
+  | { outcome: 'retry'; cause: 'held-file' }
+  /** Step 0: a leftover journal's move step is refused. The staged set is swept;
+      never retried. The sentence is `TAKE_REPAIR_PENDING_ERROR`. */
+  | { outcome: 'repair-pending' }
+  /** Step 0: a record step failed. Nothing of this commit has moved and the
+      staged set is KEPT: run it again under `runWithRecordStepBudget`, and a
+      caller that gives up removes it (`discardStaged`, `releaseStaging`). */
+  | RecordStepFailed;
 
 const SIDECAR_PARTS = Object.keys(TAKE_SIDECAR_SUFFIXES) as TakeSidecarPart[];
 
@@ -1635,19 +1654,6 @@ function probeStagedParts(staged: StagedTake): Promise<TakeJournalPart[]> {
   return Promise.all(staged.parts.map((p) => sizedPart(partOfSuffix(p.suffix), p.path)));
 }
 
-/* Step 0, PLACEHOLDER: #4831 replaces it with the full step 0 (journal replay,
-   supersession and the failure classes). `ensureTakeIdentity`'s failures never
-   stop a full render (R8-2): it commits without the id. */
-async function commitStep0(handle: AnyBookHandle, slug: string, partial: boolean): Promise<void> {
-  await reconcileSlug(handle, slug);
-  try {
-    await ensureTakeIdentity(handle, slug);
-  } catch (err) {
-    if (partial) throw err;
-    console.warn(`[take] ${slug}: take id not minted before the commit:`, err);
-  }
-}
-
 function resynthesizedSet(staged: StagedTake, segmentCount: number): Set<number> {
   const indices = staged.resynthesizedIndices;
   if (indices === undefined) {
@@ -1670,14 +1676,15 @@ interface OpenedCommit {
   resynthesized: Set<number> | null;
 }
 
-/* Steps 0-3: replay, refuse an abort, compare-and-swap, and write the journal.
-   Step 4's CHOICE of what becomes previous is made here, because the journal
-   records it. `null`: the base is no longer the live take. Nothing of either
-   take has moved when this returns or throws. */
+/* Steps 1-3: refuse an abort, compare-and-swap, and write the journal, which
+   names what step 0 superseded. Step 4's CHOICE of what becomes previous is
+   made here, because the journal records it. `null`: the base is no longer the
+   live take. Nothing of either take has moved when this returns or throws. */
 async function openCommit(
   handle: AnyBookHandle,
   staged: StagedTake,
   opts: CommitTakeOptions,
+  supersedes: TakeJournalSuperseded[],
 ): Promise<OpenedCommit | null> {
   const { slug } = staged;
   const root = audioDir(handle.bookDir);
@@ -1685,7 +1692,6 @@ async function openCommit(
     opts.base !== undefined ||
     (staged.resynthesizedIndices !== undefined && staged.resynthesizedIndices !== 'all');
 
-  await commitStep0(handle, slug, partial);
   /* Step 1 (H8). */
   if (opts.signal.aborted) throw new DOMException('commitTake aborted', 'AbortError');
   /* Step 2 (OD2). */
@@ -1753,7 +1759,7 @@ async function openCommit(
           previousRenderedAt: becomesPrevious.segments?.synthesizedAt ?? null,
         }
       : null,
-    supersedes: [],
+    supersedes,
     lost: [],
   };
   const journalPath = await writeTakeJournal(handle, slug, journal);
@@ -2077,6 +2083,8 @@ async function abandonStaged(staged: StagedTake): Promise<void> {
     span. No lock is taken here beyond the stamp's `book` -> `state-json`, the
     review record's `revisions` and the journal unlink's `book`.
 
+    - `repair-pending`, `record-step-failed`: step 0 could not settle the slug's
+      leftover journals (`CommitTakeResult`). A journal conflict throws.
     - `changed`: a partial writer's `base` is not the live take.
     - `retry`: a file was held at step 5 or 6; everything is rolled back and the
       staged set is KEPT, still in `liveStaging`.
@@ -2093,12 +2101,48 @@ export async function commitTake(
   opts: CommitTakeOptions,
 ): Promise<CommitTakeResult> {
   assertHeld(handle, 'commitTake');
+  const { slug } = staged;
+
+  let supersedes: TakeJournalSuperseded[];
+  try {
+    supersedes = await commitStep0(handle, slug);
+  } catch (err) {
+    const failure = classifyReplayFailure(err);
+    if (failure === 'record') {
+      console.warn(`[take] ${slug}: a record step failed before the commit:`, err);
+      return { outcome: 'record-step-failed', err };
+    }
+    await abandonStaged(staged);
+    if (failure === 'conflict') throw err;
+    console.warn(`[take] ${slug}: the commit is blocked by a take part that cannot be moved:`, err);
+    return { outcome: 'repair-pending' };
+  }
+  try {
+    return await commitSettled(handle, staged, opts, supersedes);
+  } catch (err) {
+    if (typeof err === 'object' && err !== null) pastStep0.add(err);
+    throw err;
+  }
+}
+
+/* Errors `commitTake` threw after step 0. None is a record step to run again (a
+   parked one means the take is committed), so `runWithRecordStepBudget` throws
+   them straight on. */
+const pastStep0 = new WeakSet<object>();
+
+/* Steps 1-8, over the slug step 0 settled. */
+async function commitSettled(
+  handle: AnyBookHandle,
+  staged: StagedTake,
+  opts: CommitTakeOptions,
+  supersedes: TakeJournalSuperseded[],
+): Promise<CommitTakeResult> {
   const root = audioDir(handle.bookDir);
   const { slug } = staged;
 
   let opened: OpenedCommit | null;
   try {
-    opened = await openCommit(handle, staged, opts);
+    opened = await openCommit(handle, staged, opts, supersedes);
   } catch (err) {
     await abandonStaged(staged);
     throw err;
@@ -2740,4 +2784,178 @@ export async function quarantineConflictingJournals(
     `${isoDateUtc()}-${mintTakeId()}`,
     `${claiming.length} take journals claim ${slug}`,
   );
+}
+
+/* ------------------------------------------------------------------ *
+ * Failure classes and Commit step 0 (§5.A "Commit" step 0, "Ownership",
+ * "Retries"; R7-4, R8-2, E10, R9-3, R10-3)
+ *
+ * The class of a failed replay is a property of the protocol STEP that threw,
+ * never of the error's `code` or `syscall`: a held `state.json` throws exactly
+ * what a held take part throws. No sentence here carries an error's own message
+ * or a path; the raw error goes to the log.
+ * ------------------------------------------------------------------ */
+
+/** The one sentence for a refused move step, whatever its code (R9-8). */
+export const TAKE_REPAIR_PENDING_ERROR =
+  "Some of this chapter's audio files could not be moved into place. Close any other program using the book's folder, and check free disk space and the folder's permissions, then try again.";
+
+/** `TAKE_REPAIR_PENDING_ERROR` for a book-wide operation that refuses. */
+export const TAKE_REPAIR_PENDING_BOOK_ERROR =
+  "Some of this book's audio files could not be moved into place. Close any other program using the book's folder, and check free disk space and the folder's permissions, then try again.";
+
+/** The fixed 500 an entry point answers for a `TakeJournalConflictError`. */
+export const TAKE_JOURNAL_CONFLICT_ERROR =
+  "This chapter's audio has conflicting recovery records, so nothing was changed. Restart Castwright to repair them, then try again.";
+
+/** A slug blocked on a move step. */
+export class TakeRepairPendingError extends Error {
+  readonly code = 'take_repair_pending';
+
+  constructor(opts: { bookWide?: boolean; cause?: unknown } = {}) {
+    super(opts.bookWide ? TAKE_REPAIR_PENDING_BOOK_ERROR : TAKE_REPAIR_PENDING_ERROR, {
+      cause: opts.cause,
+    });
+    this.name = 'TakeRepairPendingError';
+  }
+}
+
+export type ReplayFailureClass = 'move' | 'record' | 'conflict';
+
+/** Which class a failure out of replay is. A move step throws its own type;
+    everything else is a record step. */
+export function classifyReplayFailure(err: unknown): ReplayFailureClass {
+  if (err instanceof TakeMoveStepError || err instanceof TakeRepairPendingError) return 'move';
+  if (err instanceof TakeJournalConflictError) return 'conflict';
+  return 'record';
+}
+
+export interface RecordStepFailed {
+  outcome: 'record-step-failed';
+  /** The raw error, for the log and for the sentence's choice. Never sent. */
+  err: unknown;
+}
+
+/** A record step that failed every attempt of its budget. */
+export type RecordStepExhausted = RecordStepFailed & {
+  /** The curated client-facing sentence for the last error. */
+  message: string;
+};
+
+const RECORD_STEP_RETRY_DELAYS_MS = [1000, 2000];
+
+const isRecordStepFailed = (value: unknown): value is RecordStepFailed =>
+  isObject(value) && value.outcome === 'record-step-failed';
+
+/** A job's record-step budget: `fn` in a span, then twice more in FRESH spans
+    after 1 s and 2 s. `openSpan` opens one of the caller's spans around what it
+    is given (`(run) => withBookOp(bookId, run)`), once per attempt, so no span
+    is ever nested and the waits sit between spans.
+
+    An attempt fails when `fn` answers `record-step-failed` or throws a record
+    step. Everything else ends the budget at once: any other answer; a move step,
+    a conflict or an abort; an error `commitTake` threw after step 0; and
+    whatever `openSpan` answers or throws without running `fn` (`BOOK_GONE`, a
+    book-op acquisition timeout).
+
+    After the third failure the answer carries the curated sentence, which the
+    last error's `code` chooses and nothing else. */
+export async function runWithRecordStepBudget<T, S, H extends AnyBookHandle = BookHandle>(
+  openSpan: (run: (handle: H) => Promise<void>) => Promise<S>,
+  fn: (handle: H) => Promise<T>,
+  opts: { sleep?: (ms: number) => Promise<void> } = {},
+): Promise<T | RecordStepExhausted | Exclude<S, void>> {
+  const sleep = opts.sleep ?? ((ms: number) => new Promise<void>((resolve) => setTimeout(resolve, ms)));
+  for (let attempt = 0; ; attempt++) {
+    let ran: { value: T } | { failed: unknown } | undefined;
+    const answer = await openSpan(async (handle) => {
+      try {
+        const value = await fn(handle);
+        ran = isRecordStepFailed(value) ? { failed: value.err } : { value };
+      } catch (err) {
+        const final =
+          classifyReplayFailure(err) !== 'record' ||
+          (err as Error | null)?.name === 'AbortError' ||
+          pastStep0.has(err as object);
+        if (final) throw err;
+        ran = { failed: err };
+      }
+    });
+    if (!ran) return answer as Exclude<S, void>;
+    if ('value' in ran) return ran.value;
+    console.warn(`[take] record step failed, attempt ${attempt + 1}:`, ran.failed);
+    if (attempt === RECORD_STEP_RETRY_DELAYS_MS.length) {
+      return {
+        outcome: 'record-step-failed',
+        err: ran.failed,
+        message: requestFailureMessageFs(ran.failed, FS_FAILURE_REQUEST_ERROR),
+      };
+    }
+    await sleep(RECORD_STEP_RETRY_DELAYS_MS[attempt]);
+  }
+}
+
+/* E12's list as widened by E14, for Phase 2's per-slug journals: past every
+   move, so the next commit's own stamp, record and cleanup dominate what it
+   still owes. Any other `op` is off the list. */
+const isSupersedable = (journal: TakeJournal): boolean =>
+  (journal.op === 'commit' || journal.op === 'replace') && isCommittedPhase(journal.phase);
+
+/* What the superseding journal records for `journal`: the chain it had itself
+   superseded, oldest first (R9-3), then `journal` with the discards it still
+   owes. One still at `installed` owes its entry drop. */
+async function absorbJournal(root: string, journal: TakeJournal): Promise<TakeJournalSuperseded[]> {
+  const owed = await pathsStartingWith(root, discardPrefix(journal.chapter.slug, journal.jid));
+  return [
+    ...journal.supersedes,
+    { jid: journal.jid, discards: owed.map((p) => basename(p)), dropEntry: journal.phase === 'installed' },
+  ];
+}
+
+/* Replay `slug`'s leftover journals until the slug settles (R10-3): a rolled-back
+   superseding journal makes the ones it named leftovers again, so each replay is
+   followed by a fresh listing. Answers what the caller's journal supersedes:
+   nothing, or the journal in charge whose replay failed on a record step, with
+   its chain. Throws what blocks the slug. */
+async function settleSlugJournals(handle: AnyBookHandle, slug: string): Promise<TakeJournalSuperseded[]> {
+  for (;;) {
+    const listing = await listTakeJournals(handle);
+    if (!listing.journals.has(slug)) return [];
+    const replayed = await replaySlugJournals(handle, slug, listing);
+    if (replayed.result !== 'parked' || replayed.gone) continue;
+    /* From disk: the replay may have moved the journal on to `cleanup`. */
+    const left = (await listTakeJournals(handle)).journals.get(slug) ?? [];
+    const claiming = journalsInCharge((await readSlugJournals(left)).found);
+    /* None, or a conflict: the next replay settles or throws it. */
+    if (claiming.length !== 1) continue;
+    const [{ journal }] = claiming;
+    if (classifyReplayFailure(replayed.error) !== 'record' || !isSupersedable(journal)) throw replayed.error;
+    console.warn(`[take] ${slug}: superseding take journal ${journal.jid}, whose replay failed:`, replayed.error);
+    return absorbJournal(audioDir(handle.bookDir), journal);
+  }
+}
+
+/* A failed mint never stops a commit (R8-2): a partial writer's id was minted in
+   its base-read span, and a full render commits without one. */
+async function ensureIdentityForCommit(
+  handle: AnyBookHandle,
+  slug: string,
+  opts: Parameters<typeof ensureTakeIdentity>[2] = {},
+): Promise<void> {
+  try {
+    await ensureTakeIdentity(handle, slug, opts);
+  } catch (err) {
+    console.warn(`[take] ${slug}: take id not minted before the commit:`, err);
+  }
+}
+
+/* Commit step 0: settle the journals, resolve the slug's file shape and give its
+   takes an id. A superseded journal still owes its stamp, which this commit's
+   step 7 makes, so nothing here then writes a take member of `state.json`. */
+async function commitStep0(handle: AnyBookHandle, slug: string): Promise<TakeJournalSuperseded[]> {
+  const supersedes = await settleSlugJournals(handle, slug);
+  const stamp = supersedes.length === 0;
+  await migrateAndRestamp(handle, slug, stamp, ensureIdentityForCommit);
+  await ensureIdentityForCommit(handle, slug, { mirrorState: stamp });
+  return supersedes;
 }
