@@ -4,6 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 import { configureStore } from '@reduxjs/toolkit';
 import { exportsSlice, exportsActions, type ExportsState } from './exports-slice';
+import { notificationsSlice } from './notifications-slice';
 import { retryExport, createExportPollMiddleware } from './exports-middleware';
 import type { BookExportJob } from '../lib/types';
 import { api } from '../lib/api';
@@ -256,9 +257,41 @@ describe('export poll middleware', () => {
     expect(store.getState().exports.byBookId['b1'][0].status).toBe('cancelling');
     await vi.advanceTimersByTimeAsync(100);
     await vi.advanceTimersByTimeAsync(100);
-    expect(store.getState().exports.byBookId['b1'][0].status).toBe('cancelled');
+    expect(store.getState().exports.byBookId['b1']).toEqual([]); // cancelled rows are removed
     await vi.advanceTimersByTimeAsync(500);
     expect(getExport).toHaveBeenCalledTimes(4); // no polls after cancelled
+  });
+
+  /* #2303 — re-entering Listen replaces the list from the server, which can
+     deliver the terminal status before the next poll does. */
+  it('removes and toasts a live job that a rehydrate reports as cancelled', () => {
+    const job = (status: BookExportJob['status'], syncPath: string | null = null) =>
+      makeJob({ id: 'exp_1', bookId: 'b1', status, syncPath });
+    const store = configureStore({
+      reducer: { exports: exportsSlice.reducer, notifications: notificationsSlice.reducer },
+      middleware: (gd) => gd().concat(createExportPollMiddleware({ intervalMs: 100 })),
+    });
+    store.dispatch(exportsActions.exportStarted(job('cancelling')));
+    store.dispatch(
+      exportsActions.exportsHydrated({ bookId: 'b1', jobs: [job('cancelled', '/sync/A/Book')] }),
+    );
+    expect(store.getState().exports.byBookId['b1']).toEqual([]);
+    expect(store.getState().notifications.toasts.map((t) => t.message)).toEqual([
+      'Export cancelled, but its files were already copied to your sync folder (/sync/A/Book).',
+    ]);
+  });
+
+  it('keeps an already-cancelled job it never saw running, with no toast', () => {
+    const old = makeJob({ id: 'exp_1', bookId: 'b1', status: 'cancelled', syncPath: '/sync/A' });
+    const store = configureStore({
+      reducer: { exports: exportsSlice.reducer, notifications: notificationsSlice.reducer },
+      middleware: (gd) => gd().concat(createExportPollMiddleware({ intervalMs: 100 })),
+    });
+    store.dispatch(exportsActions.exportsHydrated({ bookId: 'b1', jobs: [old] }));
+    store.dispatch(exportsActions.exportsHydrated({ bookId: 'b1', jobs: [old] }));
+    store.dispatch(exportsActions.exportUpdated(old));
+    expect(store.getState().exports.byBookId['b1']).toEqual([old]);
+    expect(store.getState().notifications.toasts).toEqual([]);
   });
 
   it('does not resurrect a job dismissed while a poll was in flight', async () => {

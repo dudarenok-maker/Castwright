@@ -26,6 +26,7 @@ import { bookExportJobToQueueItem } from '../lib/export-queue-adapter';
 import { api, ExportIncompleteError, type SyncFolderProbeResult } from '../lib/api';
 import { useAppDispatch, useAppSelector } from '../store';
 import { exportsActions } from '../store/exports-slice';
+import { refreshExport } from '../store/exports-middleware';
 import { saveAccountSettings } from '../store/account-slice';
 import { notificationsActions } from '../store/notifications-slice';
 import type { BookExportJob, BookExportRequest } from '../lib/types';
@@ -92,11 +93,6 @@ interface TileHint {
       other tile keeps its one fixed shape. */
   formatOptions?: Array<{ id: FormatId; label: string }>;
 }
-
-/* How a cancelled export is followed while its sync-folder copy is still in
-   flight (#4228): poll every second, give up after ten minutes. */
-const SYNC_FOLLOW_INTERVAL_MS = 1000;
-const SYNC_FOLLOW_MAX_POLLS = 600;
 
 const TILE_HINTS: Record<TileHintKey, TileHint> = {
   voice: {
@@ -365,11 +361,10 @@ export function ExportAudiobookModal({
     void handleSaveSyncFolder();
   };
 
-  /* Cancel a running export. Fires-and-forgets the server DELETE
-     (failures don't block dismissal — the user wants out either way),
-     drops the job from the slice, and returns the modal to the picker
-     by clearing activeJobId (which also tears down the poll effect via
-     its cleanup). */
+  /* Cancel a running export. Returns the modal to the picker at once (a failed
+     DELETE doesn't block that) and leaves the job in the slice: its row reads
+     `cancelling` until the server says the work has stopped, and the poll
+     middleware removes it then (#2303). */
   const handleCancel = async () => {
     if (!activeJobId) return;
     const idAtClick = activeJobId;
@@ -378,32 +373,9 @@ export function ExportAudiobookModal({
     try {
       await api.cancelBookExport(bookId, idAtClick);
     } catch {
-      /* server may already be gone; local dismiss still wins */
+      /* server may already be gone; the poll keeps reporting the job */
     }
-    dispatch(exportsActions.exportDismissed({ bookId, exportId: idAtClick }));
-    /* A cancel cannot stop a sync-folder copy that is already running, and it
-       leaves the synced files in place (#4228). The server marks such a copy
-       `syncCopyInFlight` and publishes `syncPath` only once it lands, so keep
-       following the job after dismissal until the copy's outcome is known, then
-       say so. A failed read never blocks anything, same as the cancel above. */
-    try {
-      let job = await api.getBookExport(bookId, idAtClick);
-      for (let n = 0; n < SYNC_FOLLOW_MAX_POLLS && job.syncCopyInFlight; n++) {
-        await new Promise((r) => setTimeout(r, SYNC_FOLLOW_INTERVAL_MS));
-        job = await api.getBookExport(bookId, idAtClick);
-      }
-      if (job.status === 'cancelled' && job.syncPath) {
-        dispatch(
-          notificationsActions.pushToast({
-            kind: 'info',
-            message: `Export cancelled, but its files were already copied to your sync folder (${job.syncPath}).`,
-            dedupeKey: 'export-cancel-synced',
-          }),
-        );
-      }
-    } catch {
-      /* unreadable job: nothing to report */
-    }
+    await dispatch(refreshExport(bookId, idAtClick));
   };
 
   /* Retry from FAILED: drop the failed job from the slice and re-submit

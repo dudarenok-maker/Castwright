@@ -43,8 +43,8 @@ export function bookExportJobToQueueItem(job: BookExportJob): ExportQueueItem {
     size: formatSize(job.sizeBytes ?? null),
     /* queued → in_progress (the rail shows them the same); cancelled →
        failed visually, with errorReason='Cancelled by user.' carried
-       through. The modal dismisses cancelled jobs synchronously so the
-       mapping mostly matters for any other surface that polls them.
+       through. The poll middleware removes a job it sees turn cancelled, so
+       the mapping mostly matters for one a rehydrate lists afresh.
        cancelling (still stopping, not terminal) passes through: the row
        has its own state for it. */
     status:
