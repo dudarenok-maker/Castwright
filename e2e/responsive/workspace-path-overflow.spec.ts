@@ -33,7 +33,7 @@ import { test, expect } from '@playwright/test';
 import type { Page } from '@playwright/test';
 
 const LONG_WORKSPACE_ROOT =
-  'C:\\Users\\dudar\\OneDrive\\Documents\\My Audiobooks Library\\Castwright Workspace Folder';
+  'C:\\Users\\you\\OneDrive\\Documents\\My Audiobooks Library\\Castwright Workspace Folder';
 
 async function measureOverflow(page: Page) {
   return page.evaluate(() => {

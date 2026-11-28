@@ -160,3 +160,12 @@ test('main fails SAFE: all-true and exit 0 when computation throws', () => {
     'every key must be true — degrading to all-FALSE would skip every leg',
   );
 });
+
+// #4875 — src/mocks/no-real-home-path.test.ts scans e2e/** (the mock app is
+// seeded from the e2e URL seams), so an e2e-only diff must schedule step_test.
+test('computeScopes routes an e2e-only diff to the frontend test step (#4875)', () => {
+  const scopes = computeScopes(['e2e/responsive/workspace-path-overflow.spec.ts'], {
+    eventName: 'pull_request',
+  });
+  assert.equal(scopes.step_test, true);
+});

@@ -87,16 +87,16 @@ describe('expandHomePath (#4446)', () => {
 
 describe('separator-insensitive home matching (#4446 review)', () => {
   const lan = { ip: '192.168.1.50', socket: { remoteAddress: '192.168.1.50' }, headers: {} } as any;
-  const wh = 'C:\\Users\\dudar';
+  const wh = 'C:\\Users\\you';
 
   it('collapseHomePath matches forward-slash and doubled-backslash spellings on win32', () => {
-    expect(collapseHomePath('C:/Users/dudar/Sync', w(wh))).toBe('~/Sync');
-    expect(collapseHomePath('C:\\\\Users\\\\dudar\\\\venv', w(wh))).toBe('~\\\\venv');
-    expect(collapseHomePath('c:/users/DUDAR', w(wh))).toBe('~');
+    expect(collapseHomePath('C:/Users/you/Sync', w(wh))).toBe('~/Sync');
+    expect(collapseHomePath('C:\\\\Users\\\\you\\\\venv', w(wh))).toBe('~\\\\venv');
+    expect(collapseHomePath('c:/users/YOU', w(wh))).toBe('~');
   });
   it('collapseHomePath keeps the ann/anna boundary across spellings', () => {
-    expect(collapseHomePath('C:/Users/dudara/x', w(wh))).toBe('C:/Users/dudara/x');
-    expect(collapseHomePath('C:\\\\Users\\\\dudara\\\\x', w(wh))).toBe('C:\\\\Users\\\\dudara\\\\x');
+    expect(collapseHomePath('C:/Users/youa/x', w(wh))).toBe('C:/Users/youa/x');
+    expect(collapseHomePath('C:\\\\Users\\\\youa\\\\x', w(wh))).toBe('C:\\\\Users\\\\youa\\\\x');
   });
   it('collapseHomePath on linux tolerates repeated / but not backslash', () => {
     expect(collapseHomePath('/home//ann/x', l('/home/ann'))).toBe('~/x');
@@ -104,11 +104,11 @@ describe('separator-insensitive home matching (#4446 review)', () => {
   });
   it('textForClient collapses Python repr (doubled backslash) and forward-slash text', () => {
     const o = { home: wh, platform: 'win32' as const };
-    expect(textForClient(lan, "No such file or directory: 'C:\\\\Users\\\\dudar\\\\venv'", o))
+    expect(textForClient(lan, "No such file or directory: 'C:\\\\Users\\\\you\\\\venv'", o))
       .toBe("No such file or directory: '~\\\\venv'");
-    expect(textForClient(lan, 'FileNotFoundError: C:/Users/dudar/x.wav', o)).toBe('FileNotFoundError: ~/x.wav');
-    expect(textForClient(lan, 'plain C:\\Users\\dudar\\x', o)).toBe('plain ~\\x');
-    expect(textForClient(lan, 'C:\\Users\\dudara\\x', o)).toBe('C:\\Users\\dudara\\x');
+    expect(textForClient(lan, 'FileNotFoundError: C:/Users/you/x.wav', o)).toBe('FileNotFoundError: ~/x.wav');
+    expect(textForClient(lan, 'plain C:\\Users\\you\\x', o)).toBe('plain ~\\x');
+    expect(textForClient(lan, 'C:\\Users\\youa\\x', o)).toBe('C:\\Users\\youa\\x');
   });
   it('textForClient on linux does not treat backslash as a separator', () => {
     const o = { home: '/home/ann', platform: 'linux' as const };
@@ -199,7 +199,7 @@ describe('separator-insensitive home matching (#4446 review)', () => {
     });
     const temp = '\\AppData\\Local\\Temp';
     const real: [string, string][] = [
-      ['Michael Dudarenok', 'MICHAE~1'],
+      ['Jordan Example', 'JORDAN~1'],
       ['firstname.lastname', 'FIRSTN~1.LAS'],
       ['firstname.lastname', 'FI8B6D~1.LAS'],
       ['john.q.smith', 'JOHNQ~1.SMI'],
@@ -235,14 +235,14 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       expect(textForClient(lan, 'open C:\\Users\\JOHN~2.SMI\\x', o)).toBe('open C:\\Users\\JOHN~2.SMI\\x');
     });
     it('collapses no short form when no alias resolves to home', () => {
-      const home = 'C:\\Users\\Michael Dudarenok';
-      const x = 'C:\\Users\\MICHAE~1\\x';
-      const cases: Record<string, string>[] = [{}, { 'C:\\Users\\MICHAE~1': 'C:\\Users\\Someone Else' }];
+      const home = 'C:\\Users\\Jordan Example';
+      const x = 'C:\\Users\\JORDAN~1\\x';
+      const cases: Record<string, string>[] = [{}, { 'C:\\Users\\JORDAN~1': 'C:\\Users\\Someone Else' }];
       for (const table of cases) {
-        expect(collapseHomePath(x, at(home, `C:\\Users\\MICHAE~1${temp}`, table))).toBe(x);
+        expect(collapseHomePath(x, at(home, `C:\\Users\\JORDAN~1${temp}`, table))).toBe(x);
       }
-      for (const hint of ['C:\\Users\\Michael Dudarenok\\Temp', 'D:\\Temp', 'C:\\Users']) {
-        expect(collapseHomePath(x, at(home, hint, { 'C:\\Users\\MICHAE~1': home }))).toBe(x);
+      for (const hint of ['C:\\Users\\Jordan Example\\Temp', 'D:\\Temp', 'C:\\Users']) {
+        expect(collapseHomePath(x, at(home, hint, { 'C:\\Users\\JORDAN~1': home }))).toBe(x);
       }
     });
     it('never throws when the resolver does', () => {
@@ -283,19 +283,19 @@ describe('separator-insensitive home matching (#4446 review)', () => {
       },
     );
     describe('a relocated profile (the alias is checked against the RESOLVED home)', () => {
-      const realHome = 'D:\\Profiles\\Michael Dudarenok';
+      const realHome = 'D:\\Profiles\\Jordan Example';
       it('collapses the alias when C:\\Users is a junction to another folder', () => {
-        const home = 'C:\\Users\\Michael Dudarenok';
-        const o = at(home, `C:\\Users\\MICHAE~1${temp}`, { [home]: realHome, 'C:\\Users\\MICHAE~1': realHome });
-        expect(collapseHomePath(`C:\\Users\\MICHAE~1${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);
+        const home = 'C:\\Users\\Jordan Example';
+        const o = at(home, `C:\\Users\\JORDAN~1${temp}`, { [home]: realHome, 'C:\\Users\\JORDAN~1': realHome });
+        expect(collapseHomePath(`C:\\Users\\JORDAN~1${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);
         expect(collapseHomePath(`${realHome}\\x`, o)).toBe('~\\x');
-        expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
+        expect(collapseHomePath('C:\\Users\\JORDAN~2\\x', o)).toBe('C:\\Users\\JORDAN~2\\x');
       });
       it('collapses the alias when the profile folder is itself a junction', () => {
-        const home = 'C:\\Users\\Michael Dudarenok';
-        const o = at(home, `C:\\Users\\MICHAE~1${temp}`, { [home]: 'D:\\Mike', 'C:\\Users\\MICHAE~1': 'D:\\Mike' });
-        expect(collapseHomePath('C:\\Users\\MICHAE~1\\x', o)).toBe('~\\x');
-        expect(collapseHomePath('C:\\Users\\MICHAE~2\\x', o)).toBe('C:\\Users\\MICHAE~2\\x');
+        const home = 'C:\\Users\\Jordan Example';
+        const o = at(home, `C:\\Users\\JORDAN~1${temp}`, { [home]: 'D:\\Mike', 'C:\\Users\\JORDAN~1': 'D:\\Mike' });
+        expect(collapseHomePath('C:\\Users\\JORDAN~1\\x', o)).toBe('~\\x');
+        expect(collapseHomePath('C:\\Users\\JORDAN~2\\x', o)).toBe('C:\\Users\\JORDAN~2\\x');
       });
       it('collapses the alias when home itself is spelled with an 8.3 ancestor', () => {
         const home = 'C:\\LONGPA~1\\José García';
@@ -306,10 +306,10 @@ describe('separator-insensitive home matching (#4446 review)', () => {
         expect(collapseHomePath(`${longReal}\\x`, o)).toBe('~\\x');
       });
       it.each([
-        ['shallower', 'D:\\Michael Dudarenok', 'D:\\MICHAE~1', 'D:\\MICHAE~2'],
-        ['deeper', 'D:\\a\\b\\Michael Dudarenok', 'D:\\a\\b\\MICHAE~1', 'D:\\a\\b\\MICHAE~2'],
+        ['shallower', 'D:\\Jordan Example', 'D:\\JORDAN~1', 'D:\\JORDAN~2'],
+        ['deeper', 'D:\\a\\b\\Jordan Example', 'D:\\a\\b\\JORDAN~1', 'D:\\a\\b\\JORDAN~2'],
       ])('collapses the alias when the junction target is %s than C:\\Users', (_n, rHome, alias, sibling) => {
-        const home = 'C:\\Users\\Michael Dudarenok';
+        const home = 'C:\\Users\\Jordan Example';
         const hint = `${alias}${temp}`;
         const o = at(home, hint, { [home]: rHome, [alias]: rHome });
         expect(collapseHomePath(`${alias}${temp}\\OllamaSetup.exe`, o)).toBe(`~${temp}\\OllamaSetup.exe`);

@@ -442,7 +442,11 @@ export const STEPS = [
   {
     name: 'test',
     inputs: {
-      globs: ['src/**'],
+      /* e2e/**: src/mocks/no-real-home-path.test.ts scans it (#4875). On an
+         e2e-, data- or mocks-only diff the Windows leg's unscoped `npm test`
+         is what runs that guard (Ubuntu's `vitest --changed` cannot select
+         it); workflow-wiring.test.mjs pins that leg to stay unscoped. */
+      globs: ['src/**', 'e2e/**'],
       extraFiles: [
         'vitest.config.ts',
         'vite.config.ts',

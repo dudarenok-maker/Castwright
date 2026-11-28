@@ -48,7 +48,7 @@ const normKey = (p: string) => p.split(/[\\/]+/).filter(Boolean).join('/').toLow
    (non-ASCII letters, hash forms and `~N` collisions all break a model); the filesystem
    is asked instead. The comparison is against the RESOLVED home, not the string
    `os.homedir()` returned, so a relocated profile (junctioned `C:\Users`, a junctioned
-   profile folder, an 8.3-spelled ancestor) still matches. A sibling (`MICHAE~2`) resolves
+   profile folder, an 8.3-spelled ancestor) still matches. A sibling (`JORDAN~2`) resolves
    to another folder, so it never matches, which keeps it from collapsing to `~`
    (`expandHomePath` would turn that into the user's own home). Spellings are never mixed
    per segment, so a junction elsewhere into home cannot make a lookalike path collapse.

@@ -2142,3 +2142,13 @@ test('ffmpeg floor leg (#4461): retry budget fits inside the install step timeou
     `with the -k ${kill}s kill grace the worst case exceeds timeout-minutes ${timeoutMinutes}`,
   );
 });
+
+// #4875 — the Windows leg's unscoped `npm test` is the only CI run of
+// src/mocks/no-real-home-path.test.ts on an e2e-, data- or mocks-only diff
+// (Ubuntu's `vitest --changed` cannot select it). Narrowing it would silently
+// stop that guard running on exactly those diffs.
+test('the Windows frontend leg stays an unscoped `npm test` (#4875)', () => {
+  const m = /# leg: test:windows\n\s+- name: Frontend tests\n(?:\s+if: .*\n)?\s+shell: bash\n\s+run: (.*)\n/.exec(source);
+  assert.ok(m, 'could not find the test:windows leg');
+  assert.equal(m[1].trim(), 'npm test');
+});
