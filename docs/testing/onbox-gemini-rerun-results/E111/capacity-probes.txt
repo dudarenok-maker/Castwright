@@ -1,0 +1,9 @@
+# One tiny direct generateContent request per probe: gemma-4-31b-it, thinkingLevel MINIMAL, maxOutputTokens 64.
+# Series 1 (before run 1), then series 2 (after run 2 failed on 503). DONE= lines are the probe script's own end marker.
+2026-11-28 09:09:00 +11:00 after-wait=0min HTTP 503 { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+2026-11-28 09:19:36 +11:00 after-wait=10min HTTP 200 { "candidates": [ { "content": { "parts": [ { "text": "", "thought": true }, { "text": "OK" } ], "role": "model" }, "finishReason": "STOP", "index": 0 } ], "usageMetadata": { "promptTokenCount": 8, "candidatesTokenCount": 1, "totalTokenCount": 9, "promptTokensDetails": [ { "modality": "TEXT", "tokenCount": 8 } ], "serviceTier": "standard" }, "modelVersion": "gemma-4-31b-it", "responseId": "-AEKa6TrNKyng8UPxea62QI" }
+DONE=OK
+# series 2
+2026-11-28 09:40:08 +11:00 after-wait=10min HTTP 503 { "error": { "code": 503, "message": "This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.", "status": "UNAVAILABLE" } }
+2026-11-28 10:00:09 +11:00 after-wait=20min HTTP 200 { "candidates": [ { "content": { "parts": [ { "text": "", "thought": true }, { "text": "OK" } ], "role": "model" }, "finishReason": "STOP", "index": 0 } ], "usageMetadata": { "promptTokenCount": 8, "candidatesTokenCount": 1, "totalTokenCount": 9, "promptTokensDetails": [ { "modality": "TEXT", "tokenCount": 8 } ], "serviceTier": "standard" }, "modelVersion": "gemma-4-31b-it", "responseId": "eQsKa4urKf3dg8UPk9TE2AU" }
+DONE=OK

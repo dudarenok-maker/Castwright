@@ -1,0 +1,43 @@
+# One row per [gemini] stream-timing line (one per request attempt). Times in ms from the attempt start.
+
+== part2-auto-36flash: requests=19
+firstChunkMs: first=19621 median=42646 max=97488 (n=19)
+firstAnswerMs: first=19652 median=55677 max=105321 (n=19)
+#  logged-at                model              firstChunkMs firstAnswerMs thoughtPartsBeforeAnswer
+ 1 2026-11-28 10:12:09.321  gemini-3.6-flash     19621      19652      8
+ 2 2026-11-28 10:13:27.398  gemini-3.6-flash     48339      63675     14
+ 3 2026-11-28 10:15:14.911  gemini-3.6-flash     23084      49520     21
+ 4 2026-11-28 10:16:40.191  gemini-3.6-flash     47230      68347     18
+ 5 2026-11-28 10:18:39.910  gemini-3.6-flash     71182     103970     31
+ 6 2026-11-28 10:19:56.640  gemini-3.6-flash     26615      73312     37
+ 7 2026-11-28 10:21:16.005  gemini-3.6-flash     45168      78173     23
+ 8 2026-11-28 10:21:36.496  gemini-3.6-flash     14694      19716      4
+ 9 2026-11-28 10:22:25.777  gemini-3.6-flash     46424      49047      3
+10 2026-11-28 10:23:36.986  gemini-3.6-flash     46218      69191     17
+11 2026-11-28 10:23:45.201  gemini-3.6-flash      2674       7905      4
+12 2026-11-28 10:25:31.053  gemini-3.6-flash     97488     105321      4
+13 2026-11-28 10:26:09.614  gemini-3.6-flash     15858      38157     13
+14 2026-11-28 10:27:14.026  gemini-3.6-flash     52891      64133      8
+15 2026-11-28 10:28:26.314  gemini-3.6-flash     61799      71720      5
+16 2026-11-28 10:29:11.825  gemini-3.6-flash      2129      44064     27
+17 2026-11-28 10:29:41.865  gemini-3.6-flash     23563      29763      5
+18 2026-11-28 10:30:38.310  gemini-3.6-flash     31925      55677      5
+19 2026-11-28 10:31:21.098  gemini-3.6-flash     42646      42646      0
+
+== part2-8192-36flash: requests=1
+firstChunkMs: none
+firstAnswerMs: none
+#  logged-at                model              firstChunkMs firstAnswerMs thoughtPartsBeforeAnswer
+ 1 2026-11-28 10:33:14.639  gemini-3.6-flash      none       none      0
+
+== part2-8192-37flash: requests=7
+firstChunkMs: first=31254 median=7669.5 max=31294 (n=6)
+firstAnswerMs: first=50605 median=50605 max=87628 (n=5)
+#  logged-at                model              firstChunkMs firstAnswerMs thoughtPartsBeforeAnswer
+ 1 2026-11-28 10:37:12.121  gemini-3.7-flash     31254      50605     11
+ 2 2026-11-28 10:38:00.811  gemini-3.7-flash      4486      31536     16
+ 3 2026-11-28 10:39:00.217  gemini-3.7-flash      6752      48320     19
+ 4 2026-11-28 10:40:29.835  gemini-3.7-flash     31294      87628     27
+ 5 2026-11-28 10:40:54.666  gemini-3.7-flash      6032       none     10
+ 6 2026-11-28 10:42:04.758  gemini-3.7-flash      8587      66350     29
+ 7 2026-11-28 10:44:04.784  gemini-3.7-flash      none       none      0

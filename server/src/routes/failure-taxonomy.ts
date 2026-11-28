@@ -1067,8 +1067,9 @@ function invalidOutputHint(
     : 'structured output was off — "json" or "schema" usually prevents this';
 }
 
-/* The advice follows the run's own mode. Gemini is never steered to "schema": whether it
-   accepts that mode is still owed on-box acceptance (E112). */
+/* The advice follows the run's own mode. Gemini is deliberately not yet steered to "schema":
+   E112 passed on-box on 2026-11-28 (#4728), and whether to change the advice is decided in
+   #4887. */
 function invalidOutputRemediation(
   transport: TransportKind,
   mode: AnalyzerInvalidOutputError['structuredOutputMode'],

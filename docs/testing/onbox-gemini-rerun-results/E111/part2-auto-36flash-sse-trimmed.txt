@@ -1,0 +1,30 @@
+# curl: HTTP 200 total=1183.489042s
+# heartbeat events: total=192 phase0=6 phase1=186 (phase 1 receivedBytes is a chapter-wide high-water mark)
+# log / throttle / chapter-failed / error events
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 3,723 words, 19,928 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~2m 0s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (19,928 chars) via Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~1m 40s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 13 characters in 31s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Quote-match tiers: verbatim=22, terminal-punct=0, segments=4."}
+data: {"kind":"log","phaseId":0,"message":"Detected 13 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Pell Hollis, Widow Casper, Brann Weir, Berrin Weir, Father Lessom, Ivo, Sela, Hart"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 31s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 31s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (19,928 chars, ~2m 37s) via Gemini 3.6 Flash…"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — attributed in 5 sections."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — ⚠ attribution may be incomplete (Duplicated block — 45 consecutive sentences repeat earlier ones at offset 309 (repeat-loop).); kept the best take and flagged the chapter for retry."}
+data: {"kind":"chapter-failed","chapterId":1,"message":"Some lines in this chapter may be unattributed — the analyzer's answer did not cover every sentence, so the best take was kept and the chapter was flagged.","code":"attribution-incomplete","remediation":"Click Retry on this chapter to re-run attribution. Already-attributed lines are kept; a retry usually fills the gaps.","phase":"attribution"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 done — 380 sentences in 19m 12s"}
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":1,"message":"Attributed 380 sentences across 1 chapter"}
+data: {"kind":"log","phaseId":1,"message":"Narrator: 188 lines"}
+data: {"kind":"log","phaseId":1,"message":"Master Oduvan: 40 lines"}
+data: {"kind":"log","phaseId":1,"message":"Coalfall: 40 lines"}
+data: {"kind":"log","phaseId":1,"message":"Pell Hollis: 18 lines"}
+data: {"kind":"log","phaseId":2,"message":"No library matches yet (voice library matching is not wired up for this slice)."}
