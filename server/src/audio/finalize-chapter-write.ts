@@ -18,6 +18,9 @@ import {
   livePartPath,
   discardStaleLiveAudio,
   preserveExistingAsPrevious,
+  applyReview,
+  carryForwardEmbeddingRows,
+  type ReviewOutcome,
   type TakeFields,
 } from '../workspace/chapter-take.js';
 import { audioDir, stateJsonPath } from '../workspace/paths.js';
@@ -25,7 +28,7 @@ import { readJson, writeJsonAtomic } from '../workspace/state-io.js';
 import { withStateJsonLock } from '../workspace/file-lock.js';
 import { readStateJsonWithRecovery, writeStateJsonAtomic } from '../workspace/state-migrate.js';
 import { type BookStateJson } from '../workspace/scan.js';
-import { recordPending, dropPendingForChapter, type ChapterRef } from '../workspace/revisions-store.js';
+import type { ChapterRef } from '../workspace/revisions-store.js';
 import { formatDuration } from './format-duration.js';
 import { measureLoudnessFile, type MeasuredLoudness } from './measure-loudness.js';
 import {
@@ -55,7 +58,6 @@ import {
   type EmbeddingRow,
   EMBEDDINGS_VERSION,
 } from './render-integrity/embeddings-io.js';
-import { segKey } from './render-integrity/aggregate.js';
 
 /** Strict on-disk shape of `<slug>.segments.json` (the write view; the loose
     read view lives in segments-io.ts). */
@@ -190,8 +192,7 @@ export interface FinalizeChapterAudioResult {
   reviewOutcome?: ReviewOutcome;
 }
 
-/** Plan 286 (OD29) — what finalize did with A/B review state. */
-export type ReviewOutcome = 'recorded' | 'none' | 'failed';
+export type { ReviewOutcome };
 
 export async function finalizeChapterAudioWrite(
   input: FinalizeChapterAudioInput,
@@ -744,37 +745,14 @@ async function finalizeChapterAudioWriteInner(
     const embPath = livePartPath(audioRoot, chapter.slug, 'embeddings');
     const existing = await readEmbeddings(embPath).catch(() => null);
     if (existing) {
-      const droppedKeys = new Set(
-        [...resynthesizedIndexSet].map((i) => segKey(segments[i].characterId, segments[i].sentenceIds)),
+      /* #3362 pass-7 🟠H / pass-9 🟠I — see `carryForwardEmbeddingRows`. */
+      const { rows, changed } = carryForwardEmbeddingRows(
+        existing.rows,
+        segments,
+        resynthesizedIndexSet,
+        input.reembeddedRows ?? [],
       );
-      const filteredRows = existing.rows.filter((r) => !droppedKeys.has(segKey(r.characterId, r.sentenceIds)));
-      /* #3362 pass-7 🟠H — put back the fresh rows for the re-recorded takes
-         (keyed by the same tuple the drop used), so the character keeps a
-         centroid. Untouched segments' rows were never dropped above. */
-      /* #3362 pass-9 🟠I — the fresh rows come from the CURRENT analysis cache,
-         so after a cast merge their characterId is the merge target while the
-         segment (and the dropped row) still carry the render-time raw id. Attach
-         each fresh row to the resynthesized segment it replaces by sentenceIds
-         (one sentence per segment, unique in a chapter) and write it under that
-         segment's OWN raw id, so the row key equals the key the drop removed.
-         A row matching no resynthesized segment is ignored; a second row for a
-         segment already filled is ignored too (first wins — no duplicate). */
-      const segBySentenceIds = new Map<string, (typeof segments)[number]>();
-      for (const i of resynthesizedIndexSet) {
-        segBySentenceIds.set(segments[i].sentenceIds.join(','), segments[i]);
-      }
-      const seen = new Set<string>();
-      const freshRows: EmbeddingRow[] = [];
-      for (const r of input.reembeddedRows ?? []) {
-        const k = r.sentenceIds.join(',');
-        const seg = segBySentenceIds.get(k);
-        if (!seg || seen.has(k)) continue;
-        seen.add(k);
-        freshRows.push({ ...r, characterId: seg.characterId });
-      }
-      if (filteredRows.length !== existing.rows.length || freshRows.length > 0) {
-        await writeEmbeddings(embPath, [...filteredRows, ...freshRows], existing.version);
-      }
+      if (changed) await writeEmbeddings(embPath, rows, existing.version);
     }
   }
   /* Rollback preservation: rename the live `<slug>.<ext>` + `.segments.json`
@@ -838,7 +816,22 @@ async function finalizeChapterAudioWriteInner(
   /* Plan 285 — AFTER the last disk write (audio rename, peaks, state.json):
      a throw earlier in finalize therefore never leaves an entry for a
      half-written take. */
-  const reviewOutcome = await applyReview(input, preserve.preserved, prev, segmentsFile.synthesizedAt);
+  const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
+  const reviewOutcome = await applyReview({
+    bookDir,
+    chapter: { id: chapter.id, slug: chapter.slug, uuid: chapters.find((c) => c.id === chapter.id)?.uuid },
+    review: input.review,
+    entry: preserve.preserved
+      ? {
+          id: `revision:${chapter.id}:${Date.now()}`,
+          oldDuration: prev?.chapters.find((c) => c.id === chapter.id)?.duration ?? '',
+          newDuration: formatDuration(durationSec),
+          /* What state.json's audioRenderedAt carries for this render (stamped just above). */
+          renderedAt: segmentsFile.synthesizedAt,
+        }
+      : null,
+    chapters: () => chapters,
+  });
 
   return {
     durationSec,
@@ -848,54 +841,4 @@ async function finalizeChapterAudioWriteInner(
     audioEngines,
     ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
   };
-}
-
-/** Plan 285 — best-effort with respect to the render that has already
-    landed, and a DELIBERATE swallow of LockAcquisitionTimeoutError
-    (CLAUDE.md's swallow list): an error is logged in full and surfaces
-    ONLY as `'failed'` — no store text (whose lock key embeds the absolute
-    workspace path) may reach an SSE body. Plan 286 (OD29) — three outcomes,
-    so a client can tell a recorded entry from "nothing to review". */
-async function applyReview(
-  input: FinalizeChapterAudioInput,
-  preserved: boolean,
-  prev: BookStateJson | null,
-  renderedAt: string,
-): Promise<ReviewOutcome | undefined> {
-  if (input.review === undefined) return undefined;
-  const { bookDir, chapter } = input;
-  const chapters: ChapterRef[] = prev?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
-  const stamped = chapters.find((c) => c.id === chapter.id);
-  try {
-    if (input.review !== null && preserved) {
-      await recordPending(bookDir, chapters, {
-        id: `revision:${chapter.id}:${Date.now()}`,
-        chapterId: chapter.id,
-        characterId: input.review.characterId,
-        triggeredBy: input.review.triggeredBy,
-        triggeredAgo: 'just now',
-        oldDuration: prev?.chapters.find((c) => c.id === chapter.id)?.duration ?? '',
-        newDuration: formatDuration(input.durationSec),
-        confidence: 1,
-        playable: true,
-        hasPreviousAudio: true,
-        segments: [],
-        origin: 'server',
-        /* Identity stamps (#3400): a restructure whose best-effort drop failed must not let this
-           entry act on whichever chapter later inherits the id. renderedAt is what state.json's
-           audioRenderedAt carries for this render (stamped just above). */
-        ...(stamped?.uuid ? { chapterUuid: stamped.uuid } : {}),
-        renderedAt,
-      });
-      return 'recorded';
-    }
-    await dropPendingForChapter(bookDir, chapters, chapter.id);
-    return 'none';
-  } catch (err) {
-    console.error(
-      `[finalize] could not record A/B review state for ${chapter.slug}; the new take is live without its review entry`,
-      err,
-    );
-    return 'failed';
-  }
 }

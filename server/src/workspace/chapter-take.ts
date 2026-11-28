@@ -10,29 +10,39 @@
    R10-2 LEAF RULE: `scan.ts` and every module it reaches import take names
    from `take-fields.ts` ONLY, never from this file. This file may import
    `scan.ts` types, `book-state-update.ts`, `audio/segments-io.ts`,
-   `audio/render-integrity/embeddings-io.ts`, `book-op-lock.ts`, and the
-   leaves `book-lock.ts` and `book-dir-key.ts`.
+   `audio/render-integrity/embeddings-io.ts` and `verdicts-io.ts`,
+   `book-op-lock.ts`, `revisions-store.ts` (which therefore takes take names
+   from the leaf), and the leaves `book-lock.ts` and `book-dir-key.ts`.
 
    LOCKS (§5.A "Fence and lock placement"): entry points never lock
    `book-op` themselves. Each takes a live `BookHandle` from the caller's
    `withBookOp` and refuses a stale or hand-built one (`assertHeld`, as
    `moveBookFolder` does). The only locks taken here are `updateStateAtDir`'s
-   `book` -> `state-json` pair, whose mutate callback takes no other lock, and
-   the `book` lock around a journal unlink (R7-1), under which nothing else is
-   taken. */
+   `book` -> `state-json` pair, whose mutate callback takes no other lock, the
+   `book` lock around a journal unlink (R7-1), under which nothing else is
+   taken, and the `revisions` leaf lock the review record takes through
+   `revisions-store.ts`. */
 
 import { spawn } from 'node:child_process';
 import { mkdir, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
-import type { EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
-import type { VerdictRow } from '../audio/render-integrity/verdicts-io.js';
+import {
+  engineBreakdownFromSnapshots,
+  effectiveAudioModelKey,
+  type AudioEngineBreakdown,
+} from '../audio/engine-breakdown.js';
+import { formatDuration } from '../audio/format-duration.js';
+import { readEmbeddings, type EmbeddingRow } from '../audio/render-integrity/embeddings-io.js';
+import { readVerdicts, type VerdictRow } from '../audio/render-integrity/verdicts-io.js';
+import type { TtsModelKey } from '../tts/model-keys.js';
 import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
 import { canonicalDirKey } from './book-dir-key.js';
 import { withBookLock } from './book-lock.js';
 import { assertHeld, readBookStateOrThrow, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
+import { dropPendingForChapter, recordPending, type ChapterRef } from './revisions-store.js';
 import type { BookStateJson } from './scan.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import {
@@ -48,6 +58,7 @@ import {
   liveAudioFiles,
   liveAudioPath,
   livePartPath,
+  mintJournalId,
   mintTakeId,
   parseTakeJournalName,
   previousAudioPath,
@@ -130,18 +141,47 @@ function sameValue(a: unknown, b: unknown): boolean {
     and leave every other member as it is. `takeChanged: true` (a different
     take): set every derived member and CLEAR each member the segments lack.
     A live take with no segments file (an unindexed take) clears every member
-    except `duration`. A lock timeout propagates; the caller curates it. */
+    except `duration`. A lock timeout propagates; the caller curates it.
+
+    `clearGenerationState: true` (a commit) also removes the chapter's
+    `generationState*` members, in the SAME write, and moves `updatedAt`. */
 export async function stampStateFromLiveTake(
   handle: AnyBookHandle,
   slug: string,
-  opts: { takeChanged: boolean },
+  opts: { takeChanged: boolean; clearGenerationState?: boolean },
 ): Promise<void> {
   assertHeld(handle, 'stampStateFromLiveTake');
   const root = audioDir(handle.bookDir);
   await updateStateAtDir(handle.bookDir, async (state) => {
     const segments = await readJson<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
-    return stampedState(state, slug, segments, opts.takeChanged);
+    const stamped = stampedState(state, slug, segments, opts.takeChanged);
+    return opts.clearGenerationState ? withoutGenerationState(state, stamped, slug) : stamped;
   });
+}
+
+const GENERATION_STATE_FIELDS = [
+  'generationState',
+  'generationError',
+  'generationErrorCode',
+  'generationRemediation',
+] as const;
+
+/* `stamped` (or `state`, when the stamp changed nothing) without chapter
+   `slug`'s `generationState*` members; `null` when there is nothing to write. */
+function withoutGenerationState(
+  state: BookStateJson,
+  stamped: BookStateJson | null,
+  slug: string,
+): BookStateJson | null {
+  const base = stamped ?? state;
+  const idx = base.chapters.findIndex((c) => c.slug === slug);
+  if (idx < 0) return null;
+  const chapter: Record<string, unknown> = { ...base.chapters[idx] };
+  if (!stamped && !GENERATION_STATE_FIELDS.some((f) => f in chapter)) return null;
+  for (const field of GENERATION_STATE_FIELDS) delete chapter[field];
+  const chapters = base.chapters.slice();
+  chapters[idx] = chapter as unknown as (typeof chapters)[number];
+  return { ...base, chapters, updatedAt: new Date().toISOString() };
 }
 
 /* The pure half of the stamp: `state` with chapter `slug`'s take members set
@@ -1038,6 +1078,11 @@ export interface PrepareTakeInput {
   /** Fresh verdicts only. */
   verdicts?: readonly VerdictRow[];
   verdictPatches?: readonly VerdictPatch[];
+  /** Indices into `segments.segments` this write actually re-synthesised. A
+      PARTIAL write passes them (a remix passes none), and the commit carries
+      the other segments' embeddings and verdict rows forward from the live take
+      (OD4). A full render passes `'all'` or leaves it out. */
+  resynthesizedIndices?: Iterable<number> | 'all';
 }
 
 export interface StagedTakePart {
@@ -1052,6 +1097,7 @@ export interface StagedTake {
   ext: ChapterAudioExt;
   parts: StagedTakePart[];
   verdictPatches?: readonly VerdictPatch[];
+  resynthesizedIndices?: readonly number[] | 'all';
   durationSec: number;
   segments: PreparedSegments & { takeId: TakeId };
   synthesizedAt: string;
@@ -1094,6 +1140,10 @@ export async function prepareTake(
 ): Promise<StagedTake> {
   const root = audioDir(handle.bookDir);
   const { slug, ext, verdictPatches } = input;
+  /* Materialised once: a caller's iterable may only be walkable once, and a
+     retried commit reads it again. */
+  const given = input.resynthesizedIndices;
+  const resynthesizedIndices = typeof given === 'object' ? [...given] : given;
   const takeId = mintTakeId();
   const segments = { ...input.segments, takeId };
 
@@ -1143,6 +1193,7 @@ export async function prepareTake(
     ext,
     parts,
     ...(verdictPatches ? { verdictPatches } : {}),
+    ...(resynthesizedIndices === undefined ? {} : { resynthesizedIndices }),
     durationSec: segments.durationSec,
     segments,
     synthesizedAt: segments.synthesizedAt,
@@ -1300,4 +1351,792 @@ export async function reconcileSlug(
        failure above still throws. */
     console.warn(`[take] state.json re-stamp failed for ${slug}:`, err);
   }
+}
+
+/* ------------------------------------------------------------------ *
+ * The A/B review record (a take mutation; finalize and the commit share it)
+ * ------------------------------------------------------------------ */
+
+/** Plan 286 (OD29) — what a write did with A/B review state. */
+export type ReviewOutcome = 'recorded' | 'none' | 'failed';
+
+/** The A/B review intent: absent leaves the review state alone, `null` drops
+    the chapter's pending entry, an object records one when a take became
+    previous. */
+export type TakeReviewRequest = { characterId: string; triggeredBy: string } | null | undefined;
+
+/** Plan 285 — best-effort with respect to the render that has already
+    landed, and a DELIBERATE swallow of LockAcquisitionTimeoutError
+    (CLAUDE.md's swallow list): an error is logged in full and surfaces
+    ONLY as `'failed'` — no store text (whose lock key embeds the absolute
+    workspace path) may reach an SSE body. Plan 286 (OD29) — three outcomes,
+    so a client can tell a recorded entry from "nothing to review". */
+export async function applyReview(input: {
+  bookDir: string;
+  chapter: { id: number; slug: string; uuid?: string };
+  review: TakeReviewRequest;
+  /** `null`: nothing became previous, so there is nothing to review.
+      `renderedAt` is what state.json's `audioRenderedAt` carries for the new
+      take. */
+  entry: { id: string; oldDuration: string; newDuration: string; renderedAt: string } | null;
+  /** The store's chapter list, read inside the swallow. */
+  chapters: () => readonly ChapterRef[] | Promise<readonly ChapterRef[]>;
+}): Promise<ReviewOutcome | undefined> {
+  const { bookDir, chapter, review, entry } = input;
+  if (review === undefined) return undefined;
+  try {
+    const chapters = await input.chapters();
+    if (review !== null && entry) {
+      await recordPending(bookDir, chapters, {
+        id: entry.id,
+        chapterId: chapter.id,
+        characterId: review.characterId,
+        triggeredBy: review.triggeredBy,
+        triggeredAgo: 'just now',
+        oldDuration: entry.oldDuration,
+        newDuration: entry.newDuration,
+        confidence: 1,
+        playable: true,
+        hasPreviousAudio: true,
+        segments: [],
+        origin: 'server',
+        /* Identity stamps (#3400): a restructure whose best-effort drop failed must not let this
+           entry act on whichever chapter later inherits the id. */
+        ...(chapter.uuid ? { chapterUuid: chapter.uuid } : {}),
+        renderedAt: entry.renderedAt,
+      });
+      return 'recorded';
+    }
+    await dropPendingForChapter(bookDir, chapters, chapter.id);
+    return 'none';
+  } catch (err) {
+    console.error(
+      `[take] could not record A/B review state for ${chapter.slug}; the new take is live without its review entry`,
+      err,
+    );
+    return 'failed';
+  }
+}
+
+/* ------------------------------------------------------------------ *
+ * The OD4 carry-forward (§5.A OD4, Commit step 4)
+ *
+ * A partial write re-synthesises some segments. The others' embedding and
+ * verdict rows are copied from the live take; a re-synthesised segment's live
+ * rows describe audio that no longer exists, so they are dropped and replaced
+ * where the job has something for them.
+ * ------------------------------------------------------------------ */
+
+interface SegmentRef {
+  characterId: string;
+  sentenceIds: number[];
+}
+
+const sentenceKey = (sentenceIds: readonly number[]): string => sentenceIds.join(',');
+
+/* The embedding row's key: the shape of `aggregate.ts`'s `segKey`, which this
+   module does not import (scoring is due to call into this module, #4321, and
+   the edge back would then be a cycle). */
+const embeddingKey = (r: SegmentRef): string => `${r.characterId}:${sentenceKey(r.sentenceIds)}`;
+
+/** The embeddings half of the carry-forward: `liveRows` without the
+    re-synthesised segments' rows, plus `freshRows` attached to them.
+    `changed` is false when the result is `liveRows` itself.
+
+    #3362 pass-6 (🟠G): without the drop, the next scoreBook run joins the OLD
+    take's vector to the segment's new stamp, scoring a take it was never
+    measured against. Pass-7 (🟠H): dropping without putting the fresh vectors
+    back made a whole-character re-record read as embed-failed. */
+export function carryForwardEmbeddingRows(
+  liveRows: readonly EmbeddingRow[],
+  segments: readonly SegmentRef[],
+  resynthesized: ReadonlySet<number>,
+  freshRows: readonly EmbeddingRow[],
+): { rows: EmbeddingRow[]; changed: boolean } {
+  const droppedKeys = new Set([...resynthesized].map((i) => embeddingKey(segments[i])));
+  const kept = liveRows.filter((r) => !droppedKeys.has(embeddingKey(r)));
+  /* #3362 pass-9 🟠I — the fresh rows come from the CURRENT analysis cache,
+     so after a cast merge their characterId is the merge target while the
+     segment (and the dropped row) still carry the render-time raw id. Attach
+     each fresh row to the resynthesized segment it replaces by sentenceIds
+     (one sentence per segment, unique in a chapter) and write it under that
+     segment's OWN raw id, so the row key equals the key the drop removed.
+     A row matching no resynthesized segment is ignored; a second row for a
+     segment already filled is ignored too (first wins — no duplicate). */
+  const segBySentenceIds = new Map<string, SegmentRef>();
+  for (const i of resynthesized) segBySentenceIds.set(sentenceKey(segments[i].sentenceIds), segments[i]);
+  const seen = new Set<string>();
+  const added: EmbeddingRow[] = [];
+  for (const r of freshRows) {
+    const key = sentenceKey(r.sentenceIds);
+    const seg = segBySentenceIds.get(key);
+    if (!seg || seen.has(key)) continue;
+    seen.add(key);
+    added.push({ ...r, characterId: seg.characterId });
+  }
+  return { rows: [...kept, ...added], changed: kept.length !== liveRows.length || added.length > 0 };
+}
+
+/* The verdict half. A verdict row's `characterId` is the id scoring resolved,
+   not necessarily the segment's raw one, so rows are matched by sentence ids.
+   A patch (QA repair's Edit 6b) keeps the live row it names, patched; every
+   other re-synthesised segment's row is dropped. `stagedRows` (fresh verdicts,
+   or this function's own earlier output on a retried commit) add only
+   re-synthesised segments the result does not already cover, so a second run
+   over its own output changes nothing. */
+function carryForwardVerdictRows(
+  liveRows: readonly VerdictRow[],
+  stagedRows: readonly VerdictRow[],
+  segments: readonly SegmentRef[],
+  resynthesized: ReadonlySet<number>,
+  patches: readonly VerdictPatch[],
+): VerdictRow[] {
+  const resynthKeys = new Set([...resynthesized].map((i) => sentenceKey(segments[i].sentenceIds)));
+  const patched = new Map<number, VerdictPatch>();
+  for (const patch of patches) {
+    if (patch.sentenceIds.length === 0) continue;
+    const idx = liveRows.findIndex(
+      (r) => r.sentenceIds.length > 0 && patch.sentenceIds.every((id) => r.sentenceIds.includes(id)),
+    );
+    if (idx >= 0) patched.set(idx, patch);
+  }
+  const rows = liveRows.flatMap((row, i) => {
+    const patch = patched.get(i);
+    if (patch) {
+      const { cosine, verdict, severity, fixable } = patch;
+      return [{ ...row, cosine, verdict, severity, fixable }];
+    }
+    return resynthKeys.has(sentenceKey(row.sentenceIds)) ? [] : [row];
+  });
+  const covered = new Set(rows.map((r) => sentenceKey(r.sentenceIds)));
+  const added = stagedRows.filter((r) => {
+    const key = sentenceKey(r.sentenceIds);
+    return resynthKeys.has(key) && !covered.has(key);
+  });
+  return [...rows, ...added];
+}
+
+/* ------------------------------------------------------------------ *
+ * Commit (§5.A "Commit" steps 1-8 and "Failure handling")
+ *
+ * All of it runs inside the caller's book-op span. Up to the `installed`
+ * journal write any failure rolls back; from there the take is committed (D2),
+ * every later step parks its error, and the first is rethrown after cleanup.
+ * ------------------------------------------------------------------ */
+
+export interface CommitTakeOptions {
+  /** A partial writer's base: the live take id it was prepared against (OD2).
+      A full render passes `undefined` and skips the compare-and-swap. */
+  base: TakeId | undefined;
+  /** The live take id when a full render started (R3-1), or `null`. */
+  startTakeId: TakeId | null | undefined;
+  signal: AbortSignal;
+  review?: TakeReviewRequest;
+  /** Accepted and not read: no rule of the Phase 2 commit uses it. */
+  keepPreviousHint?: boolean;
+}
+
+export type CommitTakeResult =
+  | {
+      outcome: 'committed';
+      newTakeId: TakeId;
+      reviewOutcome?: ReviewOutcome;
+      durationSec: number;
+      audioQa?: TakeFields['audioQa'];
+      audioModelKey: TtsModelKey;
+      audioEngines: AudioEngineBreakdown;
+      segmentCount: number;
+    }
+  /** A partial writer's base is no longer the live take; nothing was touched. */
+  | { outcome: 'changed' }
+  /** A live or staged file was held. Everything is back where it was and the
+      staged set is kept: commit the same `StagedTake` again. */
+  | { outcome: 'retry'; cause: 'held-file' };
+
+const SIDECAR_PARTS = Object.keys(TAKE_SIDECAR_SUFFIXES) as TakeSidecarPart[];
+
+const takeIdOf = (segments: { takeId?: unknown } | null): string | null =>
+  typeof segments?.takeId === 'string' ? segments.takeId : null;
+
+function partSuffix(ref: TakePartRef): StagedSuffix {
+  return ref.part === 'audio' ? ref.ext : TAKE_SIDECAR_SUFFIXES[ref.part];
+}
+
+function partOfSuffix(suffix: StagedSuffix): TakePartRef {
+  const part = SIDECAR_PARTS.find((p) => TAKE_SIDECAR_SUFFIXES[p] === suffix);
+  return part ? { part } : { part: 'audio', ext: suffix as ChapterAudioExt };
+}
+
+/* Where a part of the live or the previous take sits. */
+function slugPartPath(root: string, slug: string, role: 'live' | 'previous', ref: TakePartRef): string {
+  if (ref.part === 'audio') {
+    return role === 'live' ? liveAudioPath(root, slug, ref.ext) : previousAudioPath(root, slug, ref.ext);
+  }
+  return role === 'live' ? livePartPath(root, slug, ref.part) : previousPartPath(root, slug, ref.part);
+}
+
+/** Why a part was discarded: the old previous take, a live take that is not
+    becoming previous, or a leftover live audio of another extension. */
+type DiscardRole = 'prev' | 'live' | 'stale';
+
+const discardPrefix = (slug: string, jid: JournalId): string => `${slug}.discard-${jid}.`;
+
+function discardPath(
+  root: string,
+  slug: string,
+  jid: JournalId,
+  role: DiscardRole,
+  suffix: StagedSuffix,
+): string {
+  return join(root, `${discardPrefix(slug, jid)}${role}.${suffix}`);
+}
+
+async function sizedPart(ref: TakePartRef, path: string): Promise<TakeJournalPart> {
+  return { ...ref, size: (await stat(path)).size };
+}
+
+/* The PRESENT parts of the live or the previous take, audio first. The live
+   take's audio is the one a probe serves (a second live file is step 6's
+   leftover); every previous audio file belongs to the old previous take. */
+async function probeSlugParts(
+  root: string,
+  slug: string,
+  role: 'live' | 'previous',
+): Promise<TakeJournalPart[]> {
+  const audio = role === 'live' ? liveAudioFiles(root, slug).slice(0, 1) : previousAudioFiles(root, slug);
+  const refs: TakePartRef[] = [
+    ...audio.map((f) => ({ part: 'audio' as const, ext: f.ext })),
+    ...SIDECAR_PARTS.map((part) => ({ part })),
+  ];
+  return Promise.all(
+    refs
+      .map((ref) => ({ ref, path: slugPartPath(root, slug, role, ref) }))
+      .filter(({ path }) => existsSync(path))
+      .map(({ ref, path }) => sizedPart(ref, path)),
+  );
+}
+
+/* Every staged part; one that is gone throws ENOENT. */
+function probeStagedParts(staged: StagedTake): Promise<TakeJournalPart[]> {
+  return Promise.all(staged.parts.map((p) => sizedPart(partOfSuffix(p.suffix), p.path)));
+}
+
+/* Step 0, PLACEHOLDER: #4831 replaces it with the full step 0 (journal replay,
+   supersession and the failure classes). `ensureTakeIdentity`'s failures never
+   stop a full render (R8-2): it commits without the id. */
+async function commitStep0(handle: AnyBookHandle, slug: string, partial: boolean): Promise<void> {
+  await reconcileSlug(handle, slug);
+  try {
+    await ensureTakeIdentity(handle, slug);
+  } catch (err) {
+    if (partial) throw err;
+    console.warn(`[take] ${slug}: take id not minted before the commit:`, err);
+  }
+}
+
+function resynthesizedSet(staged: StagedTake, segmentCount: number): Set<number> {
+  const indices = staged.resynthesizedIndices;
+  if (indices === undefined) {
+    throw new Error(`[take] a partial write of ${staged.slug} must pass resynthesizedIndices`);
+  }
+  if (indices === 'all') return new Set(Array.from({ length: segmentCount }, (_, i) => i));
+  if (indices.some((i) => !Number.isInteger(i) || i < 0 || i >= segmentCount)) {
+    throw new Error(`[take] resynthesizedIndices of ${staged.slug} names a segment the staged file lacks`);
+  }
+  return new Set(indices);
+}
+
+const stagedSegmentList = (staged: StagedTake): SegmentRef[] =>
+  (staged.segments as { segments?: SegmentRef[] }).segments ?? [];
+
+interface OpenedCommit {
+  journal: TakeJournal;
+  journalPath: string;
+  /** The re-synthesised segments of a partial write; `null` for a full render. */
+  resynthesized: Set<number> | null;
+}
+
+/* Steps 0-3: replay, refuse an abort, compare-and-swap, and write the journal.
+   Step 4's CHOICE of what becomes previous is made here, because the journal
+   records it. `null`: the base is no longer the live take. Nothing of either
+   take has moved when this returns or throws. */
+async function openCommit(
+  handle: AnyBookHandle,
+  staged: StagedTake,
+  opts: CommitTakeOptions,
+): Promise<OpenedCommit | null> {
+  const { slug } = staged;
+  const root = audioDir(handle.bookDir);
+  const partial =
+    opts.base !== undefined ||
+    (staged.resynthesizedIndices !== undefined && staged.resynthesizedIndices !== 'all');
+
+  await commitStep0(handle, slug, partial);
+  /* Step 1 (H8). */
+  if (opts.signal.aborted) throw new DOMException('commitTake aborted', 'AbortError');
+  /* Step 2 (OD2). */
+  const liveSegments = await readJsonTolerant<TakeSegmentsView>(livePartPath(root, slug, 'segments'));
+  if (opts.base !== undefined && takeIdOf(liveSegments) !== opts.base) return null;
+  const resynthesized = partial ? resynthesizedSet(staged, stagedSegmentList(staged).length) : null;
+
+  /* Step 3. `state.json` is read before the stamp: `oldDuration` is the take's
+     that is about to be replaced. */
+  const state = await readBookStateOrThrow(handle.bookDir);
+  const chapter = state?.chapters.find((c) => c.slug === slug) as
+    | { id: number; uuid?: string; duration?: string }
+    | undefined;
+  if (!chapter) throw new Error(`[take] state.json names no chapter for ${slug}`);
+
+  const previousSegments = await readJsonTolerant<TakeSegmentsView>(previousPartPath(root, slug, 'segments'));
+  const hasLive = chapterAudioExists(root, slug);
+  const hasPrevious = findPreviousAudio(root, slug) !== null;
+  const liveTakeId = hasLive ? takeIdOf(liveSegments) : null;
+  const prevTakeId = hasPrevious ? takeIdOf(previousSegments) : null;
+  /* R3-1, a full render only: another render committed meanwhile, and the
+     previous take is the user's pre-render audio. */
+  const committedMeanwhile =
+    !partial &&
+    hasPrevious &&
+    isTakeId(opts.startTakeId) &&
+    liveTakeId !== opts.startTakeId &&
+    prevTakeId === opts.startTakeId;
+  /* Interim only-copy rule: with no live take the previous one is the only
+     copy. Phase 3 (#4321) removes this. */
+  const onlyCopy = !hasLive && hasPrevious;
+  const keepPrevious = committedMeanwhile || onlyCopy;
+  const preserved = hasLive && !keepPrevious;
+  /* E6: the entry's stamps describe whichever take ends up previous. */
+  const becomesPrevious = preserved
+    ? { takeId: liveTakeId, segments: liveSegments }
+    : keepPrevious
+      ? { takeId: prevTakeId, segments: previousSegments }
+      : null;
+
+  const journal: TakeJournal = {
+    op: 'commit',
+    jid: mintJournalId(),
+    phase: 'discard',
+    newTakeId: staged.takeId,
+    liveTakeId,
+    prevTakeId,
+    keepPrevious,
+    parts: {
+      live: await probeSlugParts(root, slug, 'live'),
+      previous: await probeSlugParts(root, slug, 'previous'),
+      staged: await probeStagedParts(staged),
+    },
+    chapter: { id: chapter.id, slug, ...(chapter.uuid ? { uuid: chapter.uuid } : {}) },
+    clearGenerationState: true,
+    ...(opts.review === undefined ? {} : { review: opts.review }),
+    preserved,
+    oldDuration: chapter.duration ?? '',
+    newDuration: formatDuration(staged.durationSec),
+    entry: becomesPrevious
+      ? {
+          takeId: staged.takeId,
+          renderedAt: staged.synthesizedAt,
+          previousTakeId: becomesPrevious.takeId,
+          previousRenderedAt: becomesPrevious.segments?.synthesizedAt ?? null,
+        }
+      : null,
+    supersedes: [],
+    lost: [],
+  };
+  const journalPath = await writeTakeJournal(handle, slug, journal);
+  return { journal, journalPath, resynthesized };
+}
+
+interface Move {
+  from: string;
+  to: string;
+}
+
+/* Every commit and rollback rename: a target that is present is a fault, never
+   something to overwrite. Each completed move is logged for the rollback. */
+async function moveRefusing(from: string, to: string, done: Move[]): Promise<void> {
+  if (existsSync(to)) throw new Error(`[take] rename target already exists: ${basename(to)}`);
+  await renameWithRetry(from, to);
+  done.push({ from, to });
+}
+
+interface CommitMoves {
+  done: Move[];
+  /** A step-5 or step-6 rename met a held file, which is retryable. */
+  heldFile: boolean;
+}
+
+/* A step-5 or step-6 rename. */
+async function moveOrNoteHeld(from: string, to: string, moves: CommitMoves): Promise<void> {
+  try {
+    await moveRefusing(from, to, moves.done);
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code;
+    if (code === 'EBUSY' || code === 'EPERM') moves.heldFile = true;
+    throw err;
+  }
+}
+
+/* Step 4: the old previous take, all parts, is renamed away (F9: never
+   unlinked before cleanup). */
+async function discardOldPrevious(root: string, journal: TakeJournal, moves: CommitMoves): Promise<void> {
+  if (journal.keepPrevious) return;
+  const { slug } = journal.chapter;
+  for (const ref of journal.parts.previous) {
+    await moveRefusing(
+      slugPartPath(root, slug, 'previous', ref),
+      discardPath(root, slug, journal.jid, 'prev', partSuffix(ref)),
+      moves.done,
+    );
+  }
+}
+
+/* Replace (or add) one staged part with `value`, keeping the descriptor true so
+   the install, the sweep of a failed commit and a retry all see it. */
+async function writeStagedJson(
+  root: string,
+  staged: StagedTake,
+  suffix: StagedSuffix,
+  value: unknown,
+): Promise<void> {
+  const path = stagedPartPath(root, staged.slug, staged.takeId, suffix);
+  await writeJsonAtomic(path, value);
+  const { size } = await stat(path);
+  const part = staged.parts.find((p) => p.suffix === suffix);
+  if (part) part.size = size;
+  else staged.parts.push({ suffix, path, size });
+}
+
+/* An unparseable sidecar has nothing to carry. Any other read error fails the
+   commit: committing past it would drop the untouched segments' rows. */
+async function readRows<T>(path: string, read: (path: string) => Promise<T | null>): Promise<T | null> {
+  try {
+    return await read(path);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    console.warn(`[take] ignoring unparseable ${basename(path)}: ${err.message}`);
+    return null;
+  }
+}
+
+/* Step 4, a partial writer: copy from the live take, inside the span, and write
+   the result over the staged files. */
+async function carryForwardSidecars(
+  root: string,
+  staged: StagedTake,
+  resynthesized: ReadonlySet<number>,
+): Promise<void> {
+  const segments = stagedSegmentList(staged);
+  const stagedPathOf = (suffix: StagedSuffix) => staged.parts.find((p) => p.suffix === suffix)?.path;
+
+  const embSuffix = TAKE_SIDECAR_SUFFIXES.embeddings;
+  const liveEmb = await readRows(livePartPath(root, staged.slug, 'embeddings'), readEmbeddings);
+  const stagedEmbPath = stagedPathOf(embSuffix);
+  const freshEmb = stagedEmbPath ? await readEmbeddings(stagedEmbPath) : null;
+  const version = liveEmb?.version ?? freshEmb?.version;
+  if (version !== undefined) {
+    const { rows } = carryForwardEmbeddingRows(
+      liveEmb?.rows ?? [],
+      segments,
+      resynthesized,
+      freshEmb?.rows ?? [],
+    );
+    await writeStagedJson(root, staged, embSuffix, {
+      version,
+      rows: storedEmbeddingRows(rows),
+      takeId: staged.takeId,
+    });
+  }
+
+  const verdictSuffix = TAKE_SIDECAR_SUFFIXES.verdicts;
+  const liveVerdicts = await readRows(livePartPath(root, staged.slug, 'verdicts'), readVerdicts);
+  const stagedVerdictPath = stagedPathOf(verdictSuffix);
+  const stagedVerdicts = stagedVerdictPath ? await readVerdicts(stagedVerdictPath) : null;
+  const rows = carryForwardVerdictRows(
+    liveVerdicts ?? [],
+    stagedVerdicts ?? [],
+    segments,
+    resynthesized,
+    staged.verdictPatches ?? [],
+  );
+  /* No file at all when no row survives: a verdict file marks a chapter scored. */
+  if (rows.length > 0 || stagedVerdictPath) await writeStagedJson(root, staged, verdictSuffix, rows);
+}
+
+/* Step 5: the LIVE AUDIO MOVES FIRST (D4: it is the only file ffmpeg can hold,
+   so a held file fails before anything else of the live take has moved), then
+   each other live part. They become the previous take, or are discarded. */
+async function moveLiveAside(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  moves: CommitMoves,
+): Promise<void> {
+  const root = audioDir(handle.bookDir);
+  const { slug } = journal.chapter;
+  journal.phase = journal.keepPrevious ? 'discard-live' : 'preserve';
+  await writeTakeJournal(handle, slug, journal);
+  /* `parts.live` lists the audio first. */
+  for (const ref of journal.parts.live) {
+    const to = journal.preserved
+      ? slugPartPath(root, slug, 'previous', ref)
+      : discardPath(root, slug, journal.jid, 'live', partSuffix(ref));
+    await moveOrNoteHeld(slugPartPath(root, slug, 'live', ref), to, moves);
+  }
+}
+
+/* Step 6: every staged part onto its (now free) live name. The segments go last,
+   so live segments carrying the new id mean the other parts are in. A live audio
+   of another extension left over (N4) is moved out of the probe's way. */
+async function installStaged(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  ext: ChapterAudioExt,
+  moves: CommitMoves,
+): Promise<void> {
+  const root = audioDir(handle.bookDir);
+  const { slug } = journal.chapter;
+  journal.phase = 'install';
+  await writeTakeJournal(handle, slug, journal);
+  const ordered = [...journal.parts.staged].sort(
+    (a, b) => Number(a.part === 'segments') - Number(b.part === 'segments'),
+  );
+  for (const ref of ordered) {
+    await moveOrNoteHeld(
+      stagedPartPath(root, slug, journal.newTakeId, partSuffix(ref)),
+      slugPartPath(root, slug, 'live', ref),
+      moves,
+    );
+  }
+  for (const f of liveAudioFiles(root, slug)) {
+    if (f.ext === ext) continue;
+    await moveOrNoteHeld(f.path, discardPath(root, slug, journal.jid, 'stale', f.ext), moves);
+  }
+}
+
+/* Failure handling before `installed`: undo this span's renames in reverse
+   (installed parts back to `.next-*`, `.previous.*` back to live, discards back
+   to previous), then unlink the journal, under `book`. */
+async function rollBackCommit(
+  handle: AnyBookHandle,
+  journalPath: string,
+  done: readonly Move[],
+): Promise<void> {
+  for (const { from, to } of [...done].reverse()) await moveRefusing(to, from, []);
+  await unlinkTakeJournal(handle, journalPath);
+}
+
+/* The chapter list a review write is checked against, as `state.json` is now. */
+async function chapterRefs(bookDir: string, chapter: TakeJournal['chapter']): Promise<readonly ChapterRef[]> {
+  const state = await readBookStateOrThrow(bookDir);
+  return state?.chapters ?? [{ id: chapter.id, slug: chapter.slug }];
+}
+
+/* Step 7, after the `installed` write: the stamp, then (only if it succeeded,
+   E6) the superseded entry drop and this commit's own review record. A failed
+   stamp is PARKED; the old entry no longer describes the live and previous
+   pair, so it is still dropped. */
+async function recordInstalledTake(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  park: (err: unknown) => void,
+): Promise<{ stamped: boolean; reviewOutcome?: ReviewOutcome }> {
+  const { bookDir } = handle;
+  const { chapter, entry } = journal;
+  const chapters = () => chapterRefs(bookDir, chapter);
+  const dropEntry = () => applyReview({ bookDir, chapter, review: null, entry: null, chapters });
+  try {
+    await stampStateFromLiveTake(handle, chapter.slug, { takeChanged: true, clearGenerationState: true });
+  } catch (err) {
+    park(err);
+    await dropEntry();
+    return { stamped: false, reviewOutcome: 'none' };
+  }
+  if (journal.supersedes.some((s) => s.dropEntry)) await dropEntry();
+  const reviewOutcome = await applyReview({
+    bookDir,
+    chapter,
+    review: journal.review,
+    entry: entry
+      ? {
+          id: `revision:${chapter.id}:${journal.newTakeId}`,
+          oldDuration: journal.oldDuration,
+          newDuration: journal.newDuration,
+          renderedAt: entry.renderedAt,
+        }
+      : null,
+    chapters,
+  });
+  return { stamped: true, reviewOutcome };
+}
+
+/* Step 8. The journal goes LAST: only after a successful stamp, with its own
+   discards and every superseded journal gone. */
+async function cleanUpCommit(
+  handle: AnyBookHandle,
+  journal: TakeJournal,
+  journalPath: string,
+  stamped: boolean,
+  park: (err: unknown) => void,
+): Promise<void> {
+  const root = audioDir(handle.bookDir);
+  const { slug } = journal.chapter;
+  /* A parked stamp leaves the journal at `installed`, so replay stamps again. */
+  if (stamped) {
+    journal.phase = 'cleanup';
+    await writeTakeJournal(handle, slug, journal).catch(park);
+  }
+
+  let discardsGone = false;
+  try {
+    const prefix = discardPrefix(slug, journal.jid);
+    const own = (await readdir(root)).filter((name) => name.startsWith(prefix));
+    const failures = await unlinkEach(own.map((name) => join(root, name)));
+    failures.forEach(park);
+    discardsGone = failures.length === 0;
+  } catch (err) {
+    park(err);
+  }
+
+  /* Oldest first, stopping at the first failure (R10-3): no journal is unlinked
+     while it names one that is still present. */
+  let chainGone = true;
+  for (const old of journal.supersedes) {
+    try {
+      const [failure] = await unlinkEach(old.discards.map((name) => join(root, name)));
+      if (failure) throw failure;
+      await unlinkTakeJournal(handle, takeJournalPath(root, slug, old.jid));
+    } catch (err) {
+      park(err);
+      chainGone = false;
+      break;
+    }
+  }
+
+  if (stamped && discardsGone && chainGone) await unlinkTakeJournal(handle, journalPath).catch(park);
+}
+
+/* The exit of a commit that will not be retried and left no journal. */
+async function abandonStaged(staged: StagedTake): Promise<void> {
+  try {
+    await discardStaged(staged);
+  } catch (err) {
+    console.warn(`[take] staged part removal failed for ${staged.slug}:`, err);
+  }
+  releaseStaging(staged.takeId);
+}
+
+/** Commit a prepared take (§5.A "Commit"), inside the caller's `withBookOp`
+    span. No lock is taken here beyond the stamp's `book` -> `state-json`, the
+    review record's `revisions` and the journal unlink's `book`.
+
+    - `changed`: a partial writer's `base` is not the live take.
+    - `retry`: a file was held at step 5 or 6; everything is rolled back and the
+      staged set is KEPT, still in `liveStaging`.
+    - `committed`: the take is live and recorded.
+
+    Any other failure before `installed` rolls back, removes the staged set and
+    throws. A rollback that cannot finish leaves the journal (and what it names)
+    for the next reconcile and throws the original error. At or after
+    `installed` the take is committed (D2): the remaining steps run, then the
+    first parked error is thrown; ask `takeCommitted`. */
+export async function commitTake(
+  handle: AnyBookHandle,
+  staged: StagedTake,
+  opts: CommitTakeOptions,
+): Promise<CommitTakeResult> {
+  assertHeld(handle, 'commitTake');
+  const root = audioDir(handle.bookDir);
+  const { slug } = staged;
+
+  let opened: OpenedCommit | null;
+  try {
+    opened = await openCommit(handle, staged, opts);
+  } catch (err) {
+    await abandonStaged(staged);
+    throw err;
+  }
+  if (!opened) {
+    await abandonStaged(staged);
+    return { outcome: 'changed' };
+  }
+  const { journal, journalPath, resynthesized } = opened;
+
+  const moves: CommitMoves = { done: [], heldFile: false };
+  try {
+    await discardOldPrevious(root, journal, moves);
+    if (resynthesized) {
+      await carryForwardSidecars(root, staged, resynthesized);
+      /* Journalled with the next phase write, before any staged part moves. */
+      journal.parts.staged = await probeStagedParts(staged);
+    }
+    await moveLiveAside(handle, journal, moves);
+    await installStaged(handle, journal, staged.ext, moves);
+    /* From this write on the take is committed (D2). */
+    journal.phase = 'installed';
+    await writeTakeJournal(handle, slug, journal);
+  } catch (err) {
+    try {
+      await rollBackCommit(handle, journalPath, moves.done);
+    } catch (rollbackErr) {
+      console.error(`[take] ${slug}: rollback failed; the journal is left for the next reconcile:`, rollbackErr);
+      releaseStaging(staged.takeId);
+      throw err;
+    }
+    if (moves.heldFile) {
+      console.warn(`[take] ${slug}: commit rolled back on a held file:`, err);
+      return { outcome: 'retry', cause: 'held-file' };
+    }
+    await abandonStaged(staged);
+    throw err;
+  }
+
+  const parked: unknown[] = [];
+  const park = (err: unknown): void => {
+    console.warn(`[take] ${slug}: the take is committed; a later step failed:`, err);
+    parked.push(err);
+  };
+  try {
+    const { stamped, reviewOutcome } = await recordInstalledTake(handle, journal, park);
+    await cleanUpCommit(handle, journal, journalPath, stamped, park);
+    /* Last of all, the parked error. */
+    if (parked.length > 0) throw parked[0];
+    const audioEngines = engineBreakdownFromSnapshots(staged.segments.characterSnapshots ?? {});
+    return {
+      outcome: 'committed',
+      newTakeId: staged.takeId,
+      ...(reviewOutcome === undefined ? {} : { reviewOutcome }),
+      durationSec: staged.durationSec,
+      audioQa: staged.segments.qa,
+      audioModelKey: effectiveAudioModelKey(audioEngines, staged.segments.modelKey as TtsModelKey),
+      audioEngines,
+      segmentCount: stagedSegmentList(staged).length,
+    };
+  } finally {
+    releaseStaging(staged.takeId);
+  }
+}
+
+/** Whether the take `newTakeId` is committed for `slug` (D2): the live segments
+    carry its id, or a journal for it sits at `installed` or later. Never decided
+    from `state.json`, whose stamp may be the step that failed. */
+export async function takeCommitted(
+  handle: AnyBookHandle,
+  slug: string,
+  newTakeId: TakeId,
+): Promise<boolean> {
+  assertHeld(handle, 'takeCommitted');
+  const root = audioDir(handle.bookDir);
+  const live = await readJsonTolerant<{ takeId?: unknown }>(livePartPath(root, slug, 'segments'));
+  if (takeIdOf(live) === newTakeId) return true;
+  const { journals } = await listTakeJournals(handle);
+  for (const { path } of journals.get(slug) ?? []) {
+    const read = await readTakeJournal(path);
+    if (
+      read.kind === 'ok' &&
+      read.journal.newTakeId === newTakeId &&
+      (read.journal.phase === 'installed' || read.journal.phase === 'cleanup')
+    ) {
+      return true;
+    }
+  }
+  return false;
 }

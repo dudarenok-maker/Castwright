@@ -35,7 +35,7 @@ import { readJson, writeJsonAtomic } from './state-io.js';
 import { readStateJsonWithRecovery } from './state-migrate.js';
 import { audioDir, revisionsJsonPath, stateJsonPath } from './paths.js';
 import { withKeyLock } from './file-lock.js';
-import { hasPreviousAudio as previousAudioExists } from './chapter-take.js';
+import { findPreviousAudio } from './take-fields.js';
 import { SCHEMA_SEAMS, migrateSeamDoc, stampSeamSchema, UnsupportedSchemaError } from './schema-migrate.js';
 
 const REVISIONS_SEAM = SCHEMA_SEAMS.find((s) => s.label === 'revisions.json')!;
@@ -285,7 +285,7 @@ async function fromRaw(
   const root = audioDir(bookDir);
   const normalised = normaliseRevisions(raw, (chapterId) => {
     const slug = slugById.get(chapterId);
-    return slug !== undefined && previousAudioExists(root, slug);
+    return slug !== undefined && findPreviousAudio(root, slug) !== null;
   });
   /* A stamped entry whose chapter no longer sits at its id is invisible to every read and op (begin
      answers not-found) and falls off the file at the next write. A missing chapter is left to
