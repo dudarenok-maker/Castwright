@@ -5680,3 +5680,113 @@ describe('GenerationView — runtime so far ignores excluded chapters (#3919)', 
     expect(label.textContent).not.toContain('2:30');
   });
 });
+
+describe('GenerationView — skipped no-text chapter (#3507)', () => {
+  const RENDERED_PAST = '2020-01-01T00:00:00Z';
+  const suspect = { status: 'suspect', reasons: ['Near silent.'] };
+
+  /* Chapters 1 and 3 have audio; chapter 2 has no narratable text, so the real
+     hydrate marks it done and skipped. Chapter 1 carries a post-render
+     reassignment and chapter 3 an old engine plus a suspect verdict, so each
+     caption is shown to render somewhere. Chapter 2 gets the same inputs. */
+  function renderBookWithSkippedChapter() {
+    const store = makeStore();
+    store.dispatch(
+      chaptersSlice.actions.hydrateFromBookState({
+        bookId: 'b1',
+        chapters: [
+          {
+            id: 1,
+            title: 'Chapter 1',
+            slug: '01-a',
+            duration: '00:49',
+            audioModelKey: 'coqui-xtts-v2',
+            audioRenderedAt: RENDERED_PAST,
+          },
+          {
+            id: 2,
+            title: 'Chapter 2',
+            slug: '02-b',
+            audioModelKey: 'kokoro-v1',
+            audioRenderedAt: RENDERED_PAST,
+            audioQa: suspect,
+          },
+          {
+            id: 3,
+            title: 'Chapter 3',
+            slug: '03-c',
+            duration: '00:42',
+            audioModelKey: 'kokoro-v1',
+            audioRenderedAt: RENDERED_PAST,
+            audioQa: suspect,
+          },
+        ],
+        completedSlugs: ['01-a', '03-c'],
+        characters,
+        analysis: { noTextChapterIds: [2] },
+      } as any),
+    );
+    for (const chapterId of [1, 2]) {
+      store.dispatch(changeLogSlice.actions.bumpBoundaryMove({ chapterId, count: 1 }));
+    }
+    const hydrated = store.getState().chapters.chapters;
+    render(
+      <Provider store={store}>
+        <HostedGenerationView
+          chapters={hydrated}
+          characters={characters}
+          paused={false}
+          title="No Text Fixture"
+          bookId="b1"
+          modelKey="coqui-xtts-v2"
+          onRegenerate={() => {}}
+          onRegenerateBook={() => {}}
+          onRegenerateCharacterInChapter={() => {}}
+          onPreview={() => {}}
+        />
+      </Provider>,
+    );
+  }
+  const row = (id: number) => within(document.getElementById(`chapter-${id}`)!);
+
+  it('counts the skipped chapter as complete in the header and shows the all-complete state', () => {
+    renderBookWithSkippedChapter();
+    expect(screen.getByText(/3 of 3 chapters complete/)).toBeInTheDocument();
+    expect(screen.getByRole('button', { name: /^Regenerate$/ })).toBeInTheDocument();
+    expect(screen.queryByTestId('generation-view-resume')).not.toBeInTheDocument();
+  });
+
+  it('says why the skipped row has no audio and offers only Exclude, Rename and Re-analyse', () => {
+    renderBookWithSkippedChapter();
+    expect(row(2).getByText('Done')).toBeInTheDocument();
+    expect(row(2).getByTestId('chapter-row-2-no-text')).toHaveTextContent(
+      'No text to narrate. Skipped and counted as complete.',
+    );
+    expect(row(2).queryByText(/^Generated /)).not.toBeInTheDocument();
+    expect(row(2).queryByRole('button', { name: /Preview/ })).not.toBeInTheDocument();
+    expect(row(2).queryByRole('button', { name: 'Regenerate this chapter' })).not.toBeInTheDocument();
+    expect(row(2).getByRole('button', { name: /^Exclude$/ })).toBeEnabled();
+    expect(row(2).getByRole('button', { name: 'Rename chapter 2' })).toBeEnabled();
+    expect(row(2).getByTestId('chapter-row-2-reanalyse')).toBeEnabled();
+  });
+
+  it('keeps Preview and Regenerate on a done chapter with audio', () => {
+    renderBookWithSkippedChapter();
+    for (const id of [1, 3]) {
+      expect(row(id).getByRole('button', { name: /Preview/ })).toBeInTheDocument();
+      expect(row(id).getByRole('button', { name: 'Regenerate this chapter' })).toBeInTheDocument();
+      expect(row(id).getByText(/^Generated /)).toBeInTheDocument();
+      expect(row(id).queryByTestId(`chapter-row-${id}-no-text`)).not.toBeInTheDocument();
+    }
+  });
+
+  it('shows no stale, engine-drift or Suspect caption on the skipped row', () => {
+    renderBookWithSkippedChapter();
+    expect(row(1).getByText(/Sentences reassigned/)).toBeInTheDocument();
+    expect(row(3).getByText(/current engine is/)).toBeInTheDocument();
+    expect(row(3).getByText('Suspect')).toBeInTheDocument();
+    expect(row(2).queryByText(/Sentences reassigned/)).not.toBeInTheDocument();
+    expect(row(2).queryByText(/current engine is/)).not.toBeInTheDocument();
+    expect(row(2).queryByText('Suspect')).not.toBeInTheDocument();
+  });
+});

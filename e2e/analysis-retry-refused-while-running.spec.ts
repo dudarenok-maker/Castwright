@@ -118,3 +118,31 @@ test('a queued chapter with an analysis gap shows the note and an enabled Re-ana
   );
   await expect(page.getByTestId('chapter-row-1-reanalyse')).toBeEnabled();
 });
+
+/* #3507 — a done chapter flagged `skippedNoText` says why it has no audio and
+ * offers no Preview or Regenerate; its neighbour with audio keeps both. */
+test('a skipped no-text chapter shows why, with no Preview or Regenerate', async ({ page }) => {
+  await page.goto('/#/books/sb/generate');
+  await expect(page.getByTestId('chapter-row-1-reanalyse')).toBeVisible({ timeout: 10_000 });
+
+  await page.evaluate(() => {
+    const store = (window as unknown as { __store__: GapStore }).__store__;
+    const chapters = store.getState().chapters.chapters;
+    store.dispatch({
+      type: 'chapters/setChapters',
+      payload: chapters.map((c, i) => (i === 0 ? { ...c, skippedNoText: true } : c)),
+    });
+  });
+
+  const skipped = page.locator('#chapter-1');
+  await expect(skipped.getByTestId('chapter-row-1-no-text')).toHaveText(
+    'No text to narrate. Skipped and counted as complete.',
+  );
+  await expect(skipped.getByRole('button', { name: 'Preview' })).toHaveCount(0);
+  await expect(skipped.getByRole('button', { name: 'Regenerate this chapter' })).toHaveCount(0);
+  await expect(skipped.getByTestId('chapter-row-1-reanalyse')).toBeEnabled();
+
+  const rendered = page.locator('#chapter-2');
+  await expect(rendered.getByRole('button', { name: 'Preview' })).toBeVisible();
+  await expect(rendered.getByRole('button', { name: 'Regenerate this chapter' })).toBeVisible();
+});

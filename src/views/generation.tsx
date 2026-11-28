@@ -2225,6 +2225,9 @@ function ChapterRow({
   /* #3435 — the action row below (done, or failed without a message)
      already carries Re-analyse; every other row gets it on the gap note. */
   const actionRowShown = chapter.state === 'done' || (chapter.state === 'failed' && !chapter.errorReason);
+  /* #3507 — the flag is set by a skip; a later run that moves the row off
+     `done` shows the normal controls again. */
+  const skipped = chapter.state === 'done' && chapter.skippedNoText === true;
 
   const assembling = chapter.phase === 'assembling';
   const verifying = chapter.phase === 'verifying';
@@ -2561,15 +2564,27 @@ function ChapterRow({
               phone. Relative label (matches the Activity feed) with the exact
               date/time on hover. Guarded on the field so legacy chapters
               rendered before it existed simply omit the line. */}
-          {chapter.state === 'done' && chapter.audioRenderedAt && (
+          {/* #3507 — a skipped no-text chapter has no audio: say why here, and
+              offer no Preview or Regenerate below. */}
+          {skipped ? (
             <span
-              className="mr-auto text-[11px] text-ink/40 tabular-nums"
-              title={new Date(chapter.audioRenderedAt).toLocaleString()}
+              className="mr-auto text-[11px] text-ink/40"
+              data-testid={`chapter-row-${chapter.id}-no-text`}
             >
-              Generated {relativeTime(chapter.audioRenderedAt)}
+              No text to narrate. Skipped and counted as complete.
             </span>
+          ) : (
+            chapter.state === 'done' &&
+            chapter.audioRenderedAt && (
+              <span
+                className="mr-auto text-[11px] text-ink/40 tabular-nums"
+                title={new Date(chapter.audioRenderedAt).toLocaleString()}
+              >
+                Generated {relativeTime(chapter.audioRenderedAt)}
+              </span>
+            )
           )}
-          {chapter.state === 'done' && (
+          {chapter.state === 'done' && !skipped && (
             <button
               onClick={(e) => {
                 e.stopPropagation();
@@ -2623,19 +2638,21 @@ function ChapterRow({
           {mainAnalysisLive && (
             <span className="text-[11px] text-ink/45">Pause the analysis first</span>
           )}
-          <button
-            onClick={(e) => {
-              e.stopPropagation();
-              onRegenerate(chapter);
-            }}
-            aria-label={chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
-            disabled={jobStartBlockedReason != null}
-            title={jobStartBlockedReason}
-            className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
-          >
-            <IconRefresh className="w-3.5 h-3.5" />{' '}
-            {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate'}
-          </button>
+          {!skipped && (
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                onRegenerate(chapter);
+              }}
+              aria-label={chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate this chapter'}
+              disabled={jobStartBlockedReason != null}
+              title={jobStartBlockedReason}
+              className="inline-flex items-center gap-1.5 min-h-[44px] px-2 text-xs font-medium text-ink/60 hover:text-magenta disabled:opacity-40 transition-colors"
+            >
+              <IconRefresh className="w-3.5 h-3.5" />{' '}
+              {chapter.state === 'failed' ? 'Retry chapter' : 'Regenerate'}
+            </button>
+          )}
         </div>
       )}
       {/* For queued chapters (no other action row visible), surface a
