@@ -222,3 +222,20 @@ test('parseWhatBenefit ignores over-matching inline labels but accepts the legal
   assert.equal(parseWhatBenefit('**Benefit (user):** e').benefit, 'e');
   assert.equal(parseWhatBenefit('## What (scope)\n\nf').what, 'f');
 });
+
+test('parseWhatBenefit strips a repeat of the section\'s own label from a block value (#4876 shape, #4913)', () => {
+  const body = [
+    '## What',
+    '',
+    '**What (user):** does a thing.',
+    '',
+    '## Benefit',
+    '',
+    '*Benefit (user):* books in up to 13 languages.',
+  ].join('\n');
+  assert.equal(parseWhatBenefit(body).benefit, 'books in up to 13 languages.');
+  assert.equal(parseWhatBenefit('## Benefit\n\n_Benefit:_ a').benefit, 'a');
+  assert.equal(parseWhatBenefit('## Benefit\n\n**Benefit (axis):** b').benefit, 'b');
+  // only the section's own label is stripped; other leading emphasis stays
+  assert.equal(parseWhatBenefit('## Benefit\n\n*Proof, not promises:* c').benefit, '*Proof, not promises:* c');
+});
