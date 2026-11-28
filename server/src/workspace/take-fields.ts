@@ -3,8 +3,9 @@
 
    Everything `scan.ts` (and every module it reaches) needs about a chapter's
    take lives here: the take id, the suffix table, the full-path builders, the
-   live-take probes, the `state.json` field membership list and the derive /
-   heal rules. `chapter-take.ts` (the module, #4327) re-exports all of it.
+   live-take probes, the `state.json` field membership list, the derive / heal
+   rules and the heal's journal check. `chapter-take.ts` (the module, #4327)
+   re-exports all of it.
 
    LEAF RULE: this file's whole import closure is `node:` builtins plus
    `../util/safe-path.js`, `../audio/format-duration.js` and
@@ -24,7 +25,7 @@
    in `TAKE_AUDIO_FORMATS` - mp3 wins so existing books keep behaving
    identically until they're re-rendered into a new format. */
 
-import { existsSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { randomBytes } from 'node:crypto';
 import { basename, join } from 'node:path';
 import { sanitizeIdSegment } from '../util/safe-path.js';
@@ -246,6 +247,48 @@ export function parseTakeJournalName(name: string): { slug: string; jid: Journal
   return match ? { slug: match[1], jid: match[2] } : null;
 }
 
+/** The scan heal's journal check (§4.4 "Why the skip is needed"): the slugs the
+    journals in `audioRoot` name, or `'skip-book'` when that cannot be known - the
+    directory cannot be listed, or a journal cannot be read, parsed or
+    classified. The heal then writes nothing for the book; it is a lazy
+    migration, so the next scan repeats it. An absent `audio/` names nothing.
+
+    The caller holds `book` and has ALREADY read the segments it means to heal
+    from (R6-11): a commit writes its journal before it installs anything, and
+    every journal unlink takes `book`.
+
+    Only enough of a journal is parsed to trust its file name: the full schema is
+    the module's (`readTakeJournal`), which this leaf cannot import. */
+export function journalNamedSlugs(audioRoot: string): Set<string> | 'skip-book' {
+  const named = new Set<string>();
+  let names: string[];
+  try {
+    names = readdirSync(audioRoot);
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'ENOENT' ? named : 'skip-book';
+  }
+  for (const name of names) {
+    /* A journal write's `.tmp-*` leftover is not a journal. */
+    if (!name.includes('.take-journal.') || name.includes('.tmp-')) continue;
+    const parsed = parseTakeJournalName(name);
+    /* TODO(#4324): a book journal (Phase 4's relabel) names every slug it lists
+       as a `from`, `to`, `drop` or `clearStalePrevious`; read those here. Until
+       then any name this cannot classify skips the whole book. */
+    if (!parsed) return 'skip-book';
+    try {
+      const raw = readFileSync(join(audioRoot, name), 'utf8');
+      const journal = JSON.parse(raw.replace(/^\uFEFF/, '')) as {
+        chapter?: { slug?: unknown };
+      } | null;
+      if (journal?.chapter?.slug !== parsed.slug) return 'skip-book';
+    } catch {
+      return 'skip-book';
+    }
+    named.add(parsed.slug);
+  }
+  return named;
+}
+
 /* ------------------------------------------------------------------ *
  * state.json take fields (§4.3, §4.4)
  * ------------------------------------------------------------------ */
@@ -331,16 +374,16 @@ function isAbsentField(field: TakeStateField, value: unknown): boolean {
 /** The scan heal's fill rule (§4.3, §4.4). Returns a NEW object: `fresh` with
     each ABSENT take member filled from `derived`. Never overwrites a present
     member, never fills `audioTakeId` (identity is minted, not healed), and
-    fills nothing for a chapter whose slug is in `journalNamedSlugs`. The
-    chapter's `slug` is read from `fresh`; its `uuid` is the heal's own
-    non-take field and is untouched here. */
+    fills nothing for a chapter whose slug is in `namedSlugs` (the answer of
+    `journalNamedSlugs`). The chapter's `slug` is read from `fresh`; its `uuid`
+    is the heal's own non-take field and is untouched here. */
 export function healTakeFields<C extends { slug?: string } & TakeFields>(
   fresh: C,
   derived: TakeFields,
-  journalNamedSlugs: ReadonlySet<string>,
+  namedSlugs: ReadonlySet<string>,
 ): C & TakeFields {
   const out: C & TakeFields = { ...fresh };
-  if (fresh.slug !== undefined && journalNamedSlugs.has(fresh.slug)) return out;
+  if (fresh.slug !== undefined && namedSlugs.has(fresh.slug)) return out;
   const target = out as Record<string, unknown>;
   for (const field of TAKE_STATE_FIELDS) {
     if (field === 'audioTakeId') continue;

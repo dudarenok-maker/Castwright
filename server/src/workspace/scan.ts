@@ -21,6 +21,7 @@ import { readJson } from './state-io.js';
 import { readStateJsonWithRecovery, updateStateJsonLocked } from './state-migrate.js';
 import { ensureChapterUuids } from './chapter-uuid.js';
 import { withBookLock } from './book-lock.js';
+import { canonicalDirKey, isUnaddressedDir } from './book-dir-key.js';
 import {
   analysisCompleteFor,
   hasCurrentTake,
@@ -41,6 +42,7 @@ import {
   chapterAudioExists,
   deriveTakeFields,
   healTakeFields,
+  journalNamedSlugs,
   livePartPath,
   TAKE_STATE_FIELDS,
   type TakeFields,
@@ -826,7 +828,7 @@ async function scanBook(
            can't leave this caller holding a different one. */
         const { merged } = await persistHealPatches(
           bookDir,
-          state.bookId ?? bookDir,
+          state.bookId ?? canonicalDirKey(bookDir),
           unminted.map((c) => ({ id: c.id, slug: c.slug, set: { uuid: c.uuid } })),
         );
         for (const c of unminted) {
@@ -1199,9 +1201,11 @@ type ChapterHealPatch = {
  *  context already holds it — see book-lock.ts), state.json is re-read, and
  *  each patch is applied only to a chapter that still has the same id + slug
  *  (and uuid, when both carry one), and only for fields still unset — so a
- *  concurrent mint or fill is never overwritten. Returns the merged state
- *  (null when there were no patches or the file could not be read) and `gone`
- *  when the file could not be read under the lock. */
+ *  concurrent mint or fill is never overwritten. Nothing is written for an
+ *  unaddressed book or one whose journals cannot be classified, and no take
+ *  field is filled for a slug a journal names (§4.4, R5-2). Returns the merged
+ *  state (null when there were no patches or the file could not be read) and
+ *  `gone` when the file could not be read under the lock. */
 async function persistHealPatches(
   bookDir: string,
   lockKey: string,
@@ -1209,43 +1213,47 @@ async function persistHealPatches(
 ): Promise<{ merged: BookStateJson | null; gone: boolean }> {
   if (patches.length === 0) return { merged: null, gone: false };
   return withBookLock(lockKey, async () => {
+    /* R8-4: asked only once `book` is held. An unaddressed holder registers its
+       folder before any take work, and its writes wait on this same key. */
+    const unaddressed = isUnaddressedDir(bookDir);
     let changed = false;
     /* #3700 -- the fresh read + write sit inside the `state-json` leaf lock
        (`updateStateJsonLocked`), nested inside the book lock taken above. The
-       callback only reads the segments file; it takes no lock. */
+       callback only reads the segments and journal files; it takes no lock. */
     const result = await updateStateJsonLocked(stateJsonPath(bookDir), async (fresh) => {
-      const chapters: BookStateJson['chapters'] = [];
+      if (unaddressed) return null;
+      const matched = new Map<BookStateJson['chapters'][number], ChapterHealPatch>();
       for (const ch of fresh.chapters) {
         const patch = patches.find(
           (p) => p.id === ch.id && p.slug === ch.slug && (!p.uuid || !ch.uuid || p.uuid === ch.uuid),
         );
-        if (!patch) {
-          chapters.push(ch);
-          continue;
-        }
-        /* The identity match above is id + slug + uuid, which a merge that keeps
-           the primary chapter's three leaves intact while it drops its audio.
-           So a segments-derived fill is re-derived from the file as it is NOW,
-           under the lock: one read before the wait would stamp the old take's
-           model / render date onto a chapter whose audio was just deleted. */
-        const derived: TakeFields = patch.fromSegments
-          ? ((await deriveSegmentsHeal(bookDir, ch).catch(() => null))?.derived ?? {})
-          : {};
+        if (patch) matched.set(ch, patch);
+      }
+      /* The identity match above is id + slug + uuid, which a merge that keeps
+         the primary chapter's three leaves intact while it drops its audio.
+         So a segments-derived fill is re-derived from the file as it is NOW,
+         under the lock: one read before the wait would stamp the old take's
+         model / render date onto a chapter whose audio was just deleted. */
+      const { derived, named } = await readSegmentsThenJournals(
+        bookDir,
+        [...matched].filter(([, patch]) => patch.fromSegments).map(([ch]) => ch),
+      );
+      if (named === 'skip-book') return null;
+      const chapters = fresh.chapters.map((ch) => {
+        const patch = matched.get(ch);
+        if (!patch) return ch;
         /* The take fields fill through the leaf's rule (absent members only,
-           never `audioTakeId`); `uuid` is the heal's own field. Phase 1 has no
-           journals, so the journal-named set is empty. */
-        const healed: typeof ch = healTakeFields(ch, derived, new Set());
+           never `audioTakeId`, nothing for a journal-named slug); `uuid` is the
+           heal's own field. */
+        const healed: typeof ch = healTakeFields(ch, derived.get(ch) ?? {}, named);
         if (patch.set.uuid !== undefined && !ch.uuid) healed.uuid = patch.set.uuid;
         const differs =
           healed.uuid !== ch.uuid ||
           TAKE_STATE_FIELDS.some((key) => healed[key] !== ch[key]);
-        if (!differs) {
-          chapters.push(ch);
-          continue;
-        }
+        if (!differs) return ch;
         changed = true;
-        chapters.push(healed);
-      }
+        return healed;
+      });
       return changed ? { ...fresh, chapters } : null;
     });
     /* Absent under the lock = the file is gone (the folder was moved by a
@@ -1255,10 +1263,44 @@ async function persistHealPatches(
   });
 }
 
+let healJournalCheckGate: (() => Promise<void>) | null = null;
+
+/** Test seam only: `gate` is awaited by a heal between its segments reads and
+ *  its journal check, while it holds `book`. */
+export function __setHealJournalCheckGateForTest(gate: (() => Promise<void>) | null): void {
+  healJournalCheckGate = gate;
+}
+
+/** Test seam only: the locked merge, which production reaches through the
+ *  backfill and the scan's uuid mint. */
+export { persistHealPatches as __persistHealPatchesForTest };
+
+/** Read each chapter's live segments, THEN ask which slugs the book's journals
+ *  name (§4.4 "Read first, then check", R6-11): a commit writes its journal
+ *  before it installs anything, so a read that saw installed segments still
+ *  finds that journal. The caller holds `book` across both, and every journal
+ *  unlink takes `book` (R7-1). A chapter with no readable segments file has no
+ *  entry in `derived`. */
+async function readSegmentsThenJournals(
+  bookDir: string,
+  chapters: BookStateJson['chapters'],
+): Promise<{
+  derived: Map<BookStateJson['chapters'][number], TakeFields>;
+  named: ReturnType<typeof journalNamedSlugs>;
+}> {
+  const derived = new Map<BookStateJson['chapters'][number], TakeFields>();
+  for (const ch of chapters) {
+    const heal = await deriveSegmentsHeal(bookDir, ch).catch(() => null);
+    if (heal) derived.set(ch, heal.derived);
+  }
+  await healJournalCheckGate?.();
+  return { derived, named: journalNamedSlugs(audioDir(bookDir)) };
+}
+
 /** What `ch`'s segments file says the chapter's state.json fields should be, as
  *  a fill-only patch, plus the file's measured seconds. Null when there is no
- *  segments file. Takes no lock: the caller decides where it reads (the locked
- *  merge in `persistHealPatches` re-reads it). */
+ *  segments file. Takes no lock and checks no journal: a caller that fills from
+ *  it reads through `readSegmentsThenJournals`, under `book`. */
 async function deriveSegmentsHeal(
   bookDir: string,
   ch: BookStateJson['chapters'][number],
@@ -1295,49 +1337,57 @@ async function deriveSegmentsHeal(
     `audioRenderedAt`, and restructure builds no audio op without it, #3919)
     but their seconds do not count toward the returned total. Tolerates
     missing segments files (chapter not rendered yet) and malformed JSON (skip silently — the next scan
-    will retry). updatedAt is intentionally not bumped because the
+    will retry). A chapter whose slug a take journal names is not filled, and an
+    unaddressed book or one whose journals cannot be classified is not healed at
+    all. updatedAt is intentionally not bumped because the
     backfill is a lossless metadata migration, not a user-driven change. */
 export async function backfillAudioModelKeysFromSegments(
   bookDir: string,
   state: BookStateJson,
 ): Promise<{ state: BookStateJson; totalSec: number; gone?: boolean }> {
+  /* A first look, outside any lock: the runtime total, and which chapters have
+     anything absent that their segments could fill. Nothing is filled from it
+     (so it needs no journal check), and most calls end here without `book`. */
   let totalSec = 0;
-  let backfillNeeded = false;
-  const next: BookStateJson['chapters'] = [...state.chapters];
-  for (let i = 0; i < state.chapters.length; i++) {
-    const ch = state.chapters[i];
-    try {
-      const heal = await deriveSegmentsHeal(bookDir, ch);
-      if (!heal) continue;
-      if (!ch.excluded) totalSec += heal.durationSec;
-      const healed: typeof ch = healTakeFields(ch, heal.derived, new Set());
-      if (TAKE_STATE_FIELDS.some((key) => healed[key] !== ch[key])) {
-        next[i] = healed;
-        backfillNeeded = true;
-      }
-    } catch {
-      /* malformed segments file → skip */
-    }
+  const fillable: BookStateJson['chapters'] = [];
+  for (const ch of state.chapters) {
+    /* malformed segments file → skip */
+    const heal = await deriveSegmentsHeal(bookDir, ch).catch(() => null);
+    if (!heal) continue;
+    if (!ch.excluded) totalSec += heal.durationSec;
+    const filled: typeof ch = healTakeFields(ch, heal.derived, new Set());
+    if (TAKE_STATE_FIELDS.some((key) => filled[key] !== ch[key])) fillable.push(ch);
   }
-  if (backfillNeeded) {
-    const upgraded: BookStateJson = { ...state, chapters: next };
+  if (fillable.length === 0) return { state, totalSec };
+
+  const lockKey = state.bookId ?? canonicalDirKey(bookDir);
+  return withBookLock(lockKey, async () => {
+    /* What this caller gets if nothing can be written below: the same rules as
+       the merge, decided under `book`. */
+    let upgraded = state;
+    if (!isUnaddressedDir(bookDir)) {
+      const { derived, named } = await readSegmentsThenJournals(bookDir, fillable);
+      if (named !== 'skip-book') {
+        const chapters = state.chapters.map((ch) => {
+          const fields = derived.get(ch);
+          return fields ? healTakeFields(ch, fields, named) : ch;
+        });
+        upgraded = { ...state, chapters };
+      }
+    }
     try {
       /* #3400 — merge into a fresh read under the book lock rather than
          rewriting `state` (read long before, outside any lock): a chapter
          restructure that landed meanwhile must keep its chapter list. Only the
-         fields this pass filled are applied, to chapters that still exist. */
-      const patches: ChapterHealPatch[] = [];
-      for (let i = 0; i < state.chapters.length; i++) {
-        if (next[i] === state.chapters[i]) continue;
-        patches.push({
-          id: state.chapters[i].id,
-          slug: state.chapters[i].slug,
-          uuid: state.chapters[i].uuid,
-          set: {},
-          fromSegments: true,
-        });
-      }
-      const { merged, gone } = await persistHealPatches(bookDir, state.bookId ?? bookDir, patches);
+         chapters with something to fill are patched, if they still exist. */
+      const patches: ChapterHealPatch[] = fillable.map((ch) => ({
+        id: ch.id,
+        slug: ch.slug,
+        uuid: ch.uuid,
+        set: {},
+        fromSegments: true,
+      }));
+      const { merged, gone } = await persistHealPatches(bookDir, lockKey, patches);
       /* The state merged under the lock, not `upgraded`: a caller that waited
          behind a restructure must start from the post-restructure file, or its
          own write lands after it with the old chapter list (pass-7 1). */
@@ -1349,6 +1399,5 @@ export async function backfillAudioModelKeysFromSegments(
          up yet. */
       return { state: upgraded, totalSec };
     }
-  }
-  return { state, totalSec };
+  });
 }

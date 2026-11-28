@@ -24,6 +24,7 @@
    both (or a bare `withBookLock`); `state-json-lock.guard.test.ts` fails it on a
    write outside `withStateJsonLock`. */
 
+import { canonicalDirKey } from './book-dir-key.js';
 import { withBookLock } from './book-lock.js';
 import { stateJsonPath } from './paths.js';
 import { findBookByBookId, type BookStateJson } from './scan.js';
@@ -69,7 +70,7 @@ export async function updateStateAtDir(
      re-read under the locks. */
   const peek = await readStateJsonWithRecovery(path);
   if (!peek) return false;
-  return withBookLock(peek.bookId ?? bookDir, async () => {
+  return withBookLock(peek.bookId ?? canonicalDirKey(bookDir), async () => {
     await opts.underBookLock?.();
     let wrote = false;
     await updateStateJsonLocked(
