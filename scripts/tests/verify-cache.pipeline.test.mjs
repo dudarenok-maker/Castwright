@@ -810,3 +810,14 @@ test('stepTouchedByDiff + computeScopes: a server/package.json-only diff puts te
   assert.equal(computeScopes(['server/package.json']).step_test_hooks, true);
 });
 
+
+// server/src imports scripts/lib/{server-owner,node-runtime-guard}.mjs and
+// `tsc -p server` resolves their types from the sibling .d.mts. That file is
+// outside typecheck's `src/**` + `server/src/**` globs, so a .d.mts-only diff
+// (a renamed or retyped export) scheduled no typecheck.
+for (const dts of ['scripts/lib/server-owner.d.mts', 'scripts/lib/node-runtime-guard.d.mts']) {
+  test(`stepTouchedByDiff + computeScopes: a ${dts}-only diff puts typecheck in scope (server/src types against it)`, () => {
+    assert.equal(stepTouchedByDiff(stepByName.typecheck, [dts]), true);
+    assert.equal(computeScopes([dts]).step_typecheck, true);
+  });
+}

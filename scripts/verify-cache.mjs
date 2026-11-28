@@ -60,6 +60,12 @@ export const STEPS = [
         'vite.config.ts',
         'vitest.config.ts',
         'server/package.json',
+        /* server/src imports scripts/lib/{server-owner,node-runtime-guard}.mjs;
+           tsc resolves their types from these sibling .d.mts files, which sit
+           outside the globs above. (The .mjs bodies are not type-checked: no
+           allowJs.) */
+        'scripts/lib/server-owner.d.mts',
+        'scripts/lib/node-runtime-guard.d.mts',
       ],
       includeLockfiles: ['root', 'server'],
     },

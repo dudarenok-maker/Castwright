@@ -93,6 +93,8 @@ export const MANIFEST = {
     // target ... is itself shipped" scan plus its targeted prevent-sleep.ps1
     // assertion — don't remove an entry here without checking that test.
     'scripts/lib/pid-alive.mjs',
+    // #3264 — server/src/index.ts imports it for the owner marker.
+    'scripts/lib/server-owner.mjs',
     'scripts/lib/sidecar-sweep-port.mjs',
     'scripts/lib/log-utils.psm1',
     'scripts/lib/sidecar-sweep-port.psm1',

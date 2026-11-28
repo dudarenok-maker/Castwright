@@ -99,6 +99,11 @@ import { resolveSidecarVenvDir } from './diagnostics/venv.js';
 import { ensureOrtMarker } from '../tts-sidecar/scripts/install-ort.mjs';
 // @ts-expect-error — shared helper ships no .d.ts; see its own header (#2291).
 import { isDirectlyInvoked } from '../../scripts/lib/is-main-module.mjs';
+import {
+  pruneDeadServerOwners,
+  releaseServerOwner,
+  writeServerOwner,
+} from '../../scripts/lib/server-owner.mjs';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -118,6 +123,9 @@ let mdnsResponderHandle: MdnsResponderHandle | null = null;
    set for start:lan (see shouldSpawnPortForwarder), closed in shutdown()
    alongside the sidecar and the mDNS responder. */
 let portForwarderHandle: PortForwarderHandle | null = null;
+/* #3264 — the port our owner marker names, for shutdown() to release. Null until
+   the server is listening. */
+let ownerMarkerPort: number | null = null;
 
 /* repoRoot/runDir are pure path resolution (no I/O) off __dirname, so they're
    safe to compute unconditionally at module scope — shutdown() (below) needs
@@ -157,6 +165,24 @@ export async function bootWarmUserSettings(): Promise<void> {
     console.error(
       '[server] user-settings.json could not be read at boot (a malformed file recovers from its .bak.N backups, and a locked/unreadable one serves defaults on its own, so this is a failed legacy-settings migration)',
       err,
+    );
+  }
+}
+
+/** #3264 — publish our owner marker for the port actually bound (post
+    auto-rebind), reaping dead servers' markers first. A failure is logged and
+    swallowed: the marker must never stop the server from serving. */
+export function publishServerOwnerMarker(marker: {
+  runDir: string;
+  port: number;
+  https: boolean;
+}): void {
+  try {
+    pruneDeadServerOwners(marker.runDir);
+    writeServerOwner(marker);
+  } catch (err) {
+    console.warn(
+      `[server] could not write the owner marker for port ${marker.port}: ${(err as Error).message}`,
     );
   }
 }
@@ -399,6 +425,12 @@ async function main(): Promise<void> {
     if (getResolvedAutoStartSidecar()) {
       enforceSingleSidecarOwner({ runDir });
     }
+    /* #3264 — after enforceSingleSidecarOwner, which can process.exit(1): a marker
+       published first would announce a server that is already exiting. Same
+       synchronous tick as the listen callback's start, and still ahead of the slow
+       boot work, so it exists as soon as the port answers. */
+    publishServerOwnerMarker({ runDir, port: listenPort, https: lanHttps });
+    ownerMarkerPort = listenPort;
     /* srv-15 — supervise the sidecar instead of a one-shot spawn, so a crash /
        OOM-kill / poison self-exit respawns instead of stalling generation
        forever. `buildOpts` re-reads settings on each respawn so a mid-session
@@ -630,6 +662,9 @@ async function main(): Promise<void> {
     (mirrors resolveUpgradePaths in upgrade/paths.ts) so the sequence is
     unit-testable without a real sidecar/mDNS/port-forwarder handle. */
 export interface ShutdownDeps {
+  releaseServerOwner: (runDir: string, port: number) => void;
+  /** The port the owner marker names; null if the server never listened. */
+  boundPort: number | null;
   releaseSidecarOwnership: (runDir: string) => void;
   allowSleep: () => void;
   runDir: string;
@@ -640,11 +675,14 @@ export interface ShutdownDeps {
 
 /* #1366 — pure teardown sequence, extracted out of shutdown() so it can be
    exercised by a test without binding a real port. Order matches the
-   original inline shutdown() body exactly: release the sidecar-port
-   ownership note, drop the sleep-prevention wake lock, then reap the
-   sidecar / mDNS responder / port forwarder in parallel (each a no-op
-   Promise.resolve() when its handle is null). */
+   original inline shutdown() body, after the #3264 owner-marker release:
+   release the sidecar-port ownership note, drop the sleep-prevention wake
+   lock, then reap the sidecar / mDNS responder / port forwarder in parallel
+   (each a no-op Promise.resolve() when its handle is null). */
 export async function runShutdownSequence(deps: ShutdownDeps): Promise<void> {
+  /* #3264 — remove our owner marker first, so nothing confirms a server that is
+     going away. */
+  if (deps.boundPort !== null) deps.releaseServerOwner(deps.runDir, deps.boundPort);
   /* #1030 — release our sidecar-port ownership note (LOCAL_TTS_PORT,
      default :9000) so the next boot (or another stack) sees the port as
      free. No-op if we never claimed it (autoStart off) or a same-lineage
@@ -672,6 +710,8 @@ function shutdown(signal: NodeJS.Signals): void {
   stopBackupScheduler();
   console.log(`[server] ${signal} received, tearing down sidecar...`);
   void runShutdownSequence({
+    releaseServerOwner,
+    boundPort: ownerMarkerPort,
     releaseSidecarOwnership,
     allowSleep,
     runDir,

@@ -492,6 +492,41 @@ Describe 'stop-app.ps1 call site (#2632 N34)' {
         }
     }
 
+    # #3264 — taskkill /T /F never runs the server's own marker release, so
+    # stop-app.ps1 prunes the owner markers of dead processes itself (as
+    # stop-app.mjs does) and must never delete one whose pid is alive. A real
+    # scratch checkout, real exited child for the dead pid, this shell's own
+    # pid for the live one.
+    It 'prunes a dead server owner marker and keeps one whose pid is alive (#3264)' {
+        $root = Join-Path ([IO.Path]::GetTempPath()) ("stop-app-prune-" + [guid]::NewGuid().ToString('N'))
+        $savedEnv = @{}
+        try {
+            New-Item -ItemType Directory -Path (Join-Path $root 'scripts') -Force | Out-Null
+            Copy-Item (Join-Path $PSScriptRoot '..\stop-app.ps1') (Join-Path $root 'scripts')
+            Copy-Item (Join-Path $PSScriptRoot '..\lib') (Join-Path $root 'scripts\lib') -Recurse
+            $runDir = Join-Path $root 'run'
+            New-Item -ItemType Directory -Path $runDir -Force | Out-Null
+            $shell = (Get-Process -Id $PID).Path
+            $dead = Start-Process $shell -ArgumentList @('-NoProfile', '-Command', 'exit 0') -PassThru
+            $dead.WaitForExit()
+            $deadMarker = Join-Path $runDir 'server.owner.18081.json'
+            $liveMarker = Join-Path $runDir 'server.owner.18082.json'
+            Set-Content -LiteralPath $deadMarker -Value ('{"pid":' + $dead.Id + ',"port":18081,"https":true,"startedAt":"2026-01-01T00:00:00.000Z"}')
+            Set-Content -LiteralPath $liveMarker -Value ('{"pid":' + $PID + ',"port":18082,"https":true,"startedAt":"2026-01-01T00:00:00.000Z"}')
+            foreach ($k in 'PORT', 'VITE_PORT', 'LOCAL_TTS_PORT', 'APP_RUN_DIR') {
+                $savedEnv[$k] = [Environment]::GetEnvironmentVariable($k)
+                [Environment]::SetEnvironmentVariable($k, $null)
+            }
+            [Environment]::SetEnvironmentVariable('APP_RUN_DIR', $runDir)
+            & $shell -NoProfile -ExecutionPolicy Bypass -File (Join-Path $root 'scripts\stop-app.ps1') 2>&1 | Out-Null
+            Test-Path -LiteralPath $deadMarker | Should -BeFalse
+            Test-Path -LiteralPath $liveMarker | Should -BeTrue
+        } finally {
+            foreach ($k in $savedEnv.Keys) { [Environment]::SetEnvironmentVariable($k, $savedEnv[$k]) }
+            Remove-Item -Recurse -Force $root -ErrorAction SilentlyContinue
+        }
+    }
+
     # #2632 N39 — the base-port half of the same hazard: stop-app.ps1 used to
     # pass a literal @(5173, 8080, 8443) as -BasePorts, which is the PRIMARY
     # checkout's ports regardless of what THIS checkout is configured for.

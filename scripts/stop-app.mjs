@@ -21,6 +21,7 @@ import {
 } from './lib/sidecar-sweep-port.mjs';
 import { isDirectlyInvoked } from './lib/is-main-module.mjs';
 import { pidIsAlive } from './lib/pid-alive.mjs';
+import { pruneDeadServerOwners } from './lib/server-owner.mjs';
 import { waitForExit } from './restart-after-upgrade.mjs';
 
 // PR #3404 review pass 2 — a kill request only asks the target to exit; it
@@ -142,11 +143,13 @@ function defaultKillAttempt(pid) {
 // value would still only be a guess at what THIS checkout is bound to, not
 // a fact — and start-app-prod.mjs's launcher also defaults LAN_HTTPS ON in
 // production (isLanHttpsEnabled(), export-lan.ts) unless explicitly turned
-// off, so guessing would apply to nearly every prod run. There is no
-// owner-note file for the main server's bound port (unlike
-// .run/tts.owner.<port>.json for the sidecar) to settle which port is really this
-// checkout's — the only authoritative source is the PID the 'server' loop
-// above already reaped by tree-kill, which needs no port sweep at all.
+// off, so guessing would apply to nearly every prod run. The server does now
+// write an owner marker for the port it actually bound (#3264,
+// .run/server.owner.<port>.json, like .run/tts.owner.<port>.json for the
+// sidecar), but this sweep deliberately does not read it: the marker names the
+// PID the 'server' loop above already reaped by tree-kill, and pruneOwners
+// drops it right after, so by the time the ports are swept it identifies
+// nothing live. The reaped PID needs no port sweep at all.
 // Sweep nothing here rather than warn about a port that might be someone
 // else's.
 function probeAndSweep(port) {
@@ -177,6 +180,7 @@ export async function main({
   probe = probeAndSweep,
   log = info,
   exit = process.exit,
+  pruneOwners = pruneDeadServerOwners,
 } = {}) {
   let killedAny = false;
   let failedAny = false;
@@ -188,6 +192,10 @@ export async function main({
     const pid = Number.parseInt(raw, 10);
     if (!Number.isInteger(pid) || pid <= 0) continue;
     const outcome = await kill(pid);
+    // #3264 — taskkill /F never runs the server's own marker release, so drop
+    // its owner marker here, while the pid is freshly dead and cannot have been
+    // reused yet.
+    if (name === 'server' && (outcome === 'killed' || outcome === 'gone')) pruneOwners(runDirPath);
     if (outcome === 'killed') {
       log(`[STOP] ${name} pid=${pid}`);
       killedAny = true;
