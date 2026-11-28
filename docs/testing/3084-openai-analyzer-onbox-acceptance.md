@@ -149,9 +149,9 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
 
 ### Result
 
-Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (also 3.7-flash 503, 3.5-flash daily quota); chapter was 19,928 chars. → superseded 2026-11-28; see the re-run below
+Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (also 3.7-flash 503, 3.5-flash daily quota); chapter was 19,928 chars.
 
-8192 baseline — Result: NOT RUN — same 503. → superseded 2026-11-28; see the re-run below
+8192 baseline — Result: NOT RUN — same 503.
 
 Auto (re-run) — Result: PASS (completion bullet only) — "Chapter One — The Knock", chapter 1, 19,928 chars, gemini-3.6-flash: 19 requests, 1,183 s, firstChunkMs/firstAnswerMs first 19621/19652, max 97488/105321; 192 heartbeat events, moving during thinking; no stream idle, truncation, retry, analyzer-timeout or reasoning overflow; 380 sentences, chapter flagged attribution-incomplete (the input repeats its own opening paragraphs). Evidence: onbox-gemini-rerun-results/E111/part2-*.
 
@@ -159,7 +159,7 @@ Auto (re-run) — Result: PASS (completion bullet only) — "Chapter One — The
 
 Auto uses no more requests than 8192 — Result: STILL OWED — 19 (3.6, completed) and 7 (substitute, stopped early) do not compare.
 
-Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723). → superseded: criterion amended 2026-11-28 (#4723); see the re-run below
+Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723).
 
 Gemma split (reasoning off) — Result: FAIL — 19,928 chars at 64: both streams that answered showed thoughtPartsBeforeAnswer=1 (empty thought part, bug #4851); no bytes=0 truncation (two truncations, bytes=188 and 187, each followed by a smaller request; section 1/5 logged after the first); no analyzer-reasoning-overflow — NOT PROVEN (no empty truncation occurred; see #4851); chapter not completed (idle stream, then 503). Evidence: onbox-gemini-rerun-results/E111/.
 
