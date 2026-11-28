@@ -46,7 +46,7 @@ def extract_clip(
 
 if __name__ == "__main__":
     ADIR = r"C:/AudiobookWorkspace/books/Derek Landy/Skulduggery Pleasant/Scepter of the Ancients/audio"
-    OUT = r"C:/Users/you/srv36-listen"
+    OUT = os.path.join(os.path.expanduser("~"), "srv36-listen")
     os.makedirs(OUT, exist_ok=True)
     # outliers from the probe: (char, chapterfile_stem, start, end, cosine)
     OUT_CLIPS = [
