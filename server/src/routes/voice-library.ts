@@ -84,6 +84,7 @@ import { assessCloneFidelity } from '../tts/clone-fidelity.js';
 import { isTransient } from '../tts/retry.js';
 import { NoCapacityError } from '../tts/tts-errors.js';
 import { purgeCloneArtifacts, toClientPurgePaths } from '../workspace/purge-clone-artifacts.js';
+import { awaitAutolinkBootPass } from '../workspace/clone-copy-autolink.js';
 import { httpStatusForSidecarError } from './sidecar-error-status.js';
 import { safeSegment, sanitizeIdSegment, assertContained } from '../util/safe-path.js';
 
@@ -1042,6 +1043,15 @@ interface PromoteBody {
    cast.json is NEVER modified. */
 voiceLibraryRouter.post('/promote', async (req: Request, res: Response) => {
   try {
+    /* #4952 — wait for the boot auto-link pass: a copy minted while it runs could be
+       scanned past and, if its clone is revoked before the next start, never linked.
+       Bounded; a fixed, path-free, retryable answer if it has not finished. */
+    if (!(await awaitAutolinkBootPass())) {
+      res.setHeader('Retry-After', '5');
+      return res.status(503).json({
+        error: 'Castwright is still checking your saved voices at start-up. Try again in a few seconds.',
+      });
+    }
     const body = (req.body ?? {}) as PromoteBody;
     const bookId = typeof body.bookId === 'string' ? body.bookId : undefined;
     const characterId = typeof body.characterId === 'string' ? body.characterId : undefined;
@@ -2370,13 +2380,26 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
       }
 
       const confirmed = req.query.confirm === '1';
-      const usage = await scanLibraryVoiceUsage(voiceUuid);
+      /* #4952 — deleting a clone also revokes and erases its linked copies
+         (purgeCloneArtifacts cascade; owner decision), so the usage the confirm
+         reports — and the references cleared on confirm — include every book
+         using one of them, each tagged with the copy it goes through. */
+      const copies = (await listEntries()).filter((e) => e.clonedFrom === voiceUuid);
+      const usage: Array<Awaited<ReturnType<typeof scanLibraryVoiceUsage>>[number] & {
+        viaCopy?: { voiceUuid: string; name: string };
+      }> = await scanLibraryVoiceUsage(voiceUuid);
+      for (const copy of copies) {
+        for (const u of await scanLibraryVoiceUsage(copy.voiceUuid)) {
+          usage.push({ ...u, viaCopy: { voiceUuid: copy.voiceUuid, name: copy.name } });
+        }
+      }
       if (usage.length > 0 && !confirmed) {
         return res.status(409).json({ usage });
       }
 
       if (usage.length > 0) {
         await clearLibraryVoiceReferences(voiceUuid);
+        for (const copy of copies) await clearLibraryVoiceReferences(copy.voiceUuid);
       }
       const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
       if (purgeResult.failed.length > 0) {

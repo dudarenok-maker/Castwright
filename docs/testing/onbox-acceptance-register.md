@@ -62,13 +62,13 @@ A row another lane published to the live view has to be carried by every later p
 | **B** | Local Ollama analyzer only, no TTS sidecar | 8 |
 | **C** | One *Ночной дозор* re-analysis session | 2 |
 | **D** | Multi-language TTS render + ASR | 0 |
-| **E** | Not the GPU box (a phone, a Mac, a browser) | 17 |
+| **E** | Not the GPU box (a phone, a Mac, a browser) | 18 |
 | **G** | GitHub Actions itself (no physical hardware — the runner IS the prerequisite) | 0 |
 | **H** | No hardware — needs a real full-length all-kana ja manuscript, not yet in this repo's corpus | 1 |
 | — | **Blocked** (hardware absent) | 6 |
 | — | **Unconfirmed** (not debts until substantiated) | 0 |
 
-**75 owed.** Oldest: **2026-06-01** (plan 161, row A11).
+**76 owed.** Oldest: **2026-06-01** (plan 161, row A11).
 
 ---
 ## Group A — the GPU box
@@ -1074,7 +1074,7 @@ No rows owed. The group and its marker stay so a new multi-language row has some
 
 ## Group E — not the GPU box
 
-<!-- next-id: E121 -->
+<!-- next-id: E122 -->
 
 Acceptance that does not need the primary GPU box: a phone, a Mac, a browser, a Gemini key, or only the real workspace.
 
@@ -1353,6 +1353,22 @@ Every companion token is now `scope: 'companion'` and reaches nine method+path p
 **Setup:** An Android phone or the Android emulator (the owner ruled on 2026-11-28, [#4953](https://github.com/dudarenok-maker/Castwright/issues/4953), that the emulator is acceptable for this row) with an APK built from PR A installed, the desktop server on LAN HTTPS (`npm run dev:lan` or `npm run start:lan`) with `LAN_AUTH_TOKEN` set, and for the legacy case a `device-tokens.json` written by a pre-scope build; no GPU, sidecar, analyzer or real book. Batchable with E118.
 
 **Criteria:** The bullets above; no separate run sheet. Issue [#898](https://github.com/dudarenok-maker/Castwright/issues/898).
+
+### E121 · Pre-fix copies of a cloned voice are linked to their clone, and Revoke then covers them ([#4952](https://github.com/dudarenok-maker/Castwright/issues/4952), PR #4959) · **a real install whose My voices holds a cloned voice and, ideally, a copy saved from it before PR #4954; no GPU needed**
+
+The tests prove the link on synthetic libraries. They cannot show a real library's saved voices: which carry the clone's sidecar manifest, and that none of the user's genuinely designed voices gets linked. The first start of this build acts on every saved voice, so a wrong link would be visible only there.
+
+**Owed:**
+
+- **Before the first start of this build,** copy `<workspace>/voice-library` aside and list your saved designed voices (name and uuid) so you can tell which should and should not change.
+- **Start the server and read the log.** Each `[clone-copy-autolink] linked voice "<uuid>" to its source clone "<uuid>"` line must name a voice you know is a copy of a cloned voice. A line naming a voice you designed yourself is a failure; stop and report it. A `looks like copies … left unchanged` line is expected only for a voice you cannot account for.
+- **A linked copy now behaves as the clone.** In My voices it shows as cloned with the clone's consent. Revoking the original clone also revokes the copy; its `qwen-<copy uuid>.pt` and `.json` are gone from `voices/qwen/`, the entry stays, and a book whose character uses it stops with a "(revoked)" message instead of rendering.
+- **A copy of an already-revoked clone** (if you have one): a copy saved before 1.15.0 is linked as revoked on that start and its files are gone. A copy saved on 1.15.0 is linked only if its character still names the revoked clone; otherwise it stays a designed voice and the log reports a count, which is expected.
+- **A second start** logs no `linked` lines and changes nothing. **Delete check:** deleting a cloned voice that has a linked copy used by a book lists that book in the confirmation.
+
+**Setup:** A real install with a populated My voices; ideally a pre-#4954 "Save to my voices" copy of a clone. No GPU, sidecar or analyzer needed. If the install has no such copy, the row can only confirm that no designed voice was linked.
+
+**Criteria:** The bullets above; no separate run sheet. PR [#4959](https://github.com/dudarenok-maker/Castwright/pull/4959).
 
 ## Group G — GitHub Actions itself
 

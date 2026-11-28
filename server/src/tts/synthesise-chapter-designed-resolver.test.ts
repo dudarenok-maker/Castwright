@@ -596,7 +596,11 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
      leave the slot in place and let the sidecar raise. */
   it('[I-3] a library entry that is CLONED keeps its slot — never soft-removed into a catalogue substitution', async () => {
     const provider = makeProvider();
-    const entry = { ...designedEntry(), provenance: 'cloned' as const };
+    const entry = {
+      ...designedEntry(),
+      provenance: 'cloned' as const,
+      consent: { personName: 'Ada', relationship: 'self' as const, permittedUse: 'personal' as const, attestedAt: 'x', attestedBy: 'Ada' },
+    };
     const readEntry = vi.fn(async () => entry);
     const ptExists = vi.fn(async () => false);
 
@@ -986,5 +990,31 @@ describe('synthesiseChapter — designed-voice coqui self-heal, fail-SOFT (fs-38
     // The original array's character object is unchanged too — proof this
     // task never mutates `c.overrideTtsVoices` in place.
     expect(sharedCast[0].overrideTtsVoices?.coqui?.libraryUuid).toBe('lib-designed');
+  });
+});
+
+describe('synthesiseChapter — designed slot whose library entry is a revoked clone (#4952)', () => {
+  it('refuses the chapter with the revoked reason, renders nothing, even though the .pt survives', async () => {
+    const provider = makeProvider();
+    const readEntry = vi.fn(async () => ({
+      voiceUuid: 'lib-designed',
+      name: 'copy',
+      provenance: 'cloned',
+      consent: { personName: 'Ada', revokedAt: '2026-03-01T00:00:00.000Z' },
+    }));
+    const err = await synthesiseChapter({
+      sentences: [sentence(1, 'orin')],
+      cast: designedCast,
+      provider,
+      modelKey: 'qwen3-tts-0.6b',
+      engine: 'qwen',
+      designedResolverDepsOverride: {
+        ptExists: vi.fn(async () => true),
+        readEntry: readEntry as unknown as ResolveDesignedVoiceDeps['readEntry'],
+      },
+    }).catch((e) => e);
+    expect(err).toBeInstanceOf(UnresolvableClonedVoiceError);
+    expect((err as Error).message).toContain('"Orin" (revoked)');
+    expect(provider.calls).toHaveLength(0);
   });
 });

@@ -51,6 +51,7 @@ import { runCatalogAudit } from './tts/coqui-catalog-audit.js';
 import { auditEngineCatalog } from './tts/voice-mapping.js';
 import { WORKSPACE_ROOT, BOOKS_ROOT, ensureWorkspace } from './workspace/paths.js';
 import { migrateLegacyChangeLogs } from './workspace/changelog-migrate.js';
+import { runAutolinkAtBoot } from './workspace/clone-copy-autolink.js';
 import { runUpgradeCoordinator } from './workspace/upgrade-coordinator.js';
 import { getAppVersion } from './app-version.js';
 import { fsckAllBooks } from './workspace/fsck-orphan-audio.js';
@@ -267,6 +268,25 @@ async function main(): Promise<void> {
       }
     })
     .catch((err) => console.warn('[changelog] migration skipped:', err));
+
+  /* #4952 — auto-link of consent-free copies of a cloned voice (made by "Save to
+     my voices" before #4954) to their source clone, so the clone's consent and
+     revoke cover them. Runs on every start but is cheap once done: a linked copy
+     carries `clonedFrom`, an ordinary saved designed voice costs one small
+     manifest read, and a linked-but-unpurged revoked copy is retried. A copy of
+     an already-revoked clone is linked revoked and its voice files erased; no
+     library entry is ever removed. Fire-and-forget like the migration above, except that `/promote`
+     waits for it to settle (a Save pressed mid-pass could mint a copy it never sees). */
+  void runAutolinkAtBoot()
+    .then((r) => {
+      if (r.unmatched > 0) {
+        console.log(
+          `[clone-copy-autolink] ${r.unmatched} saved voice(s) look like copies of a cloned voice ` +
+            'but could not be matched to one with certainty; left unchanged.',
+        );
+      }
+    })
+    .catch((err) => console.warn('[clone-copy-autolink] migration skipped:', err));
 
   /* Plan 81 mobile + tablet support — when LAN_HTTPS=1 is set, flip the
      listener from HTTP on :8080 to HTTPS on :8443 using mkcert-generated

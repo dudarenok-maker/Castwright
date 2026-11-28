@@ -1567,6 +1567,48 @@ function makeDesignedDeps(
 }
 
 describe('resolveDesignedVoicesForChapter', () => {
+  // #4952 — a designed SLOT whose library entry is `cloned` (an auto-linked copy of a clone)
+  // must obey the clone's consent even while its .pt survives (failed purge / crash).
+  it.each(['qwen', 'coqui'] as const)(
+    'refuses a %s designed slot whose library entry is a revoked clone, even with its .pt on disk',
+    async (engine) => {
+      const deps = makeDesignedDeps({
+        ptExists: vi.fn(async () => true),
+        readEntry: vi.fn(async () => ({
+          voiceUuid: 'lib-copy',
+          name: 'copy',
+          provenance: 'cloned',
+          consent: { personName: 'Ada', revokedAt: '2026-03-01T00:00:00.000Z' },
+        })) as never,
+      });
+      const err = await resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-copy', engine }],
+        deps,
+      ).catch((e) => e);
+      expect(err).toBeInstanceOf(UnresolvableClonedVoiceError);
+      expect((err as UnresolvableClonedVoiceError).broken).toEqual([{ name: 'Orin', reason: 'revoked' }]);
+      expect(deps.deriveEngineArtifact).not.toHaveBeenCalled();
+    },
+  );
+
+  it('a designed slot whose cloned library entry still has live consent renders as before', async () => {
+    const deps = makeDesignedDeps({
+      ptExists: vi.fn(async () => true),
+      readEntry: vi.fn(async () => ({
+        voiceUuid: 'lib-copy',
+        name: 'copy',
+        provenance: 'cloned',
+        consent: { personName: 'Ada' },
+      })) as never,
+    });
+    await expect(
+      resolveDesignedVoicesForChapter(
+        [{ characterName: 'Orin', characterId: 'orin', libraryUuid: 'lib-copy', engine: 'qwen' }],
+        deps,
+      ),
+    ).resolves.toEqual({ softFailedUuids: [] });
+  });
+
   it('.pt missing + retained clip present -> re-derives once with the right voice id + ref text', async () => {
     const deps = makeDesignedDeps({
       ptExists: vi.fn(async () => false),
@@ -2431,7 +2473,10 @@ describe('resolveDesignedVoicesForChapter', () => {
        lesson this branch's reviewers keep re-learning (Task 20's own
        malformed-uuid tests, same rationale). */
     it('a request whose backing entry is actually provenance "cloned" (drift) is skipped entirely — never derived, never soft-failed — protecting a cloned voice from this self-heal', async () => {
-      const cloneEntry = designedEntry({ provenance: 'cloned' });
+      const cloneEntry = designedEntry({
+        provenance: 'cloned',
+        consent: { personName: 'Ada', relationship: 'self', permittedUse: 'personal', attestedAt: 'x', attestedBy: 'Ada' },
+      });
       const ptExists = vi.fn(async () => false);
       const readDesignedMasterPcm = vi.fn();
       const deriveEngineArtifact = vi.fn();
