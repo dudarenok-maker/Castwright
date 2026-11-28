@@ -6,7 +6,11 @@ import {
   HOLLOW_TIDE_VOICES,
   HOLLOW_TIDE_CONTINUE,
   HOLLOW_TIDE_LISTEN_PROGRESS,
+  HOLLOW_TIDE_VOICE_LIBRARY,
+  HOLLOW_TIDE_CLONED_VOICE_UUID,
+  HOLLOW_TIDE_CLONE_TRANSCRIPT,
 } from './hollow-tide';
+import { deriveClonedVoiceState } from '../../components/voices/voice-library-card';
 import { MOCK_SERIES_MEMORY } from '../series-memory';
 
 describe('Hollow Tide marketing fixtures', () => {
@@ -335,5 +339,62 @@ describe('Hollow Tide series-memory fixture (marketing/wiki screenshots)', () =>
         c.bookIndices.length === detail.series.spanBooks && c.bookIndices[0] === 1,
       );
     }
+  });
+
+  /* #4864 — the v1.15 cloning scenes (clone-voice-*, voice-library-cloned,
+     cast-cloned-voice in e2e/marketing/scenes.ts). */
+  describe('cloned-voice library (v1.15 cloning scenes)', () => {
+    const cloned = () =>
+      HOLLOW_TIDE_VOICE_LIBRARY.find((e) => e.voiceUuid === HOLLOW_TIDE_CLONED_VOICE_UUID)!;
+
+    it('has exactly one cloned voice, beside designed ones, with unique ids', () => {
+      const ids = HOLLOW_TIDE_VOICE_LIBRARY.map((e) => e.voiceUuid);
+      expect(new Set(ids).size).toBe(ids.length);
+      expect(HOLLOW_TIDE_VOICE_LIBRARY.filter((e) => e.provenance === 'cloned')).toHaveLength(1);
+      expect(HOLLOW_TIDE_VOICE_LIBRARY.filter((e) => e.provenance === 'designed').length).toBeGreaterThan(0);
+    });
+
+    it("is the fictional series author's own voice, with a complete, unrevoked consent record", () => {
+      const author = HOLLOW_TIDE_LIBRARY.authors[0].name;
+      expect(author).toBe('Marin Vale');
+      const { consent, name } = cloned();
+      expect(name).toBe(author);
+      expect(consent).toMatchObject({
+        personName: author,
+        relationship: 'self',
+        permittedUse: 'personal',
+        attestedBy: author,
+      });
+      expect(consent?.revokedAt).toBeUndefined();
+    });
+
+    it('is healthy and ready on both clone-capable engines, so the card shows no warning chip', () => {
+      const entry = cloned();
+      expect(entry.engines.qwen?.status).toBe('ready');
+      expect(entry.engines.xtts?.status).toBe('ready');
+      expect(entry.master?.transcript).toBe(HOLLOW_TIDE_CLONE_TRANSCRIPT);
+      expect(deriveClonedVoiceState(entry)).toBeNull();
+    });
+
+    it('casts the cloned voice on The Drowning Bell narrator, in the shape the drawer assign writes', () => {
+      const narrator = HOLLOW_TIDE_BOOK_STATES.get('hollow-tide-1')!.cast!.characters.find(
+        (c) => c.id === 'narrator',
+      )!;
+      expect(narrator.ttsEngine).toBe('qwen');
+      expect(narrator.overrideTtsVoices?.qwen).toEqual({
+        name: `qwen-${HOLLOW_TIDE_CLONED_VOICE_UUID}`,
+        libraryUuid: HOLLOW_TIDE_CLONED_VOICE_UUID,
+        provenance: 'cloned',
+      });
+    });
+
+    it('leaves the reused narrator in Books 2-4 uncloned, so no other scene changes', () => {
+      for (const bookId of ['hollow-tide-2', 'hollow-tide-3', 'hollow-tide-4']) {
+        const narrator = HOLLOW_TIDE_BOOK_STATES.get(bookId)!.cast!.characters.find(
+          (c) => c.id === 'narrator',
+        )!;
+        expect(narrator.overrideTtsVoices).toBeUndefined();
+      }
+    });
   });
 });
