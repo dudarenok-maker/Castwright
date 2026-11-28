@@ -504,7 +504,7 @@ Frontend:
 - **#3436:** include the full writer list (spec §2.6), including the exclude toggle an Include calls before its subset POST (A17).
 - **#3437:** comment that a non-fresh Resume during a drain is now refused (spec §2.4) and that Start fresh displacement stays its scope.
 - **File follow-ups** (each its own issue, labelled per CONTRIBUTING.md):
-  - restructure does not remap chapter-keyed analysis state (records, `chapterCast`, P);
+  - restructure does not remap chapter-keyed analysis state (records, `chapterCast`, P) (filed as #3506, since fixed: see the follow-up note in [plan 51](archive/51-restructure-chapters.md));
   - **decision C:** a better treatment for included chapters with no narratable text (auto-exclude at analysis, or skip at generation and count the chapter complete). This PR only changes the generation copy.
 - **Close #3439** with a pointer to the new PR.
 - `docs/features/INDEX.md`: keep the 287 entry current.
@@ -548,7 +548,7 @@ Recorded in `docs/testing/onbox-acceptance-register.md` by T7:
 
 - The #3436 residual writers (spec §2.6).
 - #3437: Start fresh displacement stragglers.
-- Restructure remapping (follow-up issue).
+- Restructure remapping (follow-up #3506, since fixed: see the follow-up note in [plan 51](archive/51-restructure-chapters.md)).
 - A better treatment for chapters with no narratable text beyond the copy (decision C follow-up).
 
 ## Implementation notes

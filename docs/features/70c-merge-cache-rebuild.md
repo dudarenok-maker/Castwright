@@ -20,7 +20,7 @@ owner: null
 ## Architectural impact
 
 - **New seams.**
-  - `server/src/store/analysis-cache-rebuild.ts` — exports `rebuildCacheFromEdits(manuscriptId, editsPath)`. Reads manuscript-edits.json via the existing `readJson` helper, groups sentences by `chapterId`, sorts each chapter's sentences by `id`, and writes the result via `saveAnalysisCache`. Carries forward `chapterCast` / `castDurations` / `stage2Durations` / `stage1` / `failedChapterIds` from any prior cache (those are keyed by chapterId too but generation doesn't read them; the analyzer's observed-rate samples and Phase 0 roster aren't worth dropping on every structural edit).
+  - `server/src/store/analysis-cache-rebuild.ts` — exports `rebuildCacheFromEdits(manuscriptId, editsPath)`. Reads manuscript-edits.json via the existing `readJson` helper, groups sentences by `chapterId`, sorts each chapter's sentences by `id`, and writes the result via `saveAnalysisCache`. Carries forward `chapterCast` / `castDurations` / `stage2Durations` / `stage1` / `failedChapterIds` from any prior cache (those are keyed by chapterId too but generation doesn't read them; the analyzer's observed-rate samples and Phase 0 roster aren't worth dropping on every structural edit). Since #3506 a restructure passes `remap`, which moves the chapter-keyed records to each chapter's new id, and resets merged and split chapters, instead of keeping the old keys.
   - Auto-heal path in `generation.ts:259-271`: when `loadAnalysisCache` returns an empty `chapters` map, attempt `rebuildCacheFromEdits` once before falling through to the original "Re-run analysis first" error. Recovers any book whose cache was wiped under the pre-fix code AND any future book whose cache file gets deleted out-of-band.
 - **Invariants preserved.**
   - `AnalysisCache.chapters: Record<number, SentenceOutput[]>` — outer key still the new chapter id, inner sentences still id-ascending. `SentenceOutput` shape unchanged (`{id, chapterId, characterId, text, confidence?}`); manuscript-edits.json conforms to it exactly (only `confidence` is optional, and edited sentences correctly omit it — load-bearing because zod's `.strict()` would reject unknown keys).
@@ -65,7 +65,7 @@ owner: null
 
 ## Out of scope
 
-- **chapterCast / castDurations id remapping.** Post-restructure these may be keyed by stale chapter ids (the rebuild carries them forward unchanged). Generation does not consume them, so the bug is dormant; the analyzer's observed-rate fallback handles a missing sample without trouble. If a future regression surfaces (e.g. the Phase 0 roster pill showing wrong-chapter cast), reopen here and use the merge route's `sentenceRemap` table to remap these maps in lockstep.
+- **chapterCast / castDurations id remapping.** Out of scope for this plan, and done later by #3506: a restructure now remaps these maps to the new chapter ids, paired by chapter `uuid`, and resets merged and split chapters. See the follow-up note in [plan 51](archive/51-restructure-chapters.md), which also lists the cases it does not cover.
 - **Frontend "Restore cache" affordance.** The auto-heal makes the bug invisible from the next Generate click; no banner work needed. If a future failure mode requires explicit user consent to rebuild (e.g. when the manuscript-edits.json content is suspect), reopen.
 - **OpenAPI changes.** None required — `POST /generation` and `POST /chapters/{merge,split,reorder}` keep their existing shapes. The route bodies change behaviour, not contract.
 
