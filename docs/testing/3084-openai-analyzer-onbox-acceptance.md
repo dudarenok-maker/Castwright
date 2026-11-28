@@ -8,7 +8,7 @@
 > Regression plan: [`docs/features/284-openai-compatible-analyzer.md`](../features/284-openai-compatible-analyzer.md)
 > Issue: [#3084](https://github.com/dudarenok-maker/Castwright/issues/3084)
 >
-> Register rows: A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (§15, Gemini config payload).
+> Register rows: A113 (§6), A116 (§9), E110 (§1), E111 (§2), E112 (discharged 2026-11-28 (#4728), removed from the register; §5), A109 (§10 below, rewritten by #3777; the id is unchanged), A118 (§11, endpoint reasoning styles on llama-swap), A119 (§14, custom payload on real servers), B107 (discharged 2026-11-26 (#4699), removed from the register; §12, Ollama reasoning levels and Test attribution), E114 (§13, Gemini reasoning levels) and E115 (discharged 2026-11-28 (#4738), removed from the register; §15, Gemini config payload).
 
 ---
 
@@ -81,7 +81,7 @@ For each model in turn — `gemini-3.5-flash-lite`, `gemini-3.6-flash`,
 
 Recommendation (keep / lower to … / raise to …, at most 290000):
 
-Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 (discharged 2026-11-26 (#4699), removed from the register) result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
+Run by / date / SHA: claude lane (#4705) / 2026-11-26 / see commit `docs(docs): on-box B107 result (#4699)` claude lane / 2026-11-26 / main a3a0ff6e
 
 ---
 
@@ -113,9 +113,14 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
      before and after).
 3. Set Advanced Settings → "Gemini max output tokens" to `8192`, re-run the
    same chapter, and record the same fields.
-4. **Gemma split.** Select `gemma-4-31b-it` for both phases, set "Gemini max
+4. **Gemma split.** Select `gemma-4-31b-it` for both phases, set its reasoning
+   level to **`off`** (`analyzerReasoningByEngine.gemini["gemma-4-31b-it"] =
+   "off"`, or Advanced settings → Analyzer request controls), set "Gemini max
    output tokens" to `64`, and analyse the same chapter. A 64-token cap is far
-   below any chapter's reply, so Gemma must stop at `MAX_TOKENS`. Record:
+   below any chapter's reply, so Gemma must stop at `MAX_TOKENS`. At Gemma's
+   default (reasoning on), an `analyzer-reasoning-overflow` after a `bytes=0`
+   truncation is the by-design outcome (#4723). Record:
+   - the `thoughtPartsBeforeAnswer` of each `[gemini] stream-timing` line;
    - every `[gemini] output truncated reason=MAX_TOKENS bytes=0` line;
    - whether a `section N/M` re-split log line follows each of them;
    - any `analyzer-reasoning-overflow` failure;
@@ -125,16 +130,20 @@ on it twice (Auto, then the 8192 baseline). Start on a fresh daily quota.
    **If no `bytes=0` line appears at `64`, this row FAILS.** Record the
    truncation lines that did appear and the SHA. The split recovery is unproven
    until an empty `MAX_TOKENS` has been reproduced.
-5. Clear the override (back to Auto).
+5. Clear the override (back to Auto), and set Gemma's reasoning level back to
+   the model default.
 
 ### Pass
 
 - Auto completes the chapter with no `analyzer-timeout` and no
   reasoning-overflow failure.
 - Auto uses no more requests than the 8192 run.
-- On `gemma-4-31b-it` at `64`, at least one `bytes=0` truncation appears,
+- On `gemma-4-31b-it` with reasoning `off` at `64`,
+  `thoughtPartsBeforeAnswer=0`, at least one `bytes=0` truncation appears,
   every one is followed by a re-split, and no `analyzer-reasoning-overflow`
-  failure occurs.
+  failure occurs. At Gemma's default (reasoning on), an
+  `analyzer-reasoning-overflow` after a `bytes=0` truncation is the by-design
+  outcome (#4723).
 - A truncation or overflow in the 8192 run is the baseline being recorded, not
   a failure of this row.
 
@@ -144,9 +153,17 @@ Auto — Result: NOT RUN — gemini-3.6-flash 503 UNAVAILABLE on 3 attempts (als
 
 8192 baseline — Result: NOT RUN — same 503.
 
+Auto (re-run) — Result: PASS (completion bullet only) — "Chapter One — The Knock", chapter 1, 19,928 chars, gemini-3.6-flash: 19 requests, 1,183 s, firstChunkMs/firstAnswerMs first 19621/19652, max 97488/105321; 192 heartbeat events, moving during thinking; no stream idle, truncation, retry, analyzer-timeout or reasoning overflow; 380 sentences, chapter flagged attribution-incomplete (the input repeats its own opening paragraphs). Evidence: onbox-gemini-rerun-results/E111/part2-*.
+
+8192 baseline (re-run) — Result: NOT RUN on gemini-3.6-flash — first request 429, free-tier limit 20 requests a day, retry in 8h26m. Substitute gemini-3.7-flash (served as gemini-3.8-flash on the probe), PASS-on-substitute for recording the baseline only: 7 requests, firstChunkMs/firstAnswerMs first 31254/50605, max 31294/87628; 106 heartbeat events; 3 MAX_TOKENS truncations, 1 retry (503), 1 analyzer-timeout (thinking window, 120016 ms), no reasoning overflow; chapter not completed.
+
+Auto uses no more requests than 8192 — Result: STILL OWED — 19 (3.6, completed) and 7 (substitute, stopped early) do not compare.
+
 Gemma split — Result: FAIL — bytes=0 MAX_TOKENS reproduced twice at 64, but followed by analyzer-reasoning-overflow, no re-split (bug #4723).
 
-Run by / date / SHA:
+Gemma split (reasoning off) — Result: FAIL — 19,928 chars at 64: both streams that answered showed thoughtPartsBeforeAnswer=1 (empty thought part, bug #4851); no bytes=0 truncation (two truncations, bytes=188 and 187, each followed by a smaller request; section 1/5 logged after the first); no analyzer-reasoning-overflow — NOT PROVEN (no empty truncation occurred; see #4851); chapter not completed (idle stream, then 503). Evidence: onbox-gemini-rerun-results/E111/.
+
+Run by / date / SHA: claude lane (#4729, Gemma split only) / 2026-11-28 / main ddf1b3f0; claude lane (#4730, thinking-model runs) / 2026-11-28 / d1c89dca (main ddf1b3f0 plus docs)
 
 ---
 
@@ -195,7 +212,7 @@ Short-context tags — Result:
 
 Run by / date / SHA:
 
-## 4. Ollama structured-output modes — register row B105
+## 4. Ollama structured-output modes — register row B105 — removed from the register 2026-11-28 by owner ruling, #4883
 
 Book: *The Coalfall Commission* chapter one (`server/src/__fixtures__/the-coalfall-commission.md`).
 
@@ -211,17 +228,20 @@ Prerequisites: a real Ollama daemon with `qwen3.5:4b` pulled; no TTS engine resi
 
 Run by / date / SHA: claude lane (#4704) / 2026-11-26 / fb95fffe (base; evidence commit on chore/ops-onbox-batch-2).
 
-## 5. Gemini `schema` mode — register row E112
+## 5. Gemini `schema` mode — register row E112 (discharged 2026-11-28 (#4728), removed from the register)
 
 Book: as §4. Prerequisites: a Gemini API key; no local analyzer needed.
 
 1. Set `analyzer.gemini.structuredOutput` = `schema`. Analyse chapter one on `gemma-4-31b-it`. Record: HTTP 400 or accepted; the debug "schema adapter dropped" list; first-attempt conformance.
    Result: not observed — 503 UNAVAILABLE (high demand) on all 9 attempts over 3 runs (2026-11-26 18:41–18:46); no HTTP 400 seen; "schema adapter dropped" list logged and matches the `gemini / stage1Chapter` snapshot (6 minLength keys). Evidence: onbox-batch-2-results/E112/.
+   Result (2026-11-28 re-run): accepted, no HTTP 400; dropped list = the 6 `gemini / stage1Chapter` snapshot keys exactly; first reply conformed (6 characters, 0 validation retries), on the third transport attempt after two 503s. Evidence: onbox-gemini-rerun-results/E112/.
 2. Repeat on `gemini-3.5-flash-lite`.
    Result: accepted, no HTTP 400; dropped list = the 6 snapshot keys exactly; first attempt conformed (5 characters, 0 validation retries). Evidence: onbox-batch-2-results/E112/.
 3. Restore `json`.
 
 Run by / date / SHA: claude lane (#4701) / 2026-11-26 / 035ff80a (base; evidence commit on chore/ops-onbox-batch-2). Step 3: structuredOutput was set via server env only, nothing saved to restore.
+
+Run by / date / SHA (step 1 re-run): claude lane (#4731) / 2026-11-28 / 68849e3a (docs-only over main ddf1b3f0; evidence commit on chore/ops-onbox-gemini-rerun). Step 3: server env only again, nothing saved to restore.
 
 ## 6. Live structured output — register row A113
 
@@ -459,16 +479,23 @@ a day, and §1 and §2 also use it; run this on a different day.
   decision to reopen.
 
 Test verdicts: 3.6-flash all five levels accepted; 3.8-flash and gemma-4-31b-it NOT RUN (API 503 / thinking-window stop, 5 attempts each). Result: partial
+Result (2026-11-28 re-run): gemma-4-31b-it `model-default`, `off`, `on` all accepted (PASS); 3.8-flash nothing recorded (its four level requests returned 200, then the schema check hit the daily quota); 3.8-flash Advanced row offers no `minimal`. Result: partial
 
 Thought tokens (`model-default` / `high`; Gemma `off` / `on`): not measured (3.6-flash chapter run gave no answer inside 120 s). Result: NOT RUN
+Result (2026-11-28 re-run): Gemma `off` no `thoughtsTokenCount` / `on` 3169 on the same stage-1 request (PASS); 3.6-flash not measured (daily quota). Result: partial
 
 A8, Gemma `on` step: no verdict (503 inconclusive). Result: STILL OWED
+Result (2026-11-28 re-run): `on` accepted (`thinkingLevel: HIGH` with `includeThoughts`, HTTP 200). Result: PASS
 
 G1, `on` vs default: not attempted (Gemma 503). Result: NOT RUN
+Result (2026-11-28 re-run, `config.maxOutputTokens=1200` on both legs, 31,140-byte chapter): `on` empty `MAX_TOKENS` → `analyzer-reasoning-overflow`, run stopped (PASS); default level also → `analyzer-reasoning-overflow`, no split, 2 of 2 (FAIL against this section; owner decision owed in #4851). Result: on PASS, default FAIL
 
 Stale `minimal` refusal and row: refusal PASS (analyzer-request-rejected, when=before-start); row display not opened in a browser. Result: partial
+Result (2026-11-28 re-run, row display only): the row shows `minimal` selected beside the offered levels; refusal not re-run. Result: PASS
 
 Run by / date / SHA: claude lane (#4702) / 2026-11-26 / main 035ff80a; evidence docs/testing/onbox-batch-2-results/E114/
+
+Run by / date / SHA (re-run): claude lane (#4732) / 2026-11-28 / 2d6dcd62 (docs-only over main ddf1b3f0; evidence commit on chore/ops-onbox-gemini-rerun); evidence docs/testing/onbox-gemini-rerun-results/E114/. Step 5: an isolated settings file was used and restored.
 
 ## 14. Custom payload on real servers — register row A119
 
@@ -518,7 +545,7 @@ Overflow wording and fixes, `max_tokens` 64 / null: ___ / ___ Result:
 
 Run by / date / SHA:
 
-## 15. Gemini config payload — register row E115
+## 15. Gemini config payload — register row E115 (discharged 2026-11-28 (#4738), removed from the register)
 
 **Hardware:** any machine with a Gemini API key; no GPU.
 
@@ -546,8 +573,8 @@ topK chapter: 3 chapters, 14 characters, no error Result: PASS
 
 Label with `maxOutputTokens`: "+ custom params", "max output set by custom params" Result: PASS
 
-Rejected safetySettings, screen / `server.log`: value [redacted], code unknown / value [redacted] Result: FAIL (code is unknown, not analyzer-request-rejected; #4718)
+Rejected safetySettings, screen / `server.log`: value [redacted], code analyzer-request-rejected / value [redacted], 0 probe-value hits Result: PASS (2026-11-28, #4738; the 2026-11-26 run was FAIL with code unknown, #4718)
 
 `httpOptions` refusal: 400 naming config.httpOptions Result: PASS
 
-Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main)
+Run by / date / SHA: claude / 2026-11-26 / 035ff80a (main); rejected-value step re-run by claude / 2026-11-28 / f36e7873 (fix/server-4718-gemini-400-classify)

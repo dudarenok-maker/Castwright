@@ -62,7 +62,8 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await page.goto('/#/books/sb/listen');
     const chip = page.getByTestId('topbar-queue-chip');
     await chip.waitFor({ state: 'visible', timeout: 10_000 });
-    await expect(chip).toContainText('Queue · 2');
+    await expect(chip).toHaveText('2');
+    await expect(chip).toHaveAccessibleName('Generation queue — 2 pending');
 
     await chip.click();
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
@@ -131,7 +132,8 @@ test.describe('queue modal (plan 102 / 111)', () => {
     await page.goto('/#/books/sb/listen');
     const chip = page.getByTestId('topbar-queue-chip');
     await chip.waitFor({ state: 'visible', timeout: 10_000 });
-    await expect(chip).toContainText('Queue · 2');
+    await expect(chip).toHaveText('2');
+    await expect(chip).toHaveAccessibleName('Generation queue — 2 pending');
     await chip.click();
     await expect(page.getByRole('dialog', { name: /Generation queue/i })).toBeVisible({
       timeout: 5_000,

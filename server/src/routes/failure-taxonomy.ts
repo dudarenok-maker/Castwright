@@ -24,6 +24,7 @@ import { FAILURE_REMEDIATIONS } from './failure-remediations.js';
 export { FAILURE_REMEDIATIONS, type FailureRemediationCopy } from './failure-remediations.js';
 import { ApiError } from '@google/genai';
 import { DailyQuotaExhaustedError } from '../analyzer/rate-limit.js';
+import { tryParseApiError } from '../analyzer/api-error-envelope.js';
 import {
   AnalyzerTruncatedError,
   AnalyzerHttpError,
@@ -597,30 +598,7 @@ function trimQuotaMessage(message: string): string {
   return message.slice(0, 240) + (message.length > 240 ? '…' : '');
 }
 
-export function tryParseApiError(
-  raw: string,
-): { code?: number; message: string; status?: string; details?: unknown[] } | null {
-  /* SDK messages often look like 'got status: 503 UNAVAILABLE. {"error":{...}}'.
-     Find the first '{' and try to parse from there. */
-  const start = raw.indexOf('{');
-  if (start < 0) return null;
-  try {
-    const obj = JSON.parse(raw.slice(start)) as {
-      error?: { code?: number; message?: string; status?: string; details?: unknown[] };
-    };
-    if (obj?.error?.message) {
-      return {
-        code: obj.error.code,
-        message: obj.error.message,
-        status: obj.error.status,
-        details: obj.error.details,
-      };
-    }
-  } catch {
-    return null;
-  }
-  return null;
-}
+export { tryParseApiError };
 
 /* Only Gemini's key-rejection signals — the envelope reasons and the "API key [<redacted key>] not
    valid / expired" wording. A bare mention of an `api_key` request field is a request-shape error. */
@@ -1037,9 +1015,15 @@ const ENDPOINT_UNREACHABLE_REMEDIATION =
   "Check that the endpoint's server is running and that its base URL in Settings is right, then " +
   'retry. Castwright switches to Gemini only when a Gemini key is saved and cloud fallback is on.';
 
-/* A Gemini key problem (an ApiError, or the 400 whose wording names the key) points at both places
-   the key can live; the static `auth` text is neutral across every source. Anything else keeps the static copy. */
-function geminiAuthRemediation(err: unknown, code: FailureCode): string | undefined {
+/* Gemini-specific remediation overrides. A key problem (an ApiError, or the 400 whose wording names the key)
+   points at both places the key can live; the static `auth` text is neutral across every source. Anything else
+   keeps the static copy. */
+function geminiRemediation(err: unknown, code: FailureCode): string | undefined {
+  /* A Gemini 500/503 is Google's outage, not a local daemon: the static copy (start Ollama, switch to
+     Gemini) is wrong on both halves. Only an ApiError is Gemini's; Ollama and endpoints keep it. */
+  if (code === 'analyzer-unreachable' && err instanceof ApiError) {
+    return 'Gemini is temporarily unavailable. Retry the chapter, or resume the run later.';
+  }
   if (code !== 'auth') return undefined;
   const status = (err as { status?: number })?.status;
   if (!(err instanceof ApiError) && status !== 400) return undefined;
@@ -1083,8 +1067,9 @@ function invalidOutputHint(
     : 'structured output was off — "json" or "schema" usually prevents this';
 }
 
-/* The advice follows the run's own mode. Gemini is never steered to "schema": whether it
-   accepts that mode is still owed on-box acceptance (E112). */
+/* The advice follows the run's own mode. Gemini is deliberately not yet steered to "schema":
+   E112 passed on-box on 2026-11-28 (#4728), and whether to change the advice is decided in
+   #4887. */
 function invalidOutputRemediation(
   transport: TransportKind,
   mode: AnalyzerInvalidOutputError['structuredOutputMode'],
@@ -1417,7 +1402,7 @@ export function classifyAnalysisFailure(
       code,
       `${modelLabel} returned ${parsed.code ?? status ?? '???'}${statusSuffix}: ${trimmed}`,
       formatErrorDetail(parsed, raw),
-      geminiAuthRemediation(err, code),
+      geminiRemediation(err, code),
     );
   }
   if (status) {
@@ -1425,7 +1410,7 @@ export function classifyAnalysisFailure(
     if (code === 'analyzer-request-rejected') {
       return requestRejected(modelLabel, err instanceof ApiError ? 'gemini' : undefined, raw);
     }
-    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiAuthRemediation(err, code));
+    return withCopy(code, `${modelLabel} returned ${status}: ${raw}`, undefined, geminiRemediation(err, code));
   }
   /* Not an API envelope — give the signature table a chance (catches the
      connection-refused / fetch-failed family) before the unknown fallback. */

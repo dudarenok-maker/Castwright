@@ -1,0 +1,29 @@
+start 14:01:36 +11:00 POST /api/manuscripts/mns_PlwfgsKXZU/analysis {model:gemma-4-31b-it,fresh:true} saved reasoning={"gemini":{"gemma-4-31b-it":"off"}} chars=3445 bytes=3455 words=652
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":24154,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 6 characters in 1m 24s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Detected 6 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Unknown Villager"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 1m 24s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 1m 24s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~7m 0s) via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 done — 58 sentences in 2m 13s"}
+data: {"kind":"log","phaseId":1,"message":"Attribution: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":1,"message":"Attributed 58 sentences across 1 chapter"}
+data: {"kind":"log","phaseId":1,"message":"Narrator: 28 lines"}
+data: {"kind":"log","phaseId":1,"message":"Master Oduvan: 14 lines"}
+data: {"kind":"log","phaseId":1,"message":"Coalfall: 7 lines"}
+data: {"kind":"log","phaseId":1,"message":"Wren: 4 lines"}
+data: {"kind":"log","phaseId":2,"message":"No library matches yet (voice library matching is not wired up for this slice)."}
+data: {"kind":"log","phaseId":1,"message":"Folded 1 background character (1 → Unknown male) — names rolled into aliases."}
+data: {"kind":"result","response":{"bookId":"e114-gemma-off-2","manuscriptId":"mns_PlwfgsKXZU","title":"E114 gemma-off-2","phaseTimings":[{"id":0,"label":"Detecting characters","duration":244286},{"id":1,"label":"Parsing and attribution","duration":244284},{"id":2,"label":"Matching library","duration":27800}],"characters":[{"id":"narrator","name":"Narrator","role":"Third-person observer","color":"narrator","attribute…
+HTTP 200 total=244.311s
+end 14:05:41 +11:00

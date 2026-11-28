@@ -18,7 +18,7 @@ header said `IN PROGRESS 2 / QUEUED 42` (live), the "Generation Queue" modal sai
 `Empty — No chapters queued`, and the top bar said `Queued (3 ahead)`. Three
 _independent_ subsystems share the word "queue".
 
-- **User:** the queue modal + "Queue · N" chip no longer claim "Empty"/0 while a
+- **User:** the queue modal + the queue chip (layers icon + count) no longer claim "Empty"/0 while a
   book is visibly generating; the top-bar GPU-contention badge no longer reads
   "Queued (N ahead)" right next to an empty generation queue.
 - **Technical:** the modal/chip read the live `chapters.activeStream` snapshot
@@ -37,7 +37,7 @@ Three distinct subsystems were colliding on the word "queue":
 1. **Per-book SSE generation state** (`chapters-slice`) — Generate-view header +
    per-chapter badges. Real, live.
 2. **Cross-book workspace queue** (`queue-slice` ↔ `.queue.json`) — the modal +
-   "Queue · N" chip. Populated only by explicit regen / Add-to-queue.
+   queue chip (layers icon + count). Populated only by explicit regen / Add-to-queue.
 3. **GPU semaphore depth** (`/api/gpu/queue`, plan 100) — top-bar contention
    badge. Unrelated; just shared the word.
 
@@ -129,8 +129,10 @@ Run in mock mode (`npm run dev:mock`):
 2. While chapters show "Generating", click **View queue** → modal header reads
    "Generating…", the book's in-progress + queued chapters are listed (no
    reorder/cancel controls), and the empty CTA is gone.
-3. Top-bar "Queue · N" chip is reachable on non-Generate views (Cast, Listen)
-   during the run.
+3. The top-bar queue chip (layers icon + count, accessible name
+   "Generation queue — N pending") is reachable on non-Generate views (Cast,
+   Listen) during the run. Expected: the chip is visible and its count is
+   non-zero while the book generates.
 4. Under GPU contention (two sessions), the top-bar prefix reads
    "GPU busy · N waiting ·", not "Queued (N ahead)".
 

@@ -1,0 +1,31 @@
+start 14:05:41 +11:00 POST /api/manuscripts/mns_WBXmxfBWvW/analysis {model:gemma-4-31b-it,fresh:true} saved reasoning={"gemini":{"gemma-4-31b-it":"on"}} chars=3445 bytes=3455 words=652
+data: {"kind":"log","phaseId":0,"message":"Discarded cached progress — starting from scratch."}
+data: {"kind":"log","phaseId":0,"message":"Manuscript: 652 words, 3,445 characters, 1 chapter"}
+data: {"kind":"log","phaseId":0,"message":"Estimated total time: ~21s (refined after stage 1)"}
+data: {"kind":"log","phaseId":0,"message":"Detecting cast chapter-by-chapter across 1 chapter via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":0,"message":"Running 1 chapter cast-detection with up to 2 in parallel."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast — Chapter One — The Knock (3,445 chars) via Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Attributing 1 chapter with Gemma 4 31B…"}
+data: {"kind":"log","phaseId":1,"message":"Estimated stage time: ~17s (pre-flight estimate, refined after stage 1)"}
+data: {"kind":"log","phaseId":1,"message":"Running 1 chapter with up to 2 in parallel."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":1429,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":53876,"reason":"tpm"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 31B in 45s, still waiting."}
+data: {"kind":"throttle","phaseId":0,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":6835,"reason":"retry-after"}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 — no response from Gemma 4 31B in 1m 31s, still waiting."}
+data: {"kind":"log","phaseId":0,"message":"Chapter 1/1 cast done — 6 characters in 3m 41s"}
+data: {"kind":"log","phaseId":0,"message":"Cast detection: peaked at 0 concurrent analyzer calls (K=2)."}
+data: {"kind":"log","phaseId":0,"message":"Quote-match tiers: verbatim=8, terminal-punct=0, segments=3."}
+data: {"kind":"log","phaseId":0,"message":"Detected 6 characters: Narrator, Master Oduvan, Wren, Maerin, Coalfall, Unknown Voice"}
+data: {"kind":"log","phaseId":0,"message":"1 chapter identified in 3m 41s"}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — held back 3m 41s to preserve 10-chapter roster lag."}
+data: {"kind":"log","phaseId":1,"message":"Chapter 1/1 — Chapter One — The Knock (3,445 chars, ~18m 25s) via Gemma 4 31B…"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":5999,"reason":"tpm"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":1320,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":12516,"reason":"tpm"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":4923,"reason":"retry-after"}
+data: {"kind":"throttle","phaseId":1,"chapterIndex":1,"model":"gemma-4-31b-it","waitMs":13682,"reason":"tpm"}
+data: {"kind":"chapter-failed","chapterId":1,"message":"Gemma 4 31B returned 503 (Service Unavailable): {\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","code":"analyzer-unreachable","remediation":"Check that Ollama is running (ollama serve), or swit…
+data: {"kind":"error","code":"analyzer-unreachable","message":"Gemma 4 31B returned 503 (Service Unavailable): {\n  \"error\": {\n    \"code\": 503,\n    \"message\": \"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please try again later.\",\n    \"status\": \"UNAVAILABLE\"\n  }\n}\n","remediation":"Check that Ollama is running (ollama serve), or switch the analyzer to Gemini in Admin → Model Manager with a GEMINI_API_KEY. Then retry the chapter or resume the run.","detail":"status: Service Unavailable"}
+HTTP 200 total=288.133s
+end 14:10:29 +11:00

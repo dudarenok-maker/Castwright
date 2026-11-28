@@ -1,0 +1,164 @@
+{
+  "characters": [
+    {
+      "id": "narrator",
+      "name": "Narrator",
+      "role": "Third-person observer",
+      "color": "narrator",
+      "tone": {
+        "warmth": 50,
+        "pace": 45,
+        "authority": 70,
+        "emotion": 30
+      },
+      "gender": "neutral",
+      "description": "A measured narrator describing the scene in the forge",
+      "evidence": [
+        {
+          "quote": "The forge had gone the colour of a banked sunset, and Wren was scraping the last of the clinker when the knocking started.",
+          "note": "Establishes the setting and atmosphere."
+        },
+        {
+          "quote": "The dragon filled the dark beyond it the way water fills a cup.",
+          "note": "Observational and descriptive."
+        }
+      ]
+    },
+    {
+      "id": "oduvan",
+      "name": "Master Oduvan",
+      "role": "Blacksmith",
+      "color": "marcus",
+      "tone": {
+        "warmth": 40,
+        "pace": 50,
+        "authority": 80,
+        "emotion": 20
+      },
+      "gender": "male",
+      "ageRange": "elderly",
+      "description": "An elderly smith with a voice like gravel and patience.",
+      "evidence": [
+        {
+          "quote": "Whoever it is can knock.",
+          "note": "Shows his patience and stubbornness."
+        },
+        {
+          "quote": "At this hour it's either a drunk or a debt. Neither pays better for being let in quickly.",
+          "note": " "
+        },
+        {
+          "quote": "The best smith in the valley died nine years back. You'll have to make do with the second.",
+          "note": "Dry humor and modesty."
+        }
+      ]
+    },
+    {
+      "id": "wren",
+      "name": "Wren",
+      "role": "Apprentice smith",
+      "color": "eliza",
+      "tone": {
+        "warmth": 60,
+        "pace": 60,
+        "authority": 20,
+        "emotion": 50
+      },
+      "gender": "female",
+      "ageRange": "teen",
+      "description": "Oduvan's thirteen-year-old apprentice.",
+      "evidence": [
+        {
+          "quote": "It might be a customer.",
+          "note": "Hopeful or curious."
+        },
+        {
+          "quote": "A real one?",
+          "note": " "
+        },
+        {
+          "quote": "I never sigh,",
+          "note": " "
+        },
+        {
+          "quote": "I'm not crying.",
+          "note": " "
+        }
+      ]
+    },
+    {
+      "id": "id-unknown-male",
+      "name": "Unknown Male",
+      "role": "Villager",
+      "color": "halloran",
+      "tone": {
+        "warmth": 20,
+        "pace": 70,
+        "authority": 30,
+        "emotion": 80
+      },
+      "gender": "male",
+      "description": "A panicked villager shouting from the dark.",
+      "evidence": [
+        {
+          "quote": "Run, you fools — it'll have the lot of you!",
+          "note": "High emotion, excited."
+        }
+      ]
+    },
+    {
+      "id": "maerin",
+      "name": "Maerin",
+      "role": "Reeve",
+      "color": "eliza",
+      "tone": {
+        "warmth": 30,
+        "pace": 70,
+        "authority": 70,
+        "emotion": 30
+      },
+      "gender": "female",
+      "ageRange": "adult",
+      "description": "The reeve, whose words are clipped and urgent.",
+      "evidence": [
+        {
+          "quote": "Oduvan. Bar the shutters and douse the coals.",
+          "note": "Clipped, authoritative."
+        },
+        {
+          "quote": "No, child, a painted one.",
+          "note": " "
+        }
+      ]
+    },
+    {
+      "id": "coalfall",
+      "name": "Coalfall",
+      "role": "Dragon",
+      "color": "marcus",
+      "tone": {
+        "warmth": 50,
+        "pace": 30,
+        "authority": 80,
+        "emotion": 40
+      },
+      "gender": "neutral",
+      "ageRange": "adult",
+      "description": "A dragon with a voice like a tired mountain.",
+      "evidence": [
+        {
+          "quote": "I have come a long way,",
+          "note": "Slow, tired voice."
+        },
+        {
+          "quote": "Modesty, or a sales tactic?",
+          "note": " "
+        },
+        {
+          "quote": "I have nothing but time. Begin.",
+          "note": " "
+        }
+      ]
+    }
+  ]
+}

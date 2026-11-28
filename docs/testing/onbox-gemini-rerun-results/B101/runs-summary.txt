@@ -1,0 +1,17 @@
+current | run 1 | start 15:23:45 | chars 6 | sentences 59 | wall 154s | generate-failed lines 2 (503) | throttle events 3 [retry-after:1254 tpm:28142 retry-after:1706] | completed
+current | run 2 | start 15:26:35 | chars - | sentences - | wall 61s | generate-failed lines 3 (503/429) | throttle events 4 [retry-after:1846 tpm:31682 retry-after:5106 tpm:19228] | ended: cast_incomplete
+current | run 3 | start 15:29:11 | chars 6 | sentences 60 | wall 211s | generate-failed lines 3 (503) | throttle events 5 [retry-after:1509 retry-after:5963 tpm:50847 retry-after:1698 tpm:27862] | completed
+current | run 4 | start 15:34:03 | chars - | sentences - | wall 62s | generate-failed lines 3 (503) | throttle events 3 [retry-after:1178 retry-after:4615 tpm:52360] | ended: cast_incomplete
+current | run 5 | start 15:38:44 | chars 6 | sentences 78 | wall 177s | generate-failed lines 2 (503) | throttle events 3 [retry-after:1822 tpm:22796 retry-after:1864] | completed
+current | run 6 | start 15:42:15 | chars 6 | sentences 60 | wall 160s | generate-failed lines 2 (503) | throttle events 3 [retry-after:1551 tpm:28598 retry-after:1467] | completed
+current | run 7 | start 15:50:03 | chars 6 | sentences - | wall 70s | generate-failed lines 3 (503) | throttle events 3 [retry-after:1691 tpm:27407 retry-after:6616] | ended: analyzer-unreachable
+current | run 8 | start 15:58:58 | chars 6 | sentences 59 | wall 122s | generate-failed lines 3 (503) | throttle events 2 [retry-after:1135 retry-after:5936] | completed
+current | run 9 | start 16:01:16 | chars 6 | sentences 78 | wall 187s | generate-failed lines 1 (503) | throttle events 2 [retry-after:1283 tpm:40576] | completed
+current | run 10 | start 16:05:33 | chars 6 | sentences 59 | wall 150s | generate-failed lines 1 (503) | throttle events 2 [retry-after:1721 tpm:28544] | completed
+current | run 11 | start 16:08:29 | chars 6 | sentences 78 | wall 147s | generate-failed lines 1 (503) | throttle events 1 [retry-after:1833] | completed
+current | run 12 | start 16:11:22 | chars 6 | sentences 78 | wall 329s | generate-failed lines 3 (503) | throttle events 7 [retry-after:1192 tpm:17448 tpm:11455 retry-after:1477 tpm:55963 retry-after:6402 tpm:52790] | completed
+base | run 1 | start 15:23:45 | chars 6 | sentences 77 | wall 148s | generate-failed lines 0 | throttle events 0 | completed
+base | run 2 | start 15:26:35 | chars 6 | sentences 78 | wall 145s | generate-failed lines 0 | throttle events 0 | completed
+base | run 3 | start 15:35:14 | chars 6 | sentences 78 | wall 205s | generate-failed lines 2 (503/429) | throttle events 3 [retry-after:1771 retry-after:7091 tpm:49639] | completed
+base | run 4 | start 15:46:01 | chars 6 | sentences 78 | wall 174s | generate-failed lines 1 (503) | throttle events 2 [retry-after:1459 tpm:28177] | completed
+base | run 5 | start 15:52:19 | chars 6 | sentences 78 | wall 178s | generate-failed lines 2 (503) | throttle events 3 [retry-after:1299 tpm:28576 retry-after:1778] | completed

@@ -1,0 +1,8 @@
+# Analysing screen, Vite dev frontend of this worktree (port 5183) proxied to the test server (8130), 2026-11-28 09:22 AEDT.
+# "Resume analysis" started a browser-driven run (server.log: request received 09:22:16). DOM read after it paused:
+probe value in document.body.innerText: false
+probe value in document.documentElement.outerHTML: false
+failure cards reading "rejected the request (400)": 3, each ending "[redacted]"
+card text: Gemini 3.5 Flash Lite rejected the request (400): Invalid value at 'safety_settings[0].category' (type.googleapis.com/google.ai.generativelanguage.v1beta.HarmCategory), "[redacted]"
+screenshot: screen-analysing.png
+The first-run Setup wizard opened first (voice engine deliberately not started); the Analysing route was opened by setting location.hash.

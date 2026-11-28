@@ -158,7 +158,7 @@ export const selectInFlightEntryIds = createSelector(
    regenerate / "Add to queue" actions. The PRIMARY generation path — first
    generation after analysis, and resume-on-reopen — opens its SSE through the
    generation-stream-middleware `reconcile` (`hasWork(chapters)`), which never
-   writes a queue entry. That left the queue modal + "Queue · N" chip reporting
+   writes a queue entry. That left the queue modal + the queue chip (layers icon + count) reporting
    "Empty"/0 while a book was visibly generating (line counts incrementing).
 
    These two selectors let the modal / chip reflect that live run by reading the
@@ -240,7 +240,7 @@ export const selectActiveGenerationView = createSelector(
   },
 );
 
-/** Count for the "Queue · N" chip + "View queue · N" button. Real queue entries
+/** Count for the queue chip (layers icon + count) + "View queue · N" button. Real queue entries
     win; otherwise reflect the live run so the chip doesn't read 0 / disappear
     while a book generates. Distinct from `selectQueueCount` (which must stay the
     REAL entry count — the modal header + pause gate operate on real entries). */

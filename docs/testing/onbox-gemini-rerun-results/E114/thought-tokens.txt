@@ -1,0 +1,18 @@
+# From an observe-only fetch preload (wiretap.mjs.txt): what the app sent to Gemini and what came back. No headers recorded.
+# "HTTP 200" with an error= field means the stream opened and then failed mid-stream.
+
+## Same stage-1 request, same 3,445-char chapter
+off: req 10 14:02:00 gemma-4-31b-it chars=8502 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 59719ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=1402 thoughtParts=1 thoughtChars=0 answerChars=4693
+on:  req 31 14:06:45 gemma-4-31b-it chars=8501 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 156658ms finish=STOP thoughtsTokenCount=3169 candidatesTokenCount=1495 thoughtParts=133 thoughtChars=10683 answerChars=5025
+
+## All requests of the completed off run (run-gemma-off-2)
+req 10 14:02:00 gemma-4-31b-it chars=8502 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 59719ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=1402 thoughtParts=1 thoughtChars=0 answerChars=4693
+req 13 14:03:01 gemma-4-31b-it chars=6126 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 132064ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=3801 thoughtParts=1 thoughtChars=0 answerChars=10712
+req 24 14:05:13 gemma-4-31b-it chars=3477 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 27502ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=7 thoughtParts=1 thoughtChars=0 answerChars=21
+
+## on run, stage-2 call: failed mid-stream (503) after reporting thought tokens
+req 44 14:09:28 gemma-4-31b-it chars=6147 sent={"temperature":0.2,"maxOutputTokens":32768,"responseMimeType":"application/json","thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 26550ms finish=- thoughtsTokenCount=240 candidatesTokenCount=absent thoughtParts=11 thoughtChars=792 answerChars=0 error="{"code":503,"message":"This model is currently experiencing high demand. Spikes in demand are usually temporary. Please …"
+
+## App Test probes (identical prompt): off, then on
+req 67 14:16:52 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":32768,"thinkingConfig":{"thinkingLevel":"MINIMAL"}} -> HTTP 200 17825ms finish=STOP thoughtsTokenCount=absent candidatesTokenCount=14 thoughtParts=1 thoughtChars=0 answerChars=28
+req 68 14:17:10 gemma-4-31b-it chars=187 sent={"temperature":0,"maxOutputTokens":32768,"thinkingConfig":{"includeThoughts":true,"thinkingLevel":"HIGH"}} -> HTTP 200 31835ms finish=STOP thoughtsTokenCount=111 candidatesTokenCount=14 thoughtParts=7 thoughtChars=449 answerChars=28
