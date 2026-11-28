@@ -59,6 +59,7 @@ import { castDesignActions } from '../store/cast-design-slice';
 import { refreshEmotionVariants } from '../store/emotion-variants-refresh';
 import {
   assignVoice,
+  fetchVoiceLibrary,
   unassignVoice,
   promoteCharacterVoice,
   type VoiceLibraryEntry,
@@ -431,7 +432,18 @@ export function ProfileDrawer({
   const qwenSlotEntry = qwenSlot?.libraryUuid
     ? myVoices.find((e) => e.voiceUuid === qwenSlot.libraryUuid)
     : undefined;
+  /* The Cast drawer never loads the library itself, so the entry may simply not
+     be in the store yet: fetch it, and treat Save as unavailable until it has
+     loaded (a failed load stays unavailable — we can't prove it isn't a clone). */
+  const libraryStatus = useAppSelector(
+    (s) => (s as { voiceLibrary?: { status: string } }).voiceLibrary?.status,
+  );
+  const qwenEntryPending = !!qwenSlot?.libraryUuid && !qwenSlotEntry && libraryStatus !== 'ready';
+  useEffect(() => {
+    if (qwenEntryPending && libraryStatus === 'idle') void dispatch(fetchVoiceLibrary());
+  }, [qwenEntryPending, libraryStatus, dispatch]);
   const qwenVoiceIsClone =
+    qwenEntryPending ||
     qwenSlot?.provenance === 'cloned' ||
     qwenSlotEntry?.provenance === 'cloned' ||
     !!qwenSlotEntry?.consent ||

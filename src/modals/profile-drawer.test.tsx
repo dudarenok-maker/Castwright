@@ -92,6 +92,7 @@ const unassignLibraryVoice = vi.fn(
   (_voiceUuid: string, _args: { bookId: string; characterId: string }) =>
     Promise.resolve<{ cleared: ('qwen' | 'coqui')[] }>({ cleared: ['qwen', 'coqui'] }),
 );
+let listVoiceLibraryResult: unknown[] = [];
 const promoteToLibrary = vi.fn(
   (_args: { bookId: string; characterId: string; name: string }) =>
     Promise.resolve({ voiceUuid: 'lib-new', name: 'New' }),
@@ -104,7 +105,7 @@ vi.mock('../lib/api', () => ({
       unassignLibraryVoice(voiceUuid, args),
     promoteToLibrary: (args: { bookId: string; characterId: string; name: string }) =>
       promoteToLibrary(args),
-    listVoiceLibrary: () => Promise.resolve({ voices: [] }),
+    listVoiceLibrary: () => Promise.resolve({ voices: listVoiceLibraryResult }),
     /* Forward exactly the args received — a 2-arg call stays 2-arg so the
        existing override-write assertions (toHaveBeenCalledWith(id, null))
        keep matching after the optional scope arg landed. */
@@ -2346,6 +2347,64 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
     expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
   });
 
+  it.each([
+    ['consent', { consent: { personName: 'Dad', relationship: 'family-with-permission', permittedUse: 'personal', attestedAt: '2026-01-01T00:00:00.000Z', attestedBy: 'me' } }],
+    ['a clonedFrom link', { clonedFrom: 'orig-clone' }],
+  ])('hides "Save to my voices" when the slot says designed but its entry carries %s', (_l, over) => {
+    const relabelled = { ...myVoicesFixture[0], voiceUuid: 'relab2', ...over } as VoiceLibraryEntry;
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-relab2', libraryUuid: 'relab2', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1', myVoices: [relabelled] },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    expect(screen.queryByTestId('qwen-designed-confirm')).toBeNull();
+  });
+
+  it('fetches the library when the slot names an entry the store lacks, hiding Save until it loads', async () => {
+    listVoiceLibraryResult = [{ ...myVoicesFixture[0], voiceUuid: 'des9' }];
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-des9', libraryUuid: 'des9', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    await waitFor(() =>
+      expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument(),
+    );
+    listVoiceLibraryResult = [];
+  });
+
+  it('keeps Save hidden after the fetch when the loaded entry is cloned', async () => {
+    listVoiceLibraryResult = [
+      { ...myVoicesFixture[0], voiceUuid: 'des8', provenance: 'cloned' },
+    ];
+    renderDrawer(
+      {
+        ...baseChar,
+        ttsEngine: 'qwen',
+        overrideTtsVoices: {
+          qwen: { name: 'qwen-des8', libraryUuid: 'des8', provenance: 'designed' },
+        },
+      },
+      { bookId: 'book-1' },
+    );
+    await waitFor(() => expect(listVoiceLibraryResult.length).toBe(1));
+    await act(async () => {});
+    expect(screen.queryByTestId('profile-drawer-save-to-my-voices')).toBeNull();
+    listVoiceLibraryResult = [];
+  });
+
   it('still shows "Save to my voices" for a DESIGNED qwen slot when the coqui slot is a clone', () => {
     renderDrawer(
       {
@@ -2356,7 +2415,7 @@ describe('ProfileDrawer "My voices" picker + "Save to my voices" (fs-38 Wave 1, 
           coqui: { name: 'xtts-cloneP', libraryUuid: 'cloneP', provenance: 'cloned' },
         },
       },
-      { bookId: 'book-1' },
+      { bookId: 'book-1', myVoices: [{ ...myVoicesFixture[0], voiceUuid: 'desP' }] },
     );
     expect(screen.getByTestId('profile-drawer-save-to-my-voices')).toBeInTheDocument();
     expect(screen.getByTestId('qwen-designed-confirm')).toBeInTheDocument();
