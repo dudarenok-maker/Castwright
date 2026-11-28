@@ -1680,9 +1680,62 @@ describe('POST /api/books/:bookId/generation — [] takes (plan 287)', () => {
     }
   });
 
-  it('a [] take with no record fails with "This chapter has no text to narrate — exclude it to finish the book."', async () => {
+  /* #3507 — a `[]` take with no failure record has nothing to narrate: generation
+     skips it and counts it complete, so the book finishes with no user action. */
+  async function generateWithNoTextChapterOne(body: Record<string, unknown> = {}): Promise<ParsedTick[]> {
     await cacheModule.saveAnalysisCache(MANUSCRIPT_ID, { chapters: { 1: [], 2: WORLD } });
-    expect(await chapterOneFailure()).toBe('This chapter has no text to narrate — exclude it to finish the book.');
+    const res = await request(app)
+      .post(`/api/books/${bookId}/generation`)
+      .send({ modelKey: 'gemini-2.5-flash', force: true, ...body });
+    expect(res.status).toBe(200);
+    return parseTicks(res.text);
+  }
+
+  it('skips a no-text chapter: chapter_complete with skippedNoText, no failure, no audio, no state write', async () => {
+    const statePath = join(bookDir, '.audiobook', 'state.json');
+    const original = fsModule.readFileSync(statePath, 'utf8');
+    const state = JSON.parse(original);
+    /* Earlier cases may have stamped chapter 1; start it unrendered. */
+    const unrendered = { id: 1, title: 'Chapter 1', slug: '01-chapter-one' };
+    state.chapters = state.chapters.map((c: { id: number }) => (c.id === 1 ? unrendered : c));
+    fsModule.writeFileSync(statePath, JSON.stringify(state));
+    try {
+      const ticks = await generateWithNoTextChapterOne();
+
+      expect(ticks.find((t) => t.type === 'chapter_complete' && t.chapterId === 1)).toMatchObject({
+        skippedNoText: true,
+        progress: 1,
+        currentLine: 0,
+        totalLines: 0,
+      });
+      expect(ticks.filter((t) => t.type === 'chapter_failed' && t.chapterId === 1)).toEqual([]);
+      expect(fsModule.existsSync(join(bookDir, 'audio', '01-chapter-one.mp3'))).toBe(false);
+      /* Control: the same run did write the narratable chapter, at the sibling path. */
+      expect(fsModule.existsSync(join(bookDir, 'audio', '02-chapter-two.mp3'))).toBe(true);
+      const after = JSON.parse(fsModule.readFileSync(statePath, 'utf8'));
+      expect(after.chapters.find((c: { id: number }) => c.id === 1)).toEqual(unrendered);
+    } finally {
+      fsModule.writeFileSync(statePath, original);
+    }
+  });
+
+  it('finishes the run with the skipped chapter counted in runDone', async () => {
+    const ticks = await generateWithNoTextChapterOne();
+
+    const completes = ticks.filter((t) => t.type === 'chapter_complete');
+    expect(completes.map((t) => [t.chapterId, t.runDone, t.runTotal, t.runInProgress])).toEqual([
+      [1, 1, 2, 0],
+      [2, 2, 2, 0],
+    ]);
+    expect(ticks.at(-1)?.type).toBe('idle');
+  });
+
+  it('counts an untargeted no-text chapter in runDone on a single-chapter run', async () => {
+    const ticks = await generateWithNoTextChapterOne({ chapterIds: [2] });
+
+    const complete = ticks.find((t) => t.type === 'chapter_complete' && t.chapterId === 2);
+    expect(complete).toMatchObject({ runDone: 2, runTotal: 2 });
+    expect(ticks.at(-1)?.type).toBe('idle');
   });
 
   it('a [] take with a record fails with "Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it."', async () => {

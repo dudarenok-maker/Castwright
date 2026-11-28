@@ -53,7 +53,7 @@ import {
 import { isNonEnglish, sidecarLanguageName, resolveEligibleEngines } from '../tts/language.js';
 import { ALL_TTS_ENGINES } from '../tts/model-keys.js';
 import { chapterAudioExists } from '../workspace/chapter-take.js';
-import { loadAnalysisCache } from '../store/analysis-cache.js';
+import { isNoTextChapter, loadAnalysisCache } from '../store/analysis-cache.js';
 import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
 import {
   canonicalModelKeyForEngine,
@@ -1577,14 +1577,17 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
   abortInFlightSplice(bookId, jobChapterId);
   const controller = new AbortController();
   /* Bug E — seed run-level aggregates from disk state. runTotal = all
-     non-excluded chapters; runDoneBase = non-excluded chapters whose
-     audio exists on disk AND aren't in this run's scope (force-regen of
-     a chapter drops it from "done base" because it's about to be
-     overwritten — done count rebounds via completedThisRun as it
+     non-excluded chapters; runDoneBase = non-excluded chapters that aren't
+     in this run's scope AND are already done: audio exists on disk, or
+     (#3507) there is no narratable text, so no audio will ever exist
+     (force-regen of a chapter drops it from "done base" because it's about
+     to be overwritten — done count rebounds via completedThisRun as it
      finishes). */
   const nonExcluded = state.chapters.filter((c) => !c.excluded);
   const runDoneBase = nonExcluded.filter(
-    (c) => !targetIdSet.has(c.id) && chapterAudioExists(audioRoot, c.slug),
+    (c) =>
+      !targetIdSet.has(c.id) &&
+      (chapterAudioExists(audioRoot, c.slug) || isNoTextChapter(analysis, c.id)),
   ).length;
   const job: RunningJob = {
     controller,
@@ -1712,20 +1715,39 @@ generationRouter.post('/:bookId/generation', async (req: Request, res: Response)
       /* Bug E: drop from in-flight before continuing so the aggregate
          stays accurate when the next chapter is added. */
       job.runInProgress.delete(chapter.id);
-      /* Plan 287 decision C — a `[]` take is a finished analysis (decision B),
-         so say why it produced no audio. With no failure record the chapter
-         had no words to attribute; with one, attribution ran and found no
+      /* #3507 — no narratable text: nothing to render, so skip the chapter and
+         count it complete. Nothing is persisted; the predicate is re-derived
+         from the analysis cache on every run. */
+      if (isNoTextChapter(analysis, chapter.id)) {
+        if (job.currentChapterId === chapter.id) {
+          job.currentChapterId = null;
+          job.lastProgressTick = null;
+        }
+        job.completedThisRun.add(chapter.id);
+        console.info(
+          `[generation] chapter ${chapter.id} "${chapter.title ?? ''}" has no narratable text: ` +
+            'skipped, counted complete',
+        );
+        broadcast(job, {
+          type: 'chapter_complete',
+          chapterId: chapter.id,
+          characterId: null,
+          progress: 1,
+          currentLine: 0,
+          totalLines: 0,
+          skippedNoText: true,
+        });
+        return;
+      }
+      /* Plan 287 decision C — say why the chapter produced no audio. A `[]` take
+         that reaches here has a failure record: attribution ran and found no
          lines. No own key at all is the incomplete-cache case. */
-      const hasKey = Object.hasOwn(analysis.chapters, chapter.id);
-      const flagged = analysis.failedChapterIds?.includes(chapter.id) === true;
       broadcast(job, {
         type: 'chapter_failed',
         chapterId: chapter.id,
-        errorReason: !hasKey
-          ? 'No sentences available for this chapter — analysis cache is incomplete.'
-          : flagged
-            ? 'Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it.'
-            : 'This chapter has no text to narrate — exclude it to finish the book.',
+        errorReason: Object.hasOwn(analysis.chapters, chapter.id)
+          ? 'Speaker attribution found no lines in this chapter. Re-analyse it, or exclude it.'
+          : 'No sentences available for this chapter — analysis cache is incomplete.',
       });
       return;
     }
