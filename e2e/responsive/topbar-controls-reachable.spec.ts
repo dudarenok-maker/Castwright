@@ -385,7 +385,10 @@ test.describe('top-bar controls reachable — explicit widths 640 to 1600', () =
             }
           }
         } catch (e) {
-          failures.push(`@${width}px: ${(e as Error).message.split('\n')[0]}`);
+          // Keep the headline and the measurement ("Received: ...") lines.
+          const lines = (e as Error).message.split('\n');
+          const kept = lines.filter((l, i) => i === 0 || l.trimStart().startsWith('Received'));
+          failures.push(`@${width}px: ${kept.join(' | ')}`);
         }
       }
       expect(failures, 'widths where a header control does not fit').toEqual([]);
