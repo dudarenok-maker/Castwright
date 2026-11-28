@@ -610,7 +610,6 @@ export async function persistPlannedCast(a: {
       const mergedAwayKeys = tombstoneKeys(onDisk);
       if (mergedAwayKeys) sentences = applyMergeTombstones(sentences, mergedAwayKeys);
 
-      const carried = new Set(ov.carriedForward.map((c) => c.id));
       // A drift-refused persist leaves cast.json alone except for one thing (#4100): when the
       // re-read cast holds no narrator-id row and the overlay produced one, that row is appended.
       const recreated = a.driftRefused
@@ -624,7 +623,7 @@ export async function persistPlannedCast(a: {
         ? recreated
           ? [...current, countLines(recreated)]
           : current
-        : (ov.characters as Rows).map((c) => (carried.has(c.id) || sentences.length === 0 ? c : countLines(c)));
+        : (ov.characters as Rows).map((c) => (sentences.length === 0 ? c : countLines(c)));
 
       if (a.driftRefused && recreated) {
         await writeJsonAtomic(castJsonPath(a.bookDir), { characters: finalChars });

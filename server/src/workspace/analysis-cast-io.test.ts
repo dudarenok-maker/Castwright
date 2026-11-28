@@ -742,6 +742,57 @@ describe('persistPlannedCast', () => {
     expect(cast.find((c) => c.id === 'alice')).toMatchObject({ lines: 2, scenes: 1 });
   });
 
+  describe('#4101 every cast row is recounted from the final sentences', () => {
+    /** A row with no `lines` / `scenes` keys at all (`row` always seeds them). */
+    const uncounted = (id: string, name: string): Row => ({ id, name, role: 'secondary', color: 'halloran' });
+    const aliceOnly = (over: Partial<Parameters<typeof persistPlannedCast>[0]> = {}) =>
+      persistArgs({
+        plan: planOf(join('alice', 'alice')),
+        roster: roster(row('alice', 'Alice')),
+        sentences: sentences(['alice', 1]),
+        ...over,
+      });
+    const onDisk = (id: string) => readCast().find((c) => c.id === id);
+
+    it('a prior row the run omits and no sentence names goes to 0 lines and 0 scenes', async () => {
+      writeCast([row('alice', 'Alice'), row('olga', 'Ольга', { lines: 3, scenes: 2 })]);
+      const out = await persistPlannedCast(aliceOnly());
+      expect(out.carriedForward.map((c) => c.id)).toEqual(['olga']);
+      expect(onDisk('olga')).toMatchObject({ lines: 0, scenes: 0 });
+      expect(out.characters.find((c) => c.id === 'olga')).toMatchObject({ lines: 0, scenes: 0 });
+    });
+
+    it('a user-added row the roster does not hold is counted from the sentences that name it', async () => {
+      writeCast([row('alice', 'Alice'), uncounted('zed', 'Zed')]);
+      const out = await persistPlannedCast(
+        aliceOnly({ sentences: sentences(['alice', 1], ['zed', 1], ['zed', 2], ['zed', 2]) }),
+      );
+      expect(out.carriedForward.map((c) => c.id)).toEqual(['zed']);
+      expect(onDisk('zed')).toMatchObject({ lines: 3, scenes: 2 });
+    });
+
+    it('with no sentences at all the on-disk cast keeps its counts', async () => {
+      writeCast([
+        row('alice', 'Alice', { lines: 9, scenes: 4 }),
+        row('olga', 'Ольга', { lines: 3, scenes: 2 }),
+      ]);
+      await persistPlannedCast(aliceOnly({ roster: roster(uncounted('alice', 'Alice')), sentences: sentences() }));
+      expect(onDisk('alice')).toMatchObject({ lines: 9, scenes: 4 });
+      expect(onDisk('olga')).toMatchObject({ lines: 3, scenes: 2 });
+    });
+
+    it('control: a planned row is still counted from the sentences, whatever the roster and disk said', async () => {
+      writeCast([row('alice', 'Alice', { lines: 9, scenes: 9 }), row('olga', 'Ольга')]);
+      await persistPlannedCast(
+        aliceOnly({
+          roster: roster(row('alice', 'Alice', { lines: 7, scenes: 7 })),
+          sentences: sentences(['alice', 1], ['alice', 3]),
+        }),
+      );
+      expect(onDisk('alice')).toMatchObject({ lines: 2, scenes: 2 });
+    });
+  });
+
   it('item 12 (persist): a new id that went live on disk is re-minted and this run\'s sentences follow', async () => {
     writeCast([row('wren', 'Wren', { voiceId: 'user-voice' })]);
     const out = await persistPlannedCast(

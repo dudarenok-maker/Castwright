@@ -1650,7 +1650,7 @@ describe('#4031 main job: cache saves and rolls are additive (Task 19)', () => {
     expect(endState(b)).toEqual({
       cast: ['kit-marlow', 'narrator', 'olga'],
       edits: { [KIT.id]: 9 },
-      lines: { narrator: 0, [KIT.id]: 9, olga: undefined },
+      lines: { narrator: 0, [KIT.id]: 9, olga: 0 },
       history: { [PRIOR_ID]: KIT.id },
       suggestions: [],
     });
@@ -2708,8 +2708,9 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     expect(done(events)).toBe(true);
     const cast = readCast(b.bookDir);
     expect(ids(cast).sort()).toEqual(['anna', 'decl', 'narrator', 'quiet']);
-    expect(cast.find((c) => c.id === 'quiet')).toEqual(quiet);
-    expect(cast.find((c) => c.id === 'decl')).toEqual(decl);
+    /* Carried as they were, but recounted: nothing is attributed to either (#4101). */
+    expect(cast.find((c) => c.id === 'quiet')).toEqual({ ...quiet, lines: 0, scenes: 0 });
+    expect(cast.find((c) => c.id === 'decl')).toEqual({ ...decl, lines: 0, scenes: 0 });
     expect(editLines(b)).toEqual({ anna: 3 });
     expect(history(b).supersededBy).toEqual({});
     expect(readSuggestions(b.bookDir)).toEqual([]);
@@ -2748,7 +2749,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     const cast = readCast(b.bookDir);
     expect(ids(cast).sort()).toEqual(['keep', 'mira', 'narrator']);
     expect(cast.find((c) => c.id === 'keep')).toMatchObject({ name: 'Keeper', aliases: ['Mira'] });
-    expect(cast.find((c) => c.id === 'mira')).toEqual(pr('mira', 'Mira'));
+    expect(cast.find((c) => c.id === 'mira')).toEqual(pr('mira', 'Mira', { lines: 0, scenes: 0 }));
     expect(editLines(b)).toEqual({ keep: 3 });
     /* The merge stays a merge: it is not moved to `displaced`, and nothing is added. */
     const h = history(b);
@@ -2768,8 +2769,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     expect(done(events)).toBe(true);
     const cast = readCast(b.bookDir);
     expect(ids(cast).sort()).toEqual(['narrator', 'wren', 'wren-2', 'wren-n3', 'wren-n4']);
-    expect(cast.find((c) => c.id === 'wren')).toEqual(pr('wren', 'Wren Ash'));
-    expect(cast.find((c) => c.id === 'wren-2')).toEqual(pr('wren-2', 'Wren'));
+    expect(cast.find((c) => c.id === 'wren')).toEqual(pr('wren', 'Wren Ash', { lines: 0, scenes: 0 }));
+    expect(cast.find((c) => c.id === 'wren-2')).toEqual(pr('wren-2', 'Wren', { lines: 0, scenes: 0 }));
     expect(editLines(b)).toEqual({ 'wren-n4': 5, 'wren-n3': 4 });
     expect(linesById(b.bookDir)['wren-n4']).toBe(5);
     expect(pairs(b)).toEqual([['wren-n4', 'wren', 'plan'], ['wren-n4', 'wren-2', 'plan']]);
@@ -2812,9 +2813,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
     const cast = readCast(b.bookDir);
     expect(ids(cast).sort()).toEqual(['narrator', PRIOR_ID, 'zed']);
     expect(editLines(b)).toEqual({ zed: 3, narrator: 3, [PRIOR_ID]: 3 });
-    /* zed's own cast.json `lines` is not asserted: a row the user added mid-run is carried
-       forward from disk uncounted (reported as a Task 26 finding). */
-    expect(linesById(b.bookDir)).toMatchObject({ narrator: 3, [PRIOR_ID]: 3 });
+    /* zed, added by the user mid-run, is carried forward from disk and counted too (#4101). */
+    expect(linesById(b.bookDir)).toMatchObject({ zed: 3, narrator: 3, [PRIOR_ID]: 3 });
     expect(history(b).supersededBy).toEqual({ [FRESH_ID]: PRIOR_ID });
     expect(readSuggestions(b.bookDir)).toEqual([]);
   });
@@ -2832,7 +2832,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
       const cast = readCast(b.bookDir);
       expect(ids(cast).sort()).toEqual(['narrator', 'other', 'survivor']);
       expect(cast.find((c) => c.id === 'survivor')).toMatchObject({ name: 'Old Name', aliases: ['Zed'] });
-      expect(cast.find((c) => c.id === 'other')).toEqual(pr('other', 'Zed'));
+      expect(cast.find((c) => c.id === 'other')).toEqual(pr('other', 'Zed', { lines: 0, scenes: 0 }));
       expect(editLines(b)).toEqual({ survivor: 3 });
       /* Both ids are already supersededBy keys: left exactly as written, nothing re-tagged. */
       expect(history(b).supersededBy).toEqual({ u1: 'survivor', u2: 'survivor' });
@@ -2851,7 +2851,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: identity acceptance (T
       expect(done(events)).toBe(true);
       const cast = readCast(b.bookDir);
       expect(ids(cast).sort()).toEqual(['ana-x-n1', 'narrator', 'survivor', 'z1', 'z2']);
-      expect(cast.find((c) => c.id === 'survivor')).toEqual(pr('survivor', 'Old Name'));
+      expect(cast.find((c) => c.id === 'survivor')).toEqual(pr('survivor', 'Old Name', { lines: 0, scenes: 0 }));
       expect(editLines(b)).toEqual({ 'ana-x-n1': 3 });
       expect(pairs(b)).toEqual([['ana-x-n1', 'z1', 'plan'], ['ana-x-n1', 'z2', 'plan']]);
       expect(history(b).supersededBy).toEqual({ 'ana-x': 'survivor' });
@@ -3976,8 +3976,8 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       return { status: () => merged?.status, target: () => target };
     };
     /** The merge target as the run leaves it: no alias added, and counts never raised above
-        what the merge gave it (a row the roster does not name is carried with its count by
-        the main job and recounted from the edits by the subset job). */
+        what the merge gave it (both jobs recount a row the roster does not name from the
+        edits, #4101). */
     const expectTargetUntouched = (b: HarnessBook, afterMerge: Row, label: string): void => {
       const now = row(b, 'lord-vane')!;
       expect(now.aliases, label).toEqual(afterMerge.aliases);
@@ -4369,7 +4369,7 @@ describe.each(['main', 'subset'] as const)('#4031 %s job: mid-run acceptance (Ta
       /* Rule 9: the degraded history cannot tell the delete from a merge, so its lines stay on its
          id (unresolved, not rerouted); the narrator speaks none. */
       expect(editLines(b)).toEqual({ [gone]: 3, [PRIOR_ID]: 6 });
-      expect(linesById(b.bookDir)).toEqual({ narrator: 0, [PRIOR_ID]: 6, olga: undefined });
+      expect(linesById(b.bookDir)).toEqual({ narrator: 0, [PRIOR_ID]: 6, olga: 0 });
       expect(historyFile(b)).toBe(unreadable);
       expect(readSuggestions(b.bookDir)).toEqual([]);
     });

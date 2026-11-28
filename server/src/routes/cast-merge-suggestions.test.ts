@@ -349,6 +349,52 @@ describe('POST merge-suggestions/dismiss — durable (#4031)', () => {
     expect(readSuggestionsFile().suggestions.map((s) => s.sourceId)).toEqual(['marlo']);
   });
 
+  it('dismissing a plan suggestion drops the cross-book declines newRow shares with the candidate (#4101)', async () => {
+    reseed({
+      suggestions: [
+        {
+          sourceId: 'olya',
+          targetId: 'olga',
+          reason: 'same person?',
+          origin: 'plan',
+          newRow: 'olya',
+          candidate: 'olga',
+        },
+      ],
+    });
+    const shared = { bookId: 'other-book', characterId: 'wren' };
+    const own = { bookId: 'other-book', characterId: 'sparrow' };
+    writeFileSync(
+      join(bookDir, '.audiobook', 'cast.json'),
+      JSON.stringify({
+        characters: [
+          { ...olgaChar, notLinkedTo: [shared] },
+          { ...olyaChar, notLinkedTo: [shared, own] },
+          marloChar,
+        ],
+      }),
+    );
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/cast/merge-suggestions/dismiss`)
+      .send({ sourceId: 'olya', targetId: 'olga' });
+    expect(res.status).toBe(200);
+
+    const rows = readCastRows();
+    expect(rows.find((r) => r.id === 'olya')?.notLinkedTo).toEqual([
+      own,
+      { bookId, characterId: 'olga' },
+    ]);
+    expect(rows.find((r) => r.id === 'olga')?.notLinkedTo).toEqual([
+      shared,
+      { bookId, characterId: 'olya' },
+    ]);
+    expect(readHistory()?.notSamePerson).toEqual([
+      expect.objectContaining({ a: 'olga', b: 'olya' }),
+    ]);
+    expect(readSuggestionsFile().suggestions).toEqual([]);
+  });
+
   it('F14: dismiss under degraded history writes the edges, removes the pair, skips the record and logs', async () => {
     const garbage = '{ this is not json';
     reseed({ historyRaw: garbage });
