@@ -201,17 +201,49 @@ export type TakeId = string;
 const BASE32_ALPHABET = 'abcdefghijklmnopqrstuvwxyz234567';
 const TAKE_ID_RE = /^[a-z2-7]{16}$/;
 
-/** Mint a take id: 16 lowercase base32 characters (alphabet `a-z2-7`) from
-    `crypto.randomBytes`, so it is filename-safe on NTFS (§4.1). */
-export function mintTakeId(): TakeId {
+/* 16 lowercase base32 characters from `crypto.randomBytes`. */
+function mintBase32Id(): string {
   const bytes = randomBytes(16);
   let id = '';
   for (let i = 0; i < 16; i++) id += BASE32_ALPHABET[bytes[i] & 31];
   return id;
 }
 
+/** Mint a take id: 16 lowercase base32 characters (alphabet `a-z2-7`) from
+    `crypto.randomBytes`, so it is filename-safe on NTFS (§4.1). */
+export function mintTakeId(): TakeId {
+  return mintBase32Id();
+}
+
 export function isTakeId(x: unknown): x is TakeId {
   return typeof x === 'string' && TAKE_ID_RE.test(x);
+}
+
+/* ------------------------------------------------------------------ *
+ * Take journal names (§5.A Commit step 3)
+ * ------------------------------------------------------------------ */
+
+export type JournalId = string;
+
+/** Mint a journal id, fresh per operation and never a timestamp: the same
+    16-character alphabet as a take id, so it is filename-safe on NTFS. */
+export function mintJournalId(): JournalId {
+  return mintBase32Id();
+}
+
+/** `<audioRoot>/<slug>.take-journal.<jid>.json`, the per-slug journal's name. */
+export function takeJournalPath(audioRoot: string, slug: string, jid: JournalId): string {
+  return join(audioRoot, `${slug}.take-journal.${jid}.json`);
+}
+
+const TAKE_JOURNAL_NAME_RE = /^(.+)\.take-journal\.([a-z2-7]{16})\.json$/;
+
+/** The slug and journal id a per-slug journal's file name carries, or `null`
+    for any other name: a journal's `.tmp-*` leftover, and a book journal
+    (`.take-journal.relabel.<jid>.json`), which has no slug. */
+export function parseTakeJournalName(name: string): { slug: string; jid: JournalId } | null {
+  const match = TAKE_JOURNAL_NAME_RE.exec(name);
+  return match ? { slug: match[1], jid: match[2] } : null;
 }
 
 /* ------------------------------------------------------------------ *

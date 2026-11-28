@@ -10,19 +10,24 @@
    R10-2 LEAF RULE: `scan.ts` and every module it reaches import take names
    from `take-fields.ts` ONLY, never from this file. This file may import
    `scan.ts` types, `book-state-update.ts`, `audio/segments-io.ts`,
-   `audio/render-integrity/embeddings-io.ts` and `book-op-lock.ts`.
+   `audio/render-integrity/embeddings-io.ts`, `book-op-lock.ts`, and the
+   leaves `book-lock.ts` and `book-dir-key.ts`.
 
    LOCKS (§5.A "Fence and lock placement"): entry points never lock
-   themselves. Each takes a live `BookHandle` from the caller's `withBookOp`
-   and refuses a stale or hand-built one (`assertHeld`, as `moveBookFolder`
-   does). The only lock taken here is `updateStateAtDir`'s `book` -> `state-json`
-   pair, and its mutate callback takes no other lock. */
+   `book-op` themselves. Each takes a live `BookHandle` from the caller's
+   `withBookOp` and refuses a stale or hand-built one (`assertHeld`, as
+   `moveBookFolder` does). The only locks taken here are `updateStateAtDir`'s
+   `book` -> `state-json` pair, whose mutate callback takes no other lock, and
+   the `book` lock around a journal unlink (R7-1), under which nothing else is
+   taken. */
 
 import { spawn } from 'node:child_process';
-import { mkdir, open, stat, unlink } from 'node:fs/promises';
+import { mkdir, open, readFile, readdir, stat, unlink } from 'node:fs/promises';
 import { basename, join } from 'node:path';
 import { existsSync } from 'node:fs';
 import { RENAME_RETRY_DELAYS_MS, jitteredDelayMs, renameWithRetry, RETRYABLE_CODES } from './atomic-rename.js';
+import { canonicalDirKey } from './book-dir-key.js';
+import { withBookLock } from './book-lock.js';
 import { assertHeld, readBookStateOrThrow, type AnyBookHandle } from './book-op-lock.js';
 import { updateStateAtDir } from './book-state-update.js';
 import { audioDir } from './paths.js';
@@ -30,6 +35,7 @@ import type { BookStateJson } from './scan.js';
 import { readJson, writeJsonAtomic } from './state-io.js';
 import {
   CHAPTER_AUDIO_EXTS,
+  TAKE_SIDECAR_SUFFIXES,
   TAKE_STATE_FIELDS,
   chapterAudioExists,
   deriveTakeFields,
@@ -41,11 +47,16 @@ import {
   liveAudioPath,
   livePartPath,
   mintTakeId,
+  parseTakeJournalName,
   previousAudioPath,
   previousPartPath,
+  takeJournalPath,
   type ChapterAudioExt,
+  type JournalId,
   type TakeFields,
+  type TakeId,
   type TakeSegmentsView,
+  type TakeSidecarPart,
 } from './take-fields.js';
 
 export * from './take-fields.js';
@@ -688,6 +699,294 @@ export async function migrateSlugFiles(handle: AnyBookHandle, slug: string): Pro
     }
   }
   return report;
+}
+
+/* ------------------------------------------------------------------ *
+ * The per-slug take journal: the file layer (§5.A "Commit" step 3,
+ * "Journal rules")
+ *
+ * `<slug>.take-journal.<jid>.json` in `audio/`. Phase 2's two per-slug
+ * journals are `commit` and `replace` (the bundle overwrite: the commit's
+ * shape with both local takes discarded). Any other `op` fails the schema.
+ * ------------------------------------------------------------------ */
+
+const TAKE_JOURNAL_OPS = ['commit', 'replace'] as const;
+
+const TAKE_JOURNAL_PHASES = [
+  'discard',
+  'preserve',
+  'discard-live',
+  'install',
+  'installed',
+  'cleanup',
+] as const;
+
+export type TakeJournalPhase = (typeof TAKE_JOURNAL_PHASES)[number];
+
+const TAKE_JOURNAL_ROLES = ['live', 'previous', 'staged'] as const;
+
+/** Which of the three takes a journalled part belongs to. */
+export type TakeJournalRole = (typeof TAKE_JOURNAL_ROLES)[number];
+
+/** One part of a take. Audio carries its real extension. */
+export type TakePartRef = { part: 'audio'; ext: ChapterAudioExt } | { part: TakeSidecarPart };
+
+/** A part that was PRESENT when the journal was written, with its byte size
+    from the same probe that listed it (E15). */
+export type TakeJournalPart = TakePartRef & { size: number };
+
+/** A part replay recorded as lost (R8-1, E15), with the file names it was
+    looked for or quarantined under. */
+export type TakeJournalLostPart = TakePartRef & { take: TakeJournalRole; basenames: string[] };
+
+/** A leftover journal this one superseded (E10): the discard names it still
+    owed unlinking, and whether it still owed an entry drop or review record. */
+export interface TakeJournalSuperseded {
+  jid: JournalId;
+  discards: string[];
+  dropEntry: boolean;
+}
+
+export interface TakeJournal {
+  op: (typeof TAKE_JOURNAL_OPS)[number];
+  /** The id in the journal's file name. */
+  jid: JournalId;
+  phase: TakeJournalPhase;
+  newTakeId: TakeId;
+  liveTakeId: TakeId | null;
+  prevTakeId: TakeId | null;
+  keepPrevious: boolean;
+  parts: Record<TakeJournalRole, TakeJournalPart[]>;
+  chapter: { id: number; slug: string; uuid?: string };
+  clearGenerationState: true;
+  /** Finalize's review input (A3). Absent: leave the review state alone.
+      `null`: drop the pending entry. */
+  review?: { characterId: string; triggeredBy: string } | null;
+  preserved: boolean;
+  oldDuration: string;
+  newDuration: string;
+  /** The review entry's identity stamps (E6); `null` when nothing becomes previous. */
+  entry: {
+    takeId: TakeId;
+    renderedAt: string;
+    previousTakeId: TakeId | null;
+    previousRenderedAt: string | null;
+  } | null;
+  /** Oldest first (R9-3). */
+  supersedes: TakeJournalSuperseded[];
+  lost: TakeJournalLostPart[];
+}
+
+type Check = (value: unknown) => boolean;
+
+const isObject = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v);
+const isString: Check = (v) => typeof v === 'string';
+const isStringOrNull: Check = (v) => v === null || typeof v === 'string';
+const isBoolean: Check = (v) => typeof v === 'boolean';
+/* A file name inside `audio/`: replay renames and unlinks by it, so it can
+   never name a path. */
+const isFileName: Check = (v) =>
+  typeof v === 'string' && v !== '' && v !== '.' && v !== '..' && !/[\\/]/.test(v);
+const isOneOf =
+  (allowed: readonly string[]): Check =>
+  (v) =>
+    typeof v === 'string' && allowed.includes(v);
+const isListOf =
+  (item: Check): Check =>
+  (v) =>
+    Array.isArray(v) && v.every(item);
+/* Every named member passes its check; unnamed members are ignored. */
+const hasShape =
+  (shape: Record<string, Check>): Check =>
+  (v) =>
+    isObject(v) && Object.entries(shape).every(([key, check]) => check(v[key]));
+
+const isPartRef: Check = (v) => {
+  if (!isObject(v)) return false;
+  if (v.part === 'audio') return isOneOf(CHAPTER_AUDIO_EXTS)(v.ext);
+  return isOneOf(Object.keys(TAKE_SIDECAR_SUFFIXES))(v.part);
+};
+const isJournalPart: Check = (v) =>
+  isPartRef(v) && hasShape({ size: (n) => Number.isInteger(n) && (n as number) >= 0 })(v);
+const isLostPart: Check = (v) =>
+  isPartRef(v) &&
+  hasShape({ take: isOneOf(TAKE_JOURNAL_ROLES), basenames: isListOf(isFileName) })(v);
+
+const TAKE_JOURNAL_SCHEMA: Record<keyof TakeJournal, Check> = {
+  op: isOneOf(TAKE_JOURNAL_OPS),
+  jid: isTakeId,
+  phase: isOneOf(TAKE_JOURNAL_PHASES),
+  newTakeId: isTakeId,
+  liveTakeId: isStringOrNull,
+  prevTakeId: isStringOrNull,
+  keepPrevious: isBoolean,
+  parts: hasShape({
+    live: isListOf(isJournalPart),
+    previous: isListOf(isJournalPart),
+    staged: isListOf(isJournalPart),
+  }),
+  chapter: hasShape({
+    id: Number.isInteger,
+    slug: isFileName,
+    uuid: (v) => v === undefined || typeof v === 'string',
+  }),
+  clearGenerationState: (v) => v === true,
+  review: (v) =>
+    v === undefined || v === null || hasShape({ characterId: isString, triggeredBy: isString })(v),
+  preserved: isBoolean,
+  oldDuration: isString,
+  newDuration: isString,
+  entry: (v) =>
+    v === null ||
+    hasShape({
+      takeId: isString,
+      renderedAt: isString,
+      previousTakeId: isStringOrNull,
+      previousRenderedAt: isStringOrNull,
+    })(v),
+  supersedes: isListOf(
+    hasShape({ jid: isTakeId, discards: isListOf(isFileName), dropEntry: isBoolean }),
+  ),
+  lost: isListOf(isLostPart),
+};
+
+/* Why `value` is not a take journal, or `null` when it is one. */
+function takeJournalSchemaError(value: unknown): string | null {
+  if (!isObject(value)) return 'not a JSON object';
+  const bad = Object.entries(TAKE_JOURNAL_SCHEMA).find(([key, check]) => !check(value[key]));
+  return bad ? `invalid or missing "${bad[0]}"` : null;
+}
+
+/** Atomically write (or rewrite, at each phase) `slug`'s journal
+    `journal.jid`, under the caller's book-op. A journal that would read back as
+    unparseable, or that names another slug's chapter, is refused with nothing
+    written. Returns the journal's path. */
+export async function writeTakeJournal(
+  handle: AnyBookHandle,
+  slug: string,
+  journal: TakeJournal,
+): Promise<string> {
+  assertHeld(handle, 'writeTakeJournal');
+  const invalid =
+    takeJournalSchemaError(journal) ??
+    (journal.chapter.slug === slug ? null : '"chapter.slug" is not the journal\'s slug');
+  if (invalid) throw new Error(`[take] refusing to write a take journal for ${slug}: ${invalid}`);
+  const path = takeJournalPath(audioDir(handle.bookDir), slug, journal.jid);
+  await writeJsonAtomic(path, journal);
+  return path;
+}
+
+export type TakeJournalRead =
+  | { kind: 'ok'; journal: TakeJournal }
+  | { kind: 'unparseable'; reason: string };
+
+/** Read one journal, keeping "unreadable" apart from "unparseable" (R6-3,
+    R7-4). `unparseable` (the sweep quarantines it) means the bytes do not
+    parse, or they parse and fail the schema, a name that disagrees with the
+    content included. EVERY error from the read itself (EBUSY, EPERM, ENOENT,
+    any other) propagates: it is a record-step failure, and such a journal is
+    never quarantined. */
+export async function readTakeJournal(path: string): Promise<TakeJournalRead> {
+  /* The read sits OUTSIDE the try: only a parse failure is `unparseable`. */
+  const raw = await readFile(path, 'utf8');
+  let value: unknown;
+  try {
+    value = JSON.parse(raw.startsWith('﻿') ? raw.slice(1) : raw);
+  } catch (err) {
+    if (!(err instanceof SyntaxError)) throw err;
+    return { kind: 'unparseable', reason: err.message };
+  }
+  const invalid = takeJournalSchemaError(value);
+  if (invalid) return { kind: 'unparseable', reason: invalid };
+  const journal = value as TakeJournal;
+  const named = parseTakeJournalName(basename(path));
+  if (named && (named.jid !== journal.jid || named.slug !== journal.chapter.slug)) {
+    return { kind: 'unparseable', reason: 'the file name disagrees with "jid" or "chapter.slug"' };
+  }
+  return { kind: 'ok', journal };
+}
+
+/** A per-slug journal as the directory listing names it. */
+export interface TakeJournalRef {
+  slug: string;
+  jid: JournalId;
+  path: string;
+}
+
+/** One `readdir` of a book's `audio/`: a span takes it once and shares it
+    across its replay calls (R7-8). It is a snapshot of NAMES; no journal has
+    been read. Every list holds file names inside `audioRoot`, sorted. */
+export interface TakeJournalListing {
+  audioRoot: string;
+  /** Per-slug journals, grouped by the slug their names carry. */
+  journals: ReadonlyMap<string, readonly TakeJournalRef[]>;
+  /** Any other `.take-journal.` name: a book journal, or a name nothing parses. */
+  otherJournals: readonly string[];
+  /** `.next-*` staged parts. */
+  next: readonly string[];
+  /** `.discard-*` parts. */
+  discard: readonly string[];
+  /** `*.tmp-*` leftovers, a journal's own included. */
+  tmp: readonly string[];
+  /** `*.stale` names (`discardStaleLiveAudio`). */
+  stale: readonly string[];
+  /** `<slug>.relabel-<jid>-<k>.*` temp names. */
+  relabelTemp: readonly string[];
+}
+
+const RELABEL_TEMP_NAME_RE = /\.relabel-[a-z2-7]{16}-\d+\./;
+
+/** List `audio/` under the caller's book-op. An absent `audio/` is an empty
+    listing; any other `readdir` error propagates. */
+export async function listTakeJournals(handle: AnyBookHandle): Promise<TakeJournalListing> {
+  assertHeld(handle, 'listTakeJournals');
+  const audioRoot = audioDir(handle.bookDir);
+  let names: string[];
+  try {
+    names = await readdir(audioRoot);
+  } catch (err) {
+    if ((err as NodeJS.ErrnoException)?.code !== 'ENOENT') throw err;
+    names = [];
+  }
+  const journals = new Map<string, TakeJournalRef[]>();
+  const otherJournals: string[] = [];
+  const next: string[] = [];
+  const discard: string[] = [];
+  const tmp: string[] = [];
+  const stale: string[] = [];
+  const relabelTemp: string[] = [];
+  for (const name of names.sort()) {
+    const journal = parseTakeJournalName(name);
+    /* `.tmp-` first: the leftover of a staged or discarded file's write is a
+       temp file, whatever else its name holds. */
+    if (name.includes('.tmp-')) tmp.push(name);
+    else if (journal) {
+      const ofSlug = journals.get(journal.slug) ?? [];
+      ofSlug.push({ ...journal, path: join(audioRoot, name) });
+      journals.set(journal.slug, ofSlug);
+    } else if (name.includes('.take-journal.')) otherJournals.push(name);
+    else if (name.endsWith('.stale')) stale.push(name);
+    else if (name.includes('.next-')) next.push(name);
+    else if (name.includes('.discard-')) discard.push(name);
+    else if (RELABEL_TEMP_NAME_RE.test(name)) relabelTemp.push(name);
+  }
+  return { audioRoot, journals, otherJournals, next, discard, tmp, stale, relabelTemp };
+}
+
+/** The `book` lock key for a handle's book (R8-4): the `bookId`, or, for an
+    unaddressed handle and for its whole life, the canonical directory key (the
+    book may gain an id while the handle is held). */
+export function bookLockKeyFor(handle: AnyBookHandle): string {
+  return 'kind' in handle ? canonicalDirKey(handle.bookDir) : handle.bookId;
+}
+
+/** Remove a journal, ALWAYS under `book` (R7-1): the scan heal reads a slug's
+    segments and then checks for its journal under that lock, so a journal can
+    never vanish between the two. A missing file is success. */
+export async function unlinkTakeJournal(handle: AnyBookHandle, path: string): Promise<void> {
+  assertHeld(handle, 'unlinkTakeJournal');
+  await withBookLock(bookLockKeyFor(handle), () => unlinkWithRetry(path));
 }
 
 /* ------------------------------------------------------------------ *
