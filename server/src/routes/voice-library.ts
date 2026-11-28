@@ -2380,13 +2380,26 @@ voiceLibraryRouter.delete('/:voiceUuid', async (req: Request, res: Response) => 
       }
 
       const confirmed = req.query.confirm === '1';
-      const usage = await scanLibraryVoiceUsage(voiceUuid);
+      /* #4952 — deleting a clone also revokes and erases its linked copies
+         (purgeCloneArtifacts cascade; owner decision), so the usage the confirm
+         reports — and the references cleared on confirm — include every book
+         using one of them, each tagged with the copy it goes through. */
+      const copies = (await listEntries()).filter((e) => e.clonedFrom === voiceUuid);
+      const usage: Array<Awaited<ReturnType<typeof scanLibraryVoiceUsage>>[number] & {
+        viaCopy?: { voiceUuid: string; name: string };
+      }> = await scanLibraryVoiceUsage(voiceUuid);
+      for (const copy of copies) {
+        for (const u of await scanLibraryVoiceUsage(copy.voiceUuid)) {
+          usage.push({ ...u, viaCopy: { voiceUuid: copy.voiceUuid, name: copy.name } });
+        }
+      }
       if (usage.length > 0 && !confirmed) {
         return res.status(409).json({ usage });
       }
 
       if (usage.length > 0) {
         await clearLibraryVoiceReferences(voiceUuid);
+        for (const copy of copies) await clearLibraryVoiceReferences(copy.voiceUuid);
       }
       const purgeResult = await eraseLibraryVoiceArtifacts(voiceUuid);
       if (purgeResult.failed.length > 0) {

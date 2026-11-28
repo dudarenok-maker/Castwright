@@ -1349,6 +1349,79 @@ describe('DELETE /api/voice-library/:voiceUuid', () => {
     expect(existsSync(artifacts.ptPath)).toBe(true);
   });
 
+  /* #4952 — deleting a clone revokes and erases its linked copies (owner decision), so
+     the confirm must name the books using any copy, and a confirmed delete must leave
+     those books no dangling reference to an erased voice. */
+  it('an unused clone whose linked copy is used by a book: 409 names that book; confirmed delete revokes + erases the copy', async () => {
+    const cloneArtifacts = await seedFullVoiceArtifacts('clone-del');
+    const copyArtifacts = await seedFullVoiceArtifacts('copy-del');
+    await vl.updateEntry('clone-del', (e) =>
+      e
+        ? {
+            ...e,
+            provenance: 'cloned',
+            consent: {
+              personName: 'Dad',
+              relationship: 'family-with-permission',
+              permittedUse: 'personal',
+              attestedAt: '2026-01-01T00:00:00.000Z',
+              attestedBy: 'me',
+            },
+          }
+        : null,
+    );
+    await vl.updateEntry('copy-del', (e) =>
+      e
+        ? {
+            ...e,
+            name: 'Copy',
+            provenance: 'cloned',
+            clonedFrom: 'clone-del',
+            consent: {
+              personName: 'Dad',
+              relationship: 'family-with-permission',
+              permittedUse: 'personal',
+              attestedAt: '2026-01-01T00:00:00.000Z',
+              attestedBy: 'me',
+            },
+          }
+        : null,
+    );
+    const copyBookDir = writeBookOnDisk(dir, 'Della Renwick', 'The Hollow Tide', 'Book One', 'book-copy-user', [
+      {
+        id: 'char-marlow',
+        name: 'Marlow',
+        overrideTtsVoices: { qwen: { name: 'qwen-copy-del', libraryUuid: 'copy-del', provenance: 'designed' } },
+      },
+    ]);
+
+    const first = await request(app).delete('/api/voice-library/clone-del');
+    expect(first.status).toBe(409);
+    expect(first.body.usage).toEqual([
+      {
+        bookId: 'book-copy-user',
+        bookTitle: 'Book One',
+        characterId: 'char-marlow',
+        characterName: 'Marlow',
+        viaCopy: { voiceUuid: 'copy-del', name: 'Copy' },
+      },
+    ]);
+    expect(existsSync(copyArtifacts.ptPath)).toBe(true);
+    expect(existsSync(cloneArtifacts.ptPath)).toBe(true);
+
+    const confirmed = await request(app).delete('/api/voice-library/clone-del?confirm=1');
+    expect(confirmed.status).toBe(200);
+    expect(confirmed.body).toEqual({ deleted: true });
+    expect(existsSync(cloneArtifacts.entryDir)).toBe(false);
+    expect(existsSync(copyArtifacts.ptPath)).toBe(false);
+    expect((await vl.readEntry('copy-del'))?.consent?.revokedAt).toBeTruthy();
+    // the book no longer points at the erased copy
+    const cast = JSON.parse(
+      readFileSync(paths.castJsonPath(copyBookDir), 'utf8'),
+    ) as { characters: Array<{ overrideTtsVoices?: { qwen?: unknown } }> };
+    expect(cast.characters[0].overrideTtsVoices?.qwen).toBeUndefined();
+  });
+
   /* #3625 pass 6 (🟠1): a book whose state.json is mid-write (a rotating write
      between its rename-away and rename-in: main absent, the previous state in
      `.bak.1`) still counts as a user of the voice. A plain read saw no book,
@@ -4672,7 +4745,6 @@ describe('POST /api/voice-library/promote (Task 11)', () => {
     expect(readdirSync(paths.qwenVoicesDir()).sort()).toEqual(ptsBefore);
   });
 
-||||||| parent of b6f397db (fix(server): link clone copies by their own sidecar manifest, not the mutable cast slot)
   /* #4952 end-to-end: a pre-fix copy assigned to a character keeps a `designed` SLOT
      after the auto-link migration relabels its ENTRY; a copy of that copy must still
      be refused, or it would escape the clone's revoke for good. */
