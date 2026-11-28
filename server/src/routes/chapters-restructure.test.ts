@@ -843,6 +843,89 @@ describe('#3506 — analysis records follow their chapter through a restructure'
     expect(cache.failedChapterErrors).toEqual({ '2': failureOf('one'), '3': failureOf('two') });
     expect(cache.pendingAttributionChapterIds).toEqual([2, 3]);
   });
+
+  it('merge resets the merged chapter into P and carries the chapter after it', async () => {
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    /* Only old chapter 2, which merges away, starts in P: the merged chapter's
+       membership then comes from the reset alone, and chapter 3 must stay out. */
+    await saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {},
+      chapterCast: { 1: castOf('one'), 2: castOf('two'), 3: castOf('three') },
+      castDurations: { 1: 11, 2: 12, 3: 13 },
+      failedChapterIds: [1, 2, 3],
+      failedChapterErrors: {
+        '1': failureOf('one'),
+        '2': failureOf('two'),
+        '3': failureOf('three'),
+      },
+      pendingAttributionChapterIds: [2],
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/merge`)
+      .send({ chapterIds: [1, 2] });
+    expect(res.status).toBe(200);
+
+    /* The merged chapter is 1; old chapter 3 is now 2; nothing is left under 3. */
+    const cache = await loadRecords();
+    expect(cache.failedChapterIds).toEqual([2]);
+    expect(cache.failedChapterErrors).toEqual({ '2': failureOf('three') });
+    expect(cache.chapterCast).toEqual({ 2: castOf('three') });
+    expect(cache.castDurations).toEqual({ 2: 13 });
+    expect(cache.pendingAttributionChapterIds).toEqual([1]);
+  });
+
+  it('split resets both halves into P and carries the chapter after them', async () => {
+    const { saveAnalysisCache } = await import('../store/analysis-cache.js');
+    await saveAnalysisCache(MANUSCRIPT_ID, {
+      chapters: {},
+      chapterCast: { 1: castOf('one'), 2: castOf('two') },
+      castDurations: { 1: 11, 2: 12 },
+      failedChapterIds: [1, 2],
+      failedChapterErrors: { '1': failureOf('one'), '2': failureOf('two') },
+      pendingAttributionChapterIds: [1, 2],
+    });
+
+    const res = await request(app)
+      .post(`/api/books/${bookId}/chapters/split`)
+      .send({ chapterId: 1, afterSentenceId: 1 });
+    expect(res.status).toBe(200);
+
+    /* The halves are 1 and 2; old chapter 2 is now 3. */
+    const cache = await loadRecords();
+    expect(cache.pendingAttributionChapterIds).toEqual([1, 2, 3]);
+    expect(cache.failedChapterIds).toEqual([3]);
+    expect(cache.failedChapterErrors).toEqual({ '3': failureOf('two') });
+    expect(cache.chapterCast).toEqual({ 3: castOf('two') });
+    expect(cache.castDurations).toEqual({ 3: 12 });
+  });
+
+  it('drops a persisted subset-analysis snapshot and keeps a main one', async () => {
+    const { writeAnalysisState, readAnalysisState, deleteAnalysisState } = await import(
+      '../store/analysis-state.js'
+    );
+    const paused = {
+      manuscriptId: MANUSCRIPT_ID,
+      phaseId: 1,
+      phaseLabel: 'Attributing sentences',
+      phaseProgress: 0.5,
+      state: 'paused' as const,
+      lastTickAt: Date.now(),
+    };
+    const reorder = () =>
+      request(app)
+        .post(`/api/books/${bookId}/chapters/reorder`)
+        .send({ order: [3, 1, 2] });
+
+    await writeAnalysisState(bookDir, { ...paused, kind: 'subset', subsetChapterIds: [2] });
+    expect((await reorder()).status).toBe(200);
+    expect(await readAnalysisState(bookDir)).toBeNull();
+
+    await writeAnalysisState(bookDir, { ...paused, kind: 'main' });
+    expect((await reorder()).status).toBe(200);
+    expect((await readAnalysisState(bookDir))?.kind).toBe('main');
+    await deleteAnalysisState(bookDir);
+  });
 });
 
 /* -- cross-cutting -------------------------------------------------- */

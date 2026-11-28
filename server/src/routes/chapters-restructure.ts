@@ -102,6 +102,7 @@ import { requestFailureMessageFs, withStateJsonLock } from '../workspace/file-lo
 import { ensureChapterUuids } from '../workspace/chapter-uuid.js';
 import { getOrHydrateManuscript, putManuscript, type ManuscriptRecord } from '../store/manuscripts.js';
 import { refreshCacheFromEdits } from '../store/analysis-cache-rebuild.js';
+import { deleteSubsetAnalysisState } from '../store/analysis-state.js';
 import { rewriteChapterSlugs } from '../audio/rewrite-chapter-slugs.js';
 import { parseManuscript } from '../parsers/index.js';
 import { extractorVersionOf } from '../parsers/version.js';
@@ -297,6 +298,9 @@ async function applyRestructure(
      judged the book (#3837). Exclude/include is never refused on a toggle; see
      the write rule in `applyRestructureClaimed`. */
   opKind: 'restructure' | 'exclude' = 'restructure',
+  /* #3506 -- the OLD ids of the chapters whose content the op regroups (merge,
+     split): their analysis records are reset, not carried. */
+  resetOldIds: readonly number[] = [],
 ): Promise<{
   status: number;
   body: unknown;
@@ -342,7 +346,7 @@ async function applyRestructure(
   }
   try {
     return await withBookLock(book.bookId, () =>
-      applyRestructureClaimed(book, prep, manuscriptId, transform, opKind),
+      applyRestructureClaimed(book, prep, manuscriptId, transform, opKind, resetOldIds),
     );
   } finally {
     endRestructure(manuscriptId);
@@ -363,6 +367,7 @@ async function applyRestructureClaimed(
     parseChapterCount: number | undefined,
   ) => RestructureResult,
   opKind: 'restructure' | 'exclude',
+  resetOldIds: readonly number[],
 ): Promise<{
   status: number;
   body: unknown;
@@ -721,17 +726,28 @@ async function applyRestructureClaimed(
   // Plan 287 — 'replace': ids are renumbered, so the takes are rebuilt whole.
   // #3506 — the other chapter-keyed records (failures, chapterCast, durations,
   // pending set) are remapped to each chapter's new id, paired by uuid, in the
-  // same cache write.
+  // same cache write. A merged chapter and both halves of a split are reset
+  // instead and marked pending, so analysis re-attributes them. The second half
+  // of a split has no old id; it is the chapter whose uuid no old chapter holds.
   // Plan 290 — called with the result state, which carries the stale-evidence
   // marker forward: while it is set the cache is cleared instead of rebuilt.
+  const idMap = chapterIdMapByUuid(oldChapters, result.state.chapters);
+  const oldUuids = new Set(oldChapters.map((c) => c.uuid));
+  const resetNewIds = new Set([
+    ...resetOldIds.flatMap((id) => idMap.get(id) ?? []),
+    ...result.state.chapters.filter((c) => !oldUuids.has(c.uuid)).map((c) => c.id),
+  ]);
   await refreshCacheFromEdits(result.state, editsPath, {
     mode: 'replace',
-    remap: {
-      idMap: chapterIdMapByUuid(oldChapters, result.state.chapters),
-      resetNewIds: new Set(),
-    },
+    remap: { idMap, resetNewIds },
   }).catch((e) => {
     console.error('[chapters-restructure] cache rebuild failed', e);
+  });
+
+  // #3506 — a paused or halted subset run's snapshot lists chapters by their old
+  // ids; drop it (the pending set now drives re-analysis). Best-effort.
+  await deleteSubsetAnalysisState(bookDir).catch((e) => {
+    console.error('[chapters-restructure] could not drop the subset analysis snapshot', e);
   });
 
   return {
@@ -763,8 +779,13 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
-          applyMerge(state, hints, sentences, op, parseTitles),
+        applyRestructure(
+          book,
+          prep,
+          (state, hints, sentences, _advisoryValid, parseTitles) =>
+            applyMerge(state, hints, sentences, op, parseTitles),
+          'restructure',
+          op.chapterIds,
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
@@ -796,8 +817,13 @@ chaptersRestructureRouter.post(
       const prep = await prepareRestructure(req.params.bookId);
       if ('early' in prep) return res.status(prep.early.status).json(prep.early.body);
       const result = await withBookOp(req.params.bookId, (book) =>
-        applyRestructure(book, prep, (state, hints, sentences, _advisoryValid, parseTitles) =>
-          applySplit(state, hints, sentences, op, parseTitles),
+        applyRestructure(
+          book,
+          prep,
+          (state, hints, sentences, _advisoryValid, parseTitles) =>
+            applySplit(state, hints, sentences, op, parseTitles),
+          'restructure',
+          [op.chapterId],
         ),
       );
       if (result === BOOK_GONE) return res.status(404).json({ error: 'Book not found.' });
